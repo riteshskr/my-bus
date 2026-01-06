@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import os
 import time
 import requests
@@ -5,18 +6,30 @@ import mysql.connector
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 from flask_socketio import SocketIO
 from datetime import date
-
+load_dotenv()
 # ================= APP =================
 app = Flask(__name__)
+'''
 app.secret_key = "super-secret-key"
+'''
+app.secret_key = os.getenv("SECRET_KEY", "dev-key")
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DB CONFIG =================
+'''
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
     "password": "*#06041974",
     "database": "busdb1",
+    "autocommit": True
+}
+'''
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASS"),
+    "database": os.getenv("DB_NAME"),
     "autocommit": True
 }
 
