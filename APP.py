@@ -13,7 +13,11 @@ app = Flask(__name__)
 app.secret_key = "super-secret-key"
 '''
 app.secret_key = os.getenv("SECRET_KEY", "dev-key")
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading"
+)
 
 # ================= DB CONFIG =================
 '''
