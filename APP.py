@@ -18,10 +18,12 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 # ================= DB CONFIG =================
 '''
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "*#06041974",
-    "database": "busdb1",
+    DB_CONFIG = {
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "user": os.environ.get("DB_USER", "root"),
+    "password": os.environ.get("DB_PASS", ""),
+    "database": os.environ.get("DB_NAME", "busdb1"),
+    "port": int(os.environ.get("DB_PORT", 3306)),
     "autocommit": True
 }
 '''
@@ -35,6 +37,71 @@ DB_CONFIG = {
 
 def get_db():
     return mysql.connector.connect(**DB_CONFIG)
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS routes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(100) NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS schedules (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        route_id INT NOT NULL,
+        bus_name VARCHAR(100),
+        departure_time VARCHAR(20),
+        seating_rate DOUBLE DEFAULT 0,
+        single_sleeper_rate DOUBLE DEFAULT 0,
+        double_sleeper_rate DOUBLE DEFAULT 0,
+        current_lat DOUBLE DEFAULT NULL,
+        current_lng DOUBLE DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ON UPDATE CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS route_stations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        route_id INT NOT NULL,
+        station_name VARCHAR(100),
+        station_order INT,
+        lat DOUBLE,
+        lng DOUBLE
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS seats (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        schedule_id INT NOT NULL,
+        seat_no VARCHAR(10),
+        seat_type VARCHAR(30)
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS seat_bookings (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        seat_id INT,
+        schedule_id INT,
+        passenger_name VARCHAR(100),
+        mobile VARCHAR(20),
+        from_station VARCHAR(100),
+        to_station VARCHAR(100),
+        booking_date DATE,
+        fare DOUBLE,
+        booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    conn.commit()
+    conn.close()
 
 # ================= GEOCODE HELPER =================
 def geocode_station(station_name):
@@ -590,5 +657,12 @@ def bus_location(bus_id):
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    print("Server started...")
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True, allow_unsafe_werkzeug=True)
+    init_db()   # tables auto-create
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=True,
+        allow_unsafe_werkzeug=True   # this line allows local run
+    )
