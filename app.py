@@ -1,159 +1,117 @@
 from dotenv import load_dotenv
-import os
-import time
-import requests
-import mysql.connector
+import os, time, requests, math
+import psycopg2
+import psycopg2.extras
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 from flask_socketio import SocketIO
 from datetime import date
+
 load_dotenv()
+
 # ================= APP =================
 app = Flask(__name__)
-'''
-app.secret_key = "super-secret-key"
-'''
-app.secret_key = os.getenv("SECRET_KEY", "dev-key")
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode="threading"
-)
+app.secret_key = os.getenv("SECRET_KEY","dev-key")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# ================= DB CONFIG =================
-'''
-DB_CONFIG = {
-    DB_CONFIG = {
-    "host": os.environ.get("DB_HOST", "localhost"),
-    "user": os.environ.get("DB_USER", "root"),
-    "password": os.environ.get("DB_PASS", ""),
-    "database": os.environ.get("DB_NAME", "busdb1"),
-    "port": int(os.environ.get("DB_PORT", 3306)),
-    "autocommit": True
-}
-'''
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST"),
-    "user": os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASS"),
-    "database": os.getenv("DB_NAME"),
-    "autocommit": True
-}
+# ================= DB =================
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        port=int(os.getenv("DB_PORT", 5432)),
+        sslmode=os.getenv("DB_SSL", "disable")  # 👈 FIX
+    )
 
-def get_db():
-    return mysql.connector.connect(**DB_CONFIG)
+# ================= INIT DB =================
 def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # Routes
+    cur.execute("""CREATE TABLE IF NOT EXISTS routes (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL)""")
+    # Schedules
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS routes (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(100) NOT NULL
-    )
+        CREATE TABLE IF NOT EXISTS schedules (
+            id SERIAL PRIMARY KEY,
+            route_id INT REFERENCES routes(id) ON DELETE CASCADE,
+            bus_name VARCHAR(100),
+            departure_time VARCHAR(20),
+            seating_rate DOUBLE PRECISION DEFAULT 0,
+            single_sleeper_rate DOUBLE PRECISION DEFAULT 0,
+            double_sleeper_rate DOUBLE PRECISION DEFAULT 0,
+            current_lat DOUBLE PRECISION DEFAULT NULL,
+            current_lng DOUBLE PRECISION DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
-
+    # Route Stations
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS schedules (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        route_id INT NOT NULL,
-        bus_name VARCHAR(100),
-        departure_time VARCHAR(20),
-        seating_rate DOUBLE DEFAULT 0,
-        single_sleeper_rate DOUBLE DEFAULT 0,
-        double_sleeper_rate DOUBLE DEFAULT 0,
-        current_lat DOUBLE DEFAULT NULL,
-        current_lng DOUBLE DEFAULT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ON UPDATE CURRENT_TIMESTAMP
-    )
+        CREATE TABLE IF NOT EXISTS route_stations (
+            id SERIAL PRIMARY KEY,
+            route_id INT REFERENCES routes(id) ON DELETE CASCADE,
+            station_name VARCHAR(100),
+            station_order INT,
+            lat DOUBLE PRECISION,
+            lng DOUBLE PRECISION
+        )
     """)
-
+    # Seats
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS route_stations (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        route_id INT NOT NULL,
-        station_name VARCHAR(100),
-        station_order INT,
-        lat DOUBLE,
-        lng DOUBLE
-    )
+        CREATE TABLE IF NOT EXISTS seats (
+            id SERIAL PRIMARY KEY,
+            schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
+            seat_no VARCHAR(10),
+            seat_type VARCHAR(30)
+        )
     """)
-
+    # Seat Bookings
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS seats (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        schedule_id INT NOT NULL,
-        seat_no VARCHAR(10),
-        seat_type VARCHAR(30)
-    )
+        CREATE TABLE IF NOT EXISTS seat_bookings (
+            id SERIAL PRIMARY KEY,
+            seat_id INT REFERENCES seats(id) ON DELETE CASCADE,
+            schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
+            passenger_name VARCHAR(100),
+            mobile VARCHAR(20),
+            from_station VARCHAR(100),
+            to_station VARCHAR(100),
+            booking_date DATE,
+            fare DOUBLE PRECISION,
+            booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
     """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS seat_bookings (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        seat_id INT,
-        schedule_id INT,
-        passenger_name VARCHAR(100),
-        mobile VARCHAR(20),
-        from_station VARCHAR(100),
-        to_station VARCHAR(100),
-        booking_date DATE,
-        fare DOUBLE,
-        booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
     conn.commit()
     conn.close()
+    print("✅ PostgreSQL DB initialized successfully!")
 
-# ================= GEOCODE HELPER =================
-def geocode_station(station_name):
-    """Use OpenStreetMap Nominatim API to get lat/lng"""
+# ================= GEOCODE =================
+def geocode_station(name):
     url = "https://nominatim.openstreetmap.org/search"
-    params = {"q": station_name + ", India", "format": "json", "limit": 1}
+    params = {"q": name + ", India", "format": "json", "limit": 1}
     try:
-        response = requests.get(url, params=params, headers={"User-Agent": "BusApp"})
-        data = response.json()
+        res = requests.get(url, params=params, headers={"User-Agent":"BusApp"})
+        data = res.json()
         if data:
             return float(data[0]["lat"]), float(data[0]["lon"])
-    except Exception as e:
-        print("Error geocoding:", station_name, e)
+    except:
+        pass
     return None, None
 
-
 def fill_missing_latlng(route_id=None):
-    """स्टेशनों के लिए missing lat/lng को auto-fill करना, यहां तक कि अगर lat/lng 0 भी हो"""
-    conn = get_db()
-    cur = conn.cursor()
-
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     if route_id:
-        cur.execute("""
-            SELECT id, station_name 
-            FROM route_stations 
-            WHERE route_id=%s AND (lat IS NULL OR lng IS NULL OR lat=0 OR lng=0)
-        """, (route_id,))
+        cur.execute("SELECT id,station_name FROM route_stations WHERE route_id=%s AND (lat IS NULL OR lng IS NULL OR lat=0 OR lng=0)", (route_id,))
     else:
-        cur.execute("""
-            SELECT id, station_name 
-            FROM route_stations 
-            WHERE lat IS NULL OR lng IS NULL OR lat=0 OR lng=0
-        """)
-
+        cur.execute("SELECT id,station_name FROM route_stations WHERE lat IS NULL OR lng IS NULL OR lat=0 OR lng=0")
     stations = cur.fetchall()
-
-    for sid, name in stations:
-        lat, lng = geocode_station(name)  # OpenStreetMap से lat/lng fetch
+    for st in stations:
+        lat,lng = geocode_station(st['station_name'])
         if lat and lng:
-            cur.execute(
-                "UPDATE route_stations SET lat=%s, lng=%s WHERE id=%s",
-                (lat, lng, sid)
-            )
-            print(f"Updated {name} -> lat:{lat}, lng:{lng}")
-        else:
-            print(f"Coordinates नहीं मिले: {name}")
-        time.sleep(1)  # Nominatim API rate limit
-
+            cur.execute("UPDATE route_stations SET lat=%s,lng=%s WHERE id=%s",(lat,lng,st['id']))
+            print(f"Updated {st['station_name']} -> {lat},{lng}")
+        time.sleep(1)
     conn.commit()
     conn.close()
 
@@ -165,49 +123,15 @@ BASE_HTML = """
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bus Booking</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link rel="stylesheet"
- href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <style>
-
-.bus-row{
-    display:grid;
-    grid-template-columns: repeat(4, 38px); /* ✅ सिर्फ 4 column */
-    column-gap:4px;
-    row-gap:2px;
-    justify-content:center;
-}
-.bus-row .seat:nth-child(2){
-    margin-right:26px;   /* 👈 gap size (20–40px try kar sakte ho) */
-}
-/* aisle look (gap only) */
-.seat:nth-child(2){
-    margin-right:26px;   /* 👈 बीच का रास्ता */
-}
-
-.seat{
-    width:38px;
-    height:40px;
-    padding:0;
-    margin:0;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    font-size:10px;
-}
-
-.seat i{
-    font-size:16px;
-    line-height:1;
-}
-
-.seat span{
-    font-size:9px;
-    line-height:1;
-}
+.bus-row{display:grid;grid-template-columns: repeat(4, 38px);column-gap:4px;row-gap:2px;justify-content:center;}
+.seat:nth-child(2){margin-right:26px;}
+.seat{width:38px;height:40px;padding:0;margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:10px;}
+.seat i{font-size:16px;line-height:1;}
 #map{height:400px;margin-bottom:10px}
 </style>
 </head>
@@ -217,456 +141,66 @@ BASE_HTML = """
 {{content|safe}}
 <a href="/" class="btn btn-light w-100 mt-3">Home</a>
 </div>
-
 <script>
 var socket = io({transports:["websocket","polling"]});
-
 socket.on("bus_location", function(d){
     if(!window.map || !d.lat) return;
-    if(!window.busMarker){
-        window.busMarker = L.marker([parseFloat(d.lat),parseFloat(d.lng)]).addTo(window.map).bindPopup("Live Bus");
-    } else {
-        window.busMarker.setLatLng([parseFloat(d.lat),parseFloat(d.lng)]);
-    }
+    if(!window.busMarker){window.busMarker = L.marker([+d.lat,+d.lng]).addTo(window.map).bindPopup("Live Bus");}
+    else { window.busMarker.setLatLng([+d.lat,+d.lng]); }
 });
-
 function bookSeat(seatId,fs,ts,d){
-    let name = prompt("Enter Name:");
-    let mobile = prompt("Enter Mobile:");
-    if(!name || !mobile) return;
-
-    fetch("/book",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({seat:seatId,name:name,mobile:mobile,from:fs,to:ts,date:d})
-    }).then(r=>r.json()).then(r=>{
-        alert(r.msg);
-        if(r.ok) location.reload();
-    });
+    let name = prompt("Enter Name:"); let mobile = prompt("Enter Mobile:");
+    if(!name||!mobile) return;
+    fetch("/book",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({seat:seatId,name:name,mobile:mobile,from:fs,to:ts,date:d})}).then(r=>r.json()).then(r=>{alert(r.msg);if(r.ok) location.reload();});
 }
 </script>
 </body>
 </html>
 """
 
-# ================= HOME =================
+# ================= ROUTES =================
 @app.route("/")
+def index():
+    return redirect(url_for("home"))
+
+@app.route("/home")
 def home():
-    fill_missing_latlng()  # Auto-fill all missing lat/lng
-    conn = get_db()
-    cur = conn.cursor()
+    fill_missing_latlng()
+    conn=get_db_connection()
+    cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id,name FROM routes")
-    html = "".join(f"<a class='btn btn-success w-100 mb-2' href='/buses/{i}'>{n}</a>" for i,n in cur.fetchall())
+    html = "".join(f"<a class='btn btn-success w-100 mb-2' href='/buses/{r['id']}'>{r['name']}</a>" for r in cur.fetchall())
     conn.close()
     return render_template_string(BASE_HTML, content=html)
 
-# ================= BUSES =================
 @app.route("/buses/<int:rid>")
 def buses(rid):
-    fill_missing_latlng(rid)  # Auto-fill for this route
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s", (rid,))
-    html = "".join(f"<a class='btn btn-info w-100 mb-2' href='/select/{i}'>{n} ({t})</a>" for i,n,t in cur.fetchall())
+    fill_missing_latlng(rid)
+    conn=get_db_connection()
+    cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s",(rid,))
+    html = "".join(f"<a class='btn btn-info w-100 mb-2' href='/select/{r['id']}'>{r['bus_name']} ({r['departure_time']})</a>" for r in cur.fetchall())
     conn.close()
     return render_template_string(BASE_HTML, content=html)
 
-# ================= FROM / TO =================
 @app.route("/select/<int:sid>", methods=["GET","POST"])
 def select(sid):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT station_name FROM route_stations rs
-        JOIN schedules s ON s.route_id=rs.route_id
-        WHERE s.id=%s ORDER BY station_order
-    """, (sid,))
-    stations = [x[0] for x in cur.fetchall()]
+    conn=get_db_connection()
+    cur=conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""SELECT station_name FROM route_stations rs JOIN schedules s ON s.route_id=rs.route_id WHERE s.id=%s ORDER BY station_order""",(sid,))
+    stations=[s['station_name'] for s in cur.fetchall()]
     conn.close()
-
     if request.method=="POST":
-        return redirect(url_for("seats", sid=sid,
-                                fs=request.form["from"], ts=request.form["to"], d=request.form["date"]))
-    opts = "".join(f"<option>{s}</option>" for s in stations)
-    return render_template_string(BASE_HTML, content=f"""
-<form method="post" class="bg-light text-dark p-3 rounded">
+        return redirect(url_for("seats",sid=sid,fs=request.form["from"],ts=request.form["to"],d=request.form["date"]))
+    opts="".join(f"<option>{s}</option>" for s in stations)
+    return render_template_string(BASE_HTML, content=f"""<form method="post" class="bg-light text-dark p-3 rounded">
 <select name="from" class="form-select mb-2">{opts}</select>
 <select name="to" class="form-select mb-2">{opts}</select>
 <input type="date" name="date" class="form-control mb-2" value="{date.today()}" required>
 <button class="btn btn-success w-100">Show Seats</button>
-</form>
-""")
+</form>""")
 
-# ================= SEATS + MAP =================
-@app.route("/seats/<int:sid>")
-def seats(sid):
-    fs = request.args.get("fs")
-    ts = request.args.get("ts")
-    d = request.args.get("d")
-    if not fs or not ts or not d:
-        return "Missing fs/ts/d", 400
-
-    conn = get_db()
-    cur = conn.cursor()
-
-    # Seats
-    cur.execute("SELECT id, seat_no, seat_type FROM seats WHERE schedule_id=%s", (sid,))
-    seats = cur.fetchall()
-
-    # Booked seats
-    cur.execute("SELECT seat_id, from_station, to_station FROM seat_bookings WHERE schedule_id=%s AND booking_date=%s",
-                (sid, d))
-    bookings = cur.fetchall()
-
-    seat_map = {}
-    for seat_id, b_from, b_to in bookings:
-        if seat_id not in seat_map: seat_map[seat_id] = []
-        cur.execute(
-            "SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",
-            (sid, b_from))
-        b_from_order = cur.fetchone()[0]
-        cur.execute(
-            "SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",
-            (sid, b_to))
-        b_to_order = cur.fetchone()[0]
-        seat_map[seat_id].append((b_from_order, b_to_order))
-
-    # Selected from/to order
-    cur.execute(
-        "SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",
-        (sid, fs))
-    sel_from_order = cur.fetchone()[0]
-    cur.execute(
-        "SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",
-        (sid, ts))
-    sel_to_order = cur.fetchone()[0]
-
-    # Seats HTML
-    html = f"""
-    <div id="map"></div>
-    <h6 class='text-center'>{fs} → {ts} | {d}</h6>
-    <div class='bus-row'>
-    """
-
-    count = 0
-
-    for seat_id, seat_no, seat_type in seats:
-        status = "green"
-        if seat_id in seat_map:
-            for b_from_order, b_to_order in seat_map[seat_id]:
-                if not (sel_to_order <= b_from_order or sel_from_order >= b_to_order):
-                    status = "red"
-                    break
-
-        color = "btn-danger" if status == "red" else "btn-success"
-        disabled = "disabled" if status == "red" else ""
-
-        # icon
-        if seat_type == "SEATING":
-            icon = "fa-chair"
-        elif seat_type == "SLEEPER_SINGLE":
-            icon = "fa-bed"
-        elif seat_type == "SLEEPER_DOUBLE":
-            icon = "fa-bed"
-        else:
-            icon = "fa-chair"
-
-        if status == "red":
-            icon = "fa-ban"
-
-        html += f"""
-        <button class='btn {color} seat' {disabled}
-         onclick="bookSeat({seat_id},'{fs}','{ts}','{d}')">
-         <i class="fa-solid {icon}"></i>
-        </button>
-        """
-
-        count += 1
-        if count % 4 == 0:
-            html += "</div><div class='bus-row'>"
-        # 👉 4 seat ke baad aisle reset (2+2 complete)
-
-
-    # ================= Map + Live Bus (Real Station Names) =================
-    html += """
-<script>
-const AVG_SPEED = 40; // km/h
-window.map = L.map('map');
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:18}).addTo(window.map);
-
-const busIcon = L.icon({
-    iconUrl: "/static/bus.png",
-    iconSize:[40,40],
-    iconAnchor:[20,20],
-    popupAnchor:[0,-20]
-});
-
-let routeLatLngs = [];
-let routeNames = [];
-let busMarker = null;
-
-// ===== Load Route Points with real station names =====
-fetch("/route_points/""" + str(sid) + """")
-.then(r=>r.json())
-.then(p=>{
-    routeLatLngs = p.map(x=>[+x.lat,+x.lng]);
-    routeNames = p.map(x=>x.station_name);  // <-- real names from DB
-    let line = L.polyline(routeLatLngs, {color:"blue",weight:5}).addTo(map);
-    map.fitBounds(line.getBounds());
-});
-
-// ===== Haversine Distance =====
-function haversine(lat1,lng1,lat2,lng2){
-    const R = 6371;
-    const dLat = (lat2-lat1)*Math.PI/180;
-    const dLng = (lng2-lng1)*Math.PI/180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
-    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
-}
-
-// ===== Update Bus with Next Station =====
-function updateBus(lat,lng){
-    if(routeLatLngs.length==0) return;
-
-    let minDist = Infinity;
-    let idx = 0;
-    for(let i=0;i<routeLatLngs.length;i++){
-        let d = Math.pow(routeLatLngs[i][0]-lat,2)+Math.pow(routeLatLngs[i][1]-lng,2);
-        if(d<minDist){ minDist=d; idx=i; }
-    }
-
-    let nextIndex = idx+1;
-    let nextStop = routeNames[nextIndex] || "Last Stop";
-
-    let distToNext = 0;
-    if(nextIndex<routeLatLngs.length){
-        distToNext = haversine(lat,lng,routeLatLngs[nextIndex][0],routeLatLngs[nextIndex][1]);
-    }
-
-    let ETA = Math.round(distToNext/AVG_SPEED*60);
-
-    if(!busMarker){
-        busMarker = L.marker([lat,lng], {icon:busIcon})
-                      .addTo(map)
-                      .bindPopup("🚌 Next: "+nextStop+"<br>📍 Distance: "+distToNext.toFixed(1)+" km<br>⏱ ETA: "+ETA+" min")
-                      .openPopup();
-    } else {
-        busMarker.setLatLng([lat,lng]);
-        busMarker.setPopupContent("🚌 Next: "+nextStop+"<br>📍 Distance: "+distToNext.toFixed(1)+" km<br>⏱ ETA: "+ETA+" min");
-        busMarker.openPopup();
-    }
-}
-
-// ===== Live Polling =====
-setInterval(()=>{
-    fetch("/bus_location/""" + str(sid) + """")
-    .then(r=>r.json())
-    .then(d=>{
-        if(d.lat && d.lng){
-            updateBus(+d.lat,+d.lng);
-        }
-    });
-},2000);
-</script>
-"""
-    conn.close()
-    return render_template_string(BASE_HTML, content=html)
-
-# ================= BOOK API =================
-@app.route("/book", methods=["POST"])
-
-def book():
-    d = request.json
-    conn = get_db()
-    cur = conn.cursor()
-    sid = d["seat"]
-
-    # Get schedule_id
-    cur.execute("SELECT schedule_id FROM seats WHERE id=%s", (sid,))
-    res = cur.fetchone()
-    if not res:
-        conn.close()
-        return jsonify(ok=False, msg="Seat not found")
-    schedule_id = res[0]
-
-    # Get seat type + rates
-    cur.execute("""
-        SELECT se.seat_type,
-               sc.seating_rate,
-               sc.single_sleeper_rate,
-               sc.double_sleeper_rate
-        FROM seats se
-        JOIN schedules sc ON sc.id = se.schedule_id
-        WHERE se.id=%s
-    """, (sid,))
-    seat_data = cur.fetchone()
-    if not seat_data:
-        conn.close()
-        return jsonify(ok=False, msg="Seat info not found")
-    seat_type, seating_rate, single_rate, double_rate = seat_data
-
-    # ===== Get route points =====
-    cur.execute("""
-        SELECT lat, lng, station_name 
-        FROM route_stations 
-        WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s)
-        ORDER BY station_order
-    """, (schedule_id,))
-    route_points = cur.fetchall()  # [(lat,lng,station_name), ...]
-
-    if not route_points or len(route_points) < 2:
-        conn.close()
-        return jsonify(ok=False, msg="Route not properly defined")
-
-    # ===== Distance calculation function =====
-    import math
-    def calculate_distance(route_points, from_name, to_name):
-        import math
-
-        def hav(lat1, lng1, lat2, lng2):
-            R = 6371
-            dLat = math.radians(lat2 - lat1)
-            dLng = math.radians(lng2 - lng1)
-            a = (
-                    math.sin(dLat / 2) ** 2
-                    + math.cos(math.radians(lat1))
-                    * math.cos(math.radians(lat2))
-                    * math.sin(dLng / 2) ** 2
-            )
-            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-        idx = {p[2].strip().lower(): i for i, p in enumerate(route_points)}
-        f = idx.get(from_name.lower())
-        t = idx.get(to_name.lower())
-
-        if f is None or t is None or f >= t:
-            return 0
-
-        dist = 0
-        for i in range(f, t):
-            lat1, lng1 = route_points[i][0], route_points[i][1]
-            lat2, lng2 = route_points[i + 1][0], route_points[i + 1][1]
-            if None in (lat1, lng1, lat2, lng2):
-                continue
-            dist += hav(lat1, lng1, lat2, lng2)
-
-        return round(dist, 2)
-
-    distance = calculate_distance(route_points, d["from"], d["to"])
-    if distance == 0:
-        conn.close()
-        return jsonify(ok=False, msg="Invalid from/to station")
-
-    # ===== Fare calculation =====
-    if seat_type == "SEATING":
-        rate = seating_rate
-    elif seat_type == "SLEEPER_SINGLE":
-        rate = single_rate
-    elif seat_type == "SLEEPER_DOUBLE":
-        rate = double_rate
-    else:
-        rate = seating_rate
-    fare = round(distance * rate, 2)
-
-    # ===== Check overlapping bookings =====
-    station_idx_map = {p[2].strip().lower(): i for i, p in enumerate(route_points)}
-    cur.execute("""
-        SELECT from_station, to_station 
-        FROM seat_bookings 
-        WHERE seat_id=%s AND schedule_id=%s AND booking_date=%s
-    """, (sid, schedule_id, d["date"]))
-    for b_from, b_to in cur.fetchall():
-        b_from_idx = station_idx_map.get(b_from.strip().lower())
-        b_to_idx = station_idx_map.get(b_to.strip().lower())
-        if b_from_idx is None or b_to_idx is None:
-            continue
-        if not (station_idx_map[d["to"].strip().lower()] <= b_from_idx or station_idx_map[d["from"].strip().lower()] >= b_to_idx):
-            conn.close()
-            return jsonify(ok=False, msg="Seat already booked for this segment")
-
-    # ===== Insert booking =====
-    cur.execute("""
-        INSERT INTO seat_bookings 
-        (seat_id, schedule_id, passenger_name, mobile, from_station, to_station, booking_date, fare)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (sid, schedule_id, d["name"], d["mobile"], d["from"], d["to"], d["date"], fare))
-    conn.commit()
-    conn.close()
-
-    # Notify front-end
-    socketio.emit("seat_booked", {"seat": sid})
-    return jsonify(ok=True, msg=f"Seat Booked! Distance: {distance:.2f} km | Fare: ₹{fare}")
-# ================= DRIVER GPS =================
-@app.route("/driver/<int:bus_id>")
-def driver(bus_id):
-    return render_template_string("""
-<!DOCTYPE html>
-<html>
-<head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Driver GPS</title></head>
-<body style="text-align:center;font-family:Arial">
-<h3>Driver Live Location</h3>
-<p id="s">Waiting GPS...</p>
-<script>
-navigator.geolocation.watchPosition(
- p=>{
-  fetch("/update_location",{
-   method:"POST",
-   headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({"bus_id":""" + str(bus_id) + ""","lat":p.coords.latitude,"lng":p.coords.longitude})
-  });
-  document.getElementById("s").innerText = "Lat:"+p.coords.latitude+" Lng:"+p.coords.longitude;
- },
- e=>alert(e.message),
- {enableHighAccuracy:true}
-);
-</script>
-</body>
-</html>
-""")
-
-# ================= UPDATE LOCATION =================
-@app.route("/update_location", methods=["POST"])
-def update_location():
-    d = request.json
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE schedules SET current_lat=%s,current_lng=%s WHERE id=%s", (d["lat"],d["lng"],d["bus_id"]))
-    conn.commit()
-    conn.close()
-    socketio.emit("bus_location",d)
-    return jsonify(ok=True)
-
-# ================= ROUTE POINTS =================
-@app.route("/route_points/<int:sid>")
-def route_points(sid):
-    conn = get_db()
-    cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT rs.lat, rs.lng, rs.station_name FROM route_stations rs JOIN schedules s ON s.route_id=rs.route_id WHERE s.id=%s ORDER BY rs.station_order",(sid,))
-    points = cur.fetchall()
-    conn.close()
-    return jsonify(points)
-
-# ================= LAST LOCATION =================
-@app.route("/bus_location/<int:bus_id>")
-def bus_location(bus_id):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT current_lat,current_lng FROM schedules WHERE id=%s", (bus_id,))
-    row = cur.fetchone()
-    conn.close()
-    if row and row[0]:
-        return jsonify(lat=row[0], lng=row[1])
-    return jsonify(lat=None, lng=None)
-
-# ================= MAIN =================
-if __name__ == "__main__":
-    init_db()   # tables auto-create
-    port = int(os.environ.get("PORT", 5000))
-    socketio.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        debug=True,
-        allow_unsafe_werkzeug=True   # this line allows local run
-    )
+# ================= RUN =================
+if __name__=="__main__":
+    init_db()
+    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT",5000)), debug=True, allow_unsafe_werkzeug=True)
