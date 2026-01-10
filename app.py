@@ -3,8 +3,6 @@ import time
 from psycopg import connect  # केवल psycopg3
 import psycopg.rows  # Dict cursor के लिए
 import requests
-import mysql.connector
-from flask_mysqldb import MySQL
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 from flask_socketio import SocketIO
 from datetime import date
@@ -18,7 +16,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 DB_CONFIG = {
     "host": os.getenv('DB_HOST'),
-    "database": os.getenv('DB_NAME'),
+    "dbname": os.getenv('DB_NAME', "busdb1_yl2r"),  # ✅ केवल "dbname" ही काम करेगा
     "user": os.getenv('DB_USER'),
     "password": os.getenv('DB_PASSWORD'),
     "port": int(os.getenv('DB_PORT', 5432))
@@ -47,23 +45,25 @@ def geocode_station(station_name):
         print("Error geocoding:", station_name, e)
     return None, None
 
+
 def fill_missing_latlng(route_id=None):
-    """Automatically fill missing lat/lng for stations"""
-    conn,cur = get_db()
-    #cur = conn.cursor()
+    conn, cur = get_db()
     if route_id:
-        cur.execute("SELECT id, station_name FROM route_stations WHERE route_id=%s AND (lat IS NULL OR lng IS NULL)", (route_id,))
+        cur.execute("SELECT id, station_name FROM route_stations WHERE route_id=%s AND (lat IS NULL OR lng IS NULL)",
+                    (route_id,))
     else:
         cur.execute("SELECT id, station_name FROM route_stations WHERE lat IS NULL OR lng IS NULL")
     stations = cur.fetchall()
-    for sid, name in stations:
-        lat, lng = geocode_station(name)
-        if lat and lng:
-            cur.execute("UPDATE route_stations SET lat=%s, lng=%s WHERE id=%s", (lat, lng, sid))
-            print(f"Updated {name} -> lat:{lat}, lng:{lng}")
+
+    for station in stations:
+        lat, lng = geocode_station(station['station_name'])
+        if lat and lng:  # ✅ केवल तब UPDATE करें**
+            cur.execute("UPDATE route_stations SET lat=%s, lng=%s WHERE id=%s",
+                        (lat, lng, station['id']))
+            print(f"Updated {station['station_name']} -> lat:{lat}, lng:{lng}")
         else:
-            print(f"Could not find coordinates for {name}")
-        time.sleep(1)  # Nominatim rate limit
+            print(f"Could not find coordinates for {station['station_name']}")
+        time.sleep(1)
     conn.commit()
     conn.close()
 
@@ -129,7 +129,8 @@ def home():
     conn,cur = get_db()
     #cur = conn.cursor()
     cur.execute("SELECT id,name FROM routes")
-    html = "".join(f"<a class='btn btn-success w-100 mb-2' href='/buses/{i}'>{n}</a>" for i,n in cur.fetchall())
+    routes = cur.fetchall()
+    html = "".join(f"<a class='btn btn-success w-100 mb-2' href='/buses/{r['id']}'>{r['name']}</a>" for r in routes)
     conn.close()
     return render_template_string(BASE_HTML, content=html)
 
@@ -140,7 +141,10 @@ def buses(rid):
     conn,cur = get_db()
     #cur = conn.cursor()
     cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s", (rid,))
-    html = "".join(f"<a class='btn btn-info w-100 mb-2' href='/select/{i}'>{n} ({t})</a>" for i,n,t in cur.fetchall())
+    schedules = cur.fetchall()
+    html = "".join(
+        f"<a class='btn btn-info w-100 mb-2' href='/select/{s['id']}'>{s['bus_name']} ({s['departure_time']})</a>" for s
+        in schedules)
     conn.close()
     return render_template_string(BASE_HTML, content=html)
 
@@ -154,7 +158,8 @@ def select(sid):
         JOIN schedules s ON s.route_id=rs.route_id
         WHERE s.id=%s ORDER BY station_order
     """, (sid,))
-    stations = [x[0] for x in cur.fetchall()]
+    stations_data = cur.fetchall()
+    stations = [s['station_name'] for s in stations_data]
     conn.close()
 
     if request.method=="POST":
@@ -192,7 +197,10 @@ def seats(sid):
     bookings = cur.fetchall()
 
     seat_map = {}
-    for seat_id, b_from, b_to in bookings:
+    for booking in bookings:
+        seat_id = booking['seat_id']
+        b_from = booking['from_station']
+        b_to = booking['to_station']
         if seat_id not in seat_map: seat_map[seat_id] = []
         cur.execute(
             "SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",
@@ -220,7 +228,9 @@ def seats(sid):
 <h6 class='text-center'>{fs} → {ts} | {d}</h6>
 <div class='bus-row'>
 """
-    for seat_id, seat_no in seats:
+    for seat in seats:
+        seat_id = seat['id']
+        seat_no = seat['seat_no']
         status = "green"
         if seat_id in seat_map:
             for b_from_order, b_to_order in seat_map[seat_id]:
@@ -321,39 +331,104 @@ setInterval(()=>{
 @app.route("/book", methods=["POST"])
 def book():
     d = request.json
-    conn,cur = get_db()
-    #cur = conn.cursor()
+    conn, cur = get_db()
     sid = d["seat"]
 
+    # Schedule ID लें
     cur.execute("SELECT schedule_id FROM seats WHERE id=%s", (sid,))
     schedule_id = cur.fetchone()[0]
 
-    cur.execute("SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s", (schedule_id,d["from"]))
+    # Selected from/to station orders
+    cur.execute("""
+        SELECT station_order FROM route_stations 
+        WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) 
+        AND station_name=%s
+    """, (schedule_id, d["from"]))
     sel_from_order = cur.fetchone()[0]
-    cur.execute("SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s", (schedule_id,d["to"]))
+
+    cur.execute("""
+        SELECT station_order FROM route_stations 
+        WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) 
+        AND station_name=%s
+    """, (schedule_id, d["to"]))
     sel_to_order = cur.fetchone()[0]
 
-    # check overlapping
-    cur.execute("SELECT from_station,to_station FROM seat_bookings WHERE seat_id=%s AND schedule_id=%s AND booking_date=%s",(sid,schedule_id,d["date"]))
-    for b_from,b_to in cur.fetchall():
-        cur.execute("SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",(schedule_id,b_from))
+    # ✅ FIXED: Overlapping booking check (psycopg3 dict_row)
+    cur.execute("""
+        SELECT from_station, to_station FROM seat_bookings 
+        WHERE seat_id=%s AND schedule_id=%s AND booking_date=%s
+    """, (sid, schedule_id, d["date"]))
+    bookings = cur.fetchall()  # Dict rows
+
+    for booking in bookings:  # ✅ Dict access
+        b_from = booking['from_station']
+        b_to = booking['to_station']
+
+        # Booking के station orders
+        cur.execute("""
+            SELECT station_order FROM route_stations 
+            WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) 
+            AND station_name=%s
+        """, (schedule_id, b_from))
         b_from_order = cur.fetchone()[0]
-        cur.execute("SELECT station_order FROM route_stations WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) AND station_name=%s",(schedule_id,b_to))
+
+        cur.execute("""
+            SELECT station_order FROM route_stations 
+            WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s) 
+            AND station_name=%s
+        """, (schedule_id, b_to))
         b_to_order = cur.fetchone()[0]
-        if not (sel_to_order<=b_from_order or sel_from_order>=b_to_order):
+
+        # Overlap check logic
+        if not (sel_to_order <= b_from_order or sel_from_order >= b_to_order):
             conn.close()
-            return jsonify(ok=False,msg="Seat already booked for this segment")
+            return jsonify(ok=False, msg="Seat already booked for this segment")
 
-    # fare calculation
-    cur.execute("SELECT fs.distance, ts.distance FROM route_stations fs JOIN route_stations ts ON fs.route_id=ts.route_id WHERE fs.station_name=%s AND ts.station_name=%s AND fs.route_id=(SELECT route_id FROM schedules WHERE id=%s)", (d["from"],d["to"],schedule_id))
-    df, dt = cur.fetchone()
-    fare = round((dt-df)*2.5,2)
+    # Fare calculation (distance based)
+    cur.execute("""
+        SELECT fs.distance, ts.distance 
+        FROM route_stations fs 
+        JOIN route_stations ts ON fs.route_id=ts.route_id 
+        WHERE fs.station_name=%s AND ts.station_name=%s 
+        AND fs.route_id=(SELECT route_id FROM schedules WHERE id=%s)
+    """, (d["from"], d["to"], schedule_id))
 
-    cur.execute("INSERT INTO seat_bookings (seat_id,schedule_id,passenger_name,mobile,from_station,to_station,booking_date,fare) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)", (sid,schedule_id,d["name"],d["mobile"],d["from"],d["to"],d["date"],fare))
+    result = cur.fetchone()
+    if result:
+        df, dt = result
+        fare = round((dt - df) * 2.5, 2)  # ₹2.5 per km
+    else:
+        fare = 100.0  # Default fare
+
+    # ✅ Booking insert
+    cur.execute("""
+        INSERT INTO seat_bookings (
+            seat_id, schedule_id, passenger_name, mobile, 
+            from_station, to_station, booking_date, fare
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (sid, schedule_id, d["name"], d["mobile"],
+          d["from"], d["to"], d["date"], fare))
+
     conn.commit()
+
+    # Real-time seat update
     conn.close()
-    socketio.emit("seat_booked",{"seat":sid})
-    return jsonify(ok=True,msg=f"Seat Booked! Fare: ₹{fare}")
+    socketio.emit("seat_booked", {"seat": sid})
+
+    return jsonify(
+        ok=True,
+        msg=f"✅ Seat Booked! Fare: ₹{fare}",
+        booking={
+            "seat_id": sid,
+            "name": d["name"],
+            "mobile": d["mobile"],
+            "from": d["from"],
+            "to": d["to"],
+            "date": d["date"],
+            "fare": fare
+        }
+    )
+
 
 # ================= DRIVER GPS =================
 @app.route("/driver/<int:bus_id>")
