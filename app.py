@@ -16,7 +16,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 DB_CONFIG = {
     "host": os.getenv('DB_HOST'),
-    "dbname": os.getenv('DB_NAME', "busdb1_yl2r"),  # ✅ केवल "dbname" ही काम करेगा
+    "dbname": os.getenv('DB_NAME', "busdb1_yl2r_user"),  # ✅ केवल "dbname" ही काम करेगा
     "user": os.getenv('DB_USER'),
     "password": os.getenv('DB_PASSWORD'),
     "port": int(os.getenv('DB_PORT', 5432))
