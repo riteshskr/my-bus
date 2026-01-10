@@ -202,47 +202,65 @@ def buses(rid):
 
 
 @app.route("/select/<int:sid>", methods=["GET", "POST"])
-@safe_db
-def select(sid):
+def select(sid):  # ❌ @safe_db हटाया!
     stations = ["Jaipur", "Ajmer", "Pushkar", "Kishangarh", "Delhi"]
+
+    # Safe DB query
     try:
         conn, cur = get_db()
-        cur.execute(
-            "SELECT station_name FROM route_stations rs JOIN schedules s ON s.route_id=rs.route_id WHERE s.id=%s ORDER BY station_order",
-            (sid,))
+        cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (sid,))
         stations = [row['station_name'] for row in cur.fetchall()]
         conn.close()
     except:
-        pass
+        pass  # Demo stations use होंगी
 
     opts = "".join(f"<option>{s}</option>" for s in stations)
+
+    # ✅ Fixed date format
+    today_str = date.today().isoformat()
+
     form = f"""
-    <div class="card mx-auto" style="max-width:500px">
-        <div class="card-header bg-primary text-white text-center">
-            <h4>Select Journey</h4>
+    <div class="card mx-auto shadow" style="max-width:500px">
+        <div class="card-header bg-primary text-white text-center py-4">
+            <h4>🎫 Select Journey</h4>
+            <p class="mb-0">Bus ID: <strong>{sid}</strong></p>
         </div>
         <div class="card-body p-4">
-            <form method="post">
+            <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label">From</label>
-                    <select name="from" class="form-select">{opts}</select>
+                    <label class="form-label fw-bold">From Station</label>
+                    <select name="from" class="form-select" required>
+                        <option value="">Choose From</option>{opts}
+                    </select>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">To</label>
-                    <select name="to" class="form-select">{opts}</select>
+                    <label class="form-label fw-bold">To Station</label>
+                    <select name="to" class="form-select" required>
+                        <option value="">Choose To</option>{opts}
+                    </select>
                 </div>
                 <div class="mb-4">
-                    <label class="form-label">Date</label>
-                    <input type="date" name="date" class="form-control" value="{date.today()}">
+                    <label class="form-label fw-bold">Date</label>
+                    <input type="date" name="date" class="form-control" value="{today_str}" required>
                 </div>
-                <button class="btn btn-success w-100 py-3">Show Available Seats</button>
+                <button type="submit" class="btn btn-success w-100 py-3 fs-5">
+                    🚀 Show Available Seats
+                </button>
             </form>
         </div>
     </div>
     """
+
     if request.method == "POST":
-        return redirect(
-            url_for("seats", sid=sid, fs=request.form["from"], ts=request.form["to"], d=request.form["date"]))
+        from_st = request.form.get("from", "Jaipur")
+        to_st = request.form.get("to", "Delhi")
+        travel_date = request.form.get("date", today_str)
+
+        print(f"Form POST: {from_st} → {to_st} | Date: {travel_date}")
+
+        # ✅ Manual redirect - NO url_for!
+        return redirect(f"/seats/{sid}?fs={from_st}&ts={to_st}&d={travel_date}")
+
     return render_template_string(BASE_HTML, content=form)
 
 
@@ -309,14 +327,23 @@ def seats(sid):
 
 # ================= API ROUTES =================
 @app.route("/book", methods=["POST"])
-@safe_db
-def book():
+def book():  # ❌ @safe_db हटाया!
     try:
-        data = request.json
-        fare = random.randint(200, 500)
-        return jsonify(ok=True, msg=f"✅ Seat {data['seat']} booked! Fare: ₹{fare}", fare=fare)
-    except:
-        return jsonify(ok=False, msg="Booking failed")
+        data = request.get_json() or {}
+        print(f"Booking data: {data}")
+
+        seat = data.get('seat', 'Unknown')
+        fare = random.randint(250, 450)
+
+        print(f"✅ BOOKED Seat {seat}")
+        return jsonify({
+            "ok": True,
+            "msg": f"✅ Seat {seat} Booked Successfully! 💺 Fare: ₹{fare}",
+            "fare": fare
+        })
+    except Exception as e:
+        print(f"Booking error: {e}")
+        return jsonify({"ok": False, "msg": "Booking failed"})
 
 
 @app.route("/driver/<int:bus_id>")
