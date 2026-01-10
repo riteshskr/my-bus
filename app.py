@@ -208,16 +208,32 @@ def select(sid):  # ❌ @safe_db हटाया!
     # Safe DB query
     try:
         conn, cur = get_db()
-        cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (sid,))
-        stations = [row['station_name'] for row in cur.fetchall()]
+
+        # 🔥 schedule → route_id निकालो
+        cur.execute(
+            "SELECT route_id FROM schedules WHERE id=%s",
+            (schedule_id,)
+        )
+        row = cur.fetchone()
+
+        if row:
+            route_id = row["route_id"]
+
+            cur.execute(
+                "SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order",
+                (route_id,)
+            )
+            stations = [r["station_name"] for r in cur.fetchall()]
+
         conn.close()
-    except:
-        pass  # Demo stations use होंगी
+    except Exception as e:
+        print("Select error:", e)
 
     opts = "".join(f"<option>{s}</option>" for s in stations)
+    today = date.today().isoformat()
 
     # ✅ Fixed date format
-    today_str = date.today().isoformat()
+    #today_str = date.today().isoformat()
 
     form = f"""
     <div class="card mx-auto shadow" style="max-width:500px">
