@@ -2,13 +2,23 @@ import os
 import random
 from datetime import date
 from functools import wraps
+import psycopg_pool
 from flask import Flask, render_template_string, request, redirect, jsonify
 from flask_socketio import SocketIO
 from psycopg import connect, rows
+from flask_compress import Compress
 
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
+from flask_compress import Compress
+Compress(app)
+app.jinja_env.auto_reload = False
+
+@app.after_request
+def after_request(response):
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DB CONFIG =================
@@ -20,12 +30,17 @@ DB_CONFIG = {
     "port": int(os.getenv("DB_PORT", 5432)),
     "sslmode": "require"
 }
+pool = psycopg_pool.ConnectionPool(
+    conninfo="host={host} dbname={dbname} user={user} password={password} port={port} sslmode={sslmode}".format(**DB_CONFIG),
+    min_size=4, max_size=20,  # Render के लिए perfect
+    timeout=10
+)
 
 def get_db():
-    """Return connection and dict-row cursor"""
-    conn = connect(**DB_CONFIG)
+    conn = pool.getconn()  # ✅ सही तरीका
     cur = conn.cursor(row_factory=rows.dict_row)
     return conn, cur
+
 
 # ================= INIT DB =================
 def init_db():
@@ -325,6 +340,7 @@ def seats(sid):
 
 #========= driver=========
 @app.route("/driver/<int:sid>")
+@safe_db
 def driver(sid):
     return f"""
     <html>
