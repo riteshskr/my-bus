@@ -139,8 +139,25 @@ HOME_HTML = """
         </div>
     </div>
 </div>
-<div class="alert alert-success text-center">
+
+<div class="alert alert-success text-center mb-4">
     ✅ System Active - GPS Tracking Ready!
+</div>
+
+<div class="text-center">
+    <div class="row justify-content-center g-3">
+        <div class="col-auto">
+            <a href="/buses/1" class="btn btn-success btn-lg px-5">
+                🚀 बस बुक करें
+            </a>
+        </div>
+        <div class="col-auto">
+            <a href="/driver/1" class="btn btn-info btn-lg px-5" target="_blank">
+                📱 ड्राइवर GPS
+            </a>
+        </div>
+    </div>
+    <small class="text-muted mt-2 d-block">Jaipur → Delhi | Live GPS Active 🟢</small>
 </div>
 """
 
@@ -180,8 +197,6 @@ def home():
     except:
         status = '<div class="alert alert-warning">⚠️ Demo Mode Active</div>'
     return render_template_string(BASE_HTML, content=HOME_HTML + status)
-
-
 @app.route("/buses/<int:rid>")
 @safe_db
 def buses(rid):
@@ -200,25 +215,24 @@ def buses(rid):
         pass
     return render_template_string(BASE_HTML, content=html)
 
-
 @app.route("/select/<int:sid>", methods=["GET", "POST"])
-def select(sid):  # ❌ @safe_db हटाया!
+@safe_db
+def select(sid):
+    """
+    Bus seat selection form - From/To stations + Date picker
+    Redirects to /seats/<sid> with query params
+    """
+    # Default stations for demo mode
     stations = ["Jaipur", "Ajmer", "Pushkar", "Kishangarh", "Delhi"]
 
-    # Safe DB query
+    # Try to get route stations from DB
     try:
         conn, cur = get_db()
-
-        # 🔥 schedule → route_id निकालो
-        cur.execute(
-            "SELECT route_id FROM schedules WHERE id=%s",
-            (schedule_id,)
-        )
+        cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
         row = cur.fetchone()
 
-        if row:
+        if row and row["route_id"]:
             route_id = row["route_id"]
-
             cur.execute(
                 "SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order",
                 (route_id,)
@@ -227,122 +241,69 @@ def select(sid):  # ❌ @safe_db हटाया!
 
         conn.close()
     except Exception as e:
-        print("Select error:", e)
+        print(f"Select stations error: {e}")
+        # Fallback to demo stations
 
+    # Create station dropdown options
     opts = "".join(f"<option>{s}</option>" for s in stations)
     today = date.today().isoformat()
 
-    # ✅ Fixed date format
-    #today_str = date.today().isoformat()
-
+    # Hindi/English form
     form = f"""
     <div class="card mx-auto shadow" style="max-width:500px">
         <div class="card-header bg-primary text-white text-center py-4">
-            <h4>🎫 Select Journey</h4>
+            <h4>🎫 यात्रा चुनें</h4>
             <p class="mb-0">Bus ID: <strong>{sid}</strong></p>
+            <small class="text-warning">Select From → To Stations</small>
         </div>
         <div class="card-body p-4">
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">From Station</label>
+                    <label class="form-label fw-bold">प्रस्थान स्टेशन / From</label>
                     <select name="from" class="form-select" required>
-                        <option value="">Choose From</option>{opts}
+                        <option value="">-- चुनें --</option>{opts}
                     </select>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">To Station</label>
+                    <label class="form-label fw-bold">गंतव्य स्टेशन / To</label>
                     <select name="to" class="form-select" required>
-                        <option value="">Choose To</option>{opts}
+                        <option value="">-- चुनें --</option>{opts}
                     </select>
                 </div>
                 <div class="mb-4">
-                    <label class="form-label fw-bold">Date</label>
-                    <input type="date" name="date" class="form-control" value="{today_str}" required>
+                    <label class="form-label fw-bold">तारीख / Date</label>
+                    <input type="date" name="date" class="form-control" 
+                           value="{today}" min="{today}" required>
                 </div>
                 <button type="submit" class="btn btn-success w-100 py-3 fs-5">
-                    🚀 Show Available Seats
+                    🚀 उपलब्ध सीटें देखें
                 </button>
             </form>
+        </div>
+        <div class="card-footer text-center bg-light text-dark">
+            <small>Demo: Jaipur → Delhi | 40 Seats Available</small>
         </div>
     </div>
     """
 
+    # Handle form submission
     if request.method == "POST":
-        from_st = request.form.get("from", "Jaipur")
-        to_st = request.form.get("to", "Delhi")
-        travel_date = request.form.get("date", today_str)
+        from_st = request.form.get("from")
+        to_st = request.form.get("to")
+        travel_date = request.form.get("date", today)
 
-        print(f"Form POST: {from_st} → {to_st} | Date: {travel_date}")
-
-        # ✅ Manual redirect - NO url_for!
-        return redirect(f"/seats/{sid}?fs={from_st}&ts={to_st}&d={travel_date}")
+        if from_st and to_st:
+            print(f"Form POST: {from_st} → {to_st} | Date: {travel_date}")
+            return redirect(f"/seats/{sid}?fs={from_st}&ts={to_st}&d={travel_date}")
+        else:
+            form += '<div class="alert alert-warning mt-3">कृपया सभी fields भरें!</div>'
 
     return render_template_string(BASE_HTML, content=form)
 
 
-@app.route("/seats/<int:sid>")
-@safe_db
-def seats(sid):
-    fs = request.args.get("fs", "Jaipur")
-    ts = request.args.get("ts", "Delhi")
-    d = request.args.get("d", date.today().isoformat())
-
-    # ✅ FIXED: Proper seat buttons (no escaping issues)
-    seat_buttons = ''.join(
-        f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\')">{i}</button>'
-        for i in range(1, 41)
-    )
-
-    html = f"""
-    <div class="text-center mb-5">
-        <h3 class="mb-3">{fs} → {ts}</h3>
-        <p class="lead text-muted mb-4">Date: {d} | 40 Seats Available</p>
-    </div>
-    <div id="mapId" style="height:350px;margin:0 auto 30px;max-width:800px"></div>
-    <div class="text-center mb-4">
-        <h5>💺 Available Seats</h5>
-    </div>
-    <div class="bus-row justify-content-center">{seat_buttons}</div>
-
-    <script>
-    setTimeout(function() {{
-        window.map = L.map('mapId').setView([27.5, 76.0], 8);
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-            attribution: '© OpenStreetMap'
-        }}).addTo(window.map);
-
-        var routeCoords = [[27.0, 75.8], [27.5, 76.0], [28.6, 77.2]];
-        L.polyline(routeCoords, {{color: 'blue', weight: 6}}).addTo(window.map);
-        window.map.fitBounds(routeCoords);
-
-        // ✅ FIXED: Proper setInterval
-        setInterval(function() {{
-            fetch('/bus_location/{sid}')
-                .then(function(r) {{ return r.json(); }})
-                .then(function(d) {{
-                    if(d.lat && d.lng && window.map) {{
-                        if(!window.busMarker) {{
-                            window.busMarker = L.marker([d.lat, d.lng], {{
-                                icon: L.divIcon({{
-                                    className: 'custom-div-icon',
-                                    html: '🚌',
-                                    iconSize: [40, 40]
-                                }})
-                            }}).addTo(window.map).bindPopup('Live Bus Location');
-                        }} else {{
-                            window.busMarker.setLatLng([d.lat, d.lng]);
-                        }}
-                    }}
-                }});
-        }}, 3000);
-    }}, 200);
-    </script>
-    """
-    return render_template_string(BASE_HTML, content=html)
-
-
 # ================= API ROUTES =================
 @app.route("/book", methods=["POST"])
+@safe_db
 def book():  # ❌ @safe_db हटाया!
     try:
         data = request.get_json() or {}
@@ -361,6 +322,57 @@ def book():  # ❌ @safe_db हटाया!
         print(f"Booking error: {e}")
         return jsonify({"ok": False, "msg": "Booking failed"})
 
+#=========seat==========
+@app.route("/seats/<int:sid>")
+@safe_db
+def seats(sid):
+    fs = request.args.get("fs", "Jaipur")
+    ts = request.args.get("ts", "Delhi")
+    d = request.args.get("d", date.today().isoformat())
+
+    seat_buttons = ''.join(
+        f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\')">{i}</button>'
+        for i in range(1, 41)
+    )
+
+    html = f"""
+    <div class="text-center mb-5">
+        <h3 class="mb-3">{fs} → {ts}</h3>
+        <p class="lead text-muted mb-4">Date: {d} | 40 Seats Available</p>
+    </div>
+    <div id="mapId" style="height:350px;margin:0 auto 30px;max-width:800px"></div>
+    <h5 class="text-center mb-4">💺 उपलब्ध सीटें</h5>
+    <div class="bus-row justify-content-center">{seat_buttons}</div>
+
+    <script>
+    setTimeout(function() {{
+        window.map = L.map('mapId').setView([27.5, 76.0], 8);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(window.map);
+
+        setInterval(function() {{
+            fetch('/bus_location/{sid}')
+                .then(r => r.json())
+                .then(d => {{
+                    if(d.lat && d.lng && window.map) {{
+                        if(!window.busMarker) {{
+                            window.busMarker = L.marker([d.lat, d.lng], {{
+                                icon: L.divIcon({{
+                                    className: 'custom-div-icon',
+                                    html: '🚌',
+                                    iconSize: [40, 40]
+                                }})
+                            }}).addTo(window.map);
+                        }} else {{
+                            window.busMarker.setLatLng([d.lat, d.lng]);
+                        }}
+                    }}
+                }});
+        }}, 3000);
+    }}, 200);
+    </script>
+    """
+    return render_template_string(BASE_HTML, content=html)
+#======= driver=========
 
 @app.route("/driver/<int:bus_id>")
 def driver(bus_id):
