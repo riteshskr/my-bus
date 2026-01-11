@@ -53,6 +53,85 @@ def safe_db(func):
     return wrapper
 
 
+def init_db():
+    """पहली बार run होने पर tables create + sample data"""
+    try:
+        conn, cur = get_db()
+
+        # Table 1: Routes
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS routes (
+            id SERIAL PRIMARY KEY,
+            route_name VARCHAR(100),
+            distance_km INT
+        )
+        """)
+
+        # Table 2: Schedules (Buses)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id SERIAL PRIMARY KEY,
+            route_id INT REFERENCES routes(id),
+            bus_name VARCHAR(100),
+            departure_time TIME,
+            total_seats INT DEFAULT 40
+        )
+        """)
+
+        # Table 3: Bookings ⭐ सबसे जरूरी
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS bookings (
+            id SERIAL PRIMARY KEY,
+            schedule_id INT REFERENCES schedules(id),
+            seat_number INT,
+            passenger_name VARCHAR(100),
+            mobile VARCHAR(15),
+            from_station VARCHAR(50),
+            to_station VARCHAR(50),
+            travel_date DATE,
+            status VARCHAR(20) DEFAULT 'confirmed',
+            fare INT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+        """)
+
+        # Table 4: Route Stations
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS route_stations (
+            id SERIAL PRIMARY KEY,
+            route_id INT,
+            station_name VARCHAR(50),
+            station_order INT
+        )
+        """)
+
+        conn.commit()
+
+        # Sample Data ✅
+        cur.execute("SELECT COUNT(*) as count FROM routes")
+        if cur.fetchone()['count'] == 0:
+            # Routes
+            cur.execute("INSERT INTO routes (route_name, distance_km) VALUES ('Jaipur-Delhi', 280)")
+            route_id = 1
+
+            # Stations
+            stations = [('Jaipur', 1), ('Ajmer', 2), ('Pushkar', 3), ('Kishangarh', 4), ('Delhi', 5)]
+            for station, order in stations:
+                cur.execute("INSERT INTO route_stations (route_id, station_name, station_order) VALUES (%s, %s, %s)",
+                            (route_id, station, order))
+
+            # Bus Schedule
+            cur.execute("INSERT INTO schedules (route_id, bus_name, departure_time) VALUES (%s, %s, %s)",
+                        (route_id, 'Volvo AC Sleeper', '08:00:00'))
+
+            conn.commit()
+            print("✅ Database initialized with sample data!")
+
+        conn.close()
+    except Exception as e:
+        print(f"Init DB error: {e}")
+
+
 # ================= HTML TEMPLATES =================
 BASE_HTML = """
 <!doctype html>
@@ -188,6 +267,7 @@ setTimeout(()=>{
 @app.route("/")
 @safe_db
 def home():
+    init_db()
     try:
         # Quick DB test
         conn, cur = get_db()
@@ -304,23 +384,35 @@ def select(sid):
 # ================= API ROUTES =================
 @app.route("/book", methods=["POST"])
 @safe_db
-def book():  # ❌ @safe_db हटाया!
+def book():
     try:
         data = request.get_json() or {}
-        print(f"Booking data: {data}")
+        seat = data.get('seat')
+        name = data.get('name')
+        mobile = data.get('mobile')
+        from_st = data.get('from')
+        to_st = data.get('to')
+        travel_date = data.get('date')
 
-        seat = data.get('seat', 'Unknown')
-        fare = random.randint(250, 450)
+        # ✅ DATABASE में SAVE!
+        conn, cur = get_db()
+        cur.execute("""
+            INSERT INTO bookings (schedule_id, seat_number, passenger_name, mobile, from_station, to_station, travel_date, fare)
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s)
+        """, (seat, name, mobile, from_st, to_st, travel_date, random.randint(250, 450)))
+        conn.commit()
+        conn.close()
 
-        print(f"✅ BOOKED Seat {seat}")
+        print(f"✅ SAVED in DB: Seat {seat} - {name}")
         return jsonify({
             "ok": True,
-            "msg": f"✅ Seat {seat} Booked Successfully! 💺 Fare: ₹{fare}",
-            "fare": fare
+            "msg": f"✅ Seat {seat} Booked! 💺 Fare: ₹350 | Saved in Database!",
+            "fare": 350
         })
     except Exception as e:
         print(f"Booking error: {e}")
         return jsonify({"ok": False, "msg": "Booking failed"})
+
 
 #=========seat==========
 @app.route("/seats/<int:sid>")
