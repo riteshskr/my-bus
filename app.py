@@ -33,24 +33,7 @@ def get_db():
         raise Exception("DB Connection failed")
 
 
-def safe_db(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except:
-            print(f"Error in {func.__name__}")
-            if 'buses' in func.__name__:
-                return render_template_string(BASE_HTML,
-                                              content='<div class="alert alert-info text-white">No buses available</div>')
-            elif 'select' in func.__name__:
-                return render_template_string(BASE_HTML,
-                                              content='<div class="alert alert-warning">Select stations unavailable</div>')
-            elif 'seats' in func.__name__:
-                return render_template_string(BASE_HTML, content=SEATS_DEMO_HTML)
-            return "Service unavailable", 503
 
-    return wrapper
 
 
 def init_db():
@@ -119,6 +102,18 @@ def init_db():
     except Exception as e:
         print(f"Init DB error: {e}")
 
+def safe_db(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            print(f"🔥 Error in {func.__name__}: {e}")
+            return render_template_string(
+                BASE_HTML,
+                content='<div class="alert alert-danger text-center">❌ Server Error – Please try again</div>'
+            )
+    return wrapper
 
 # ================= HTML TEMPLATES =================
 BASE_HTML = """
@@ -265,6 +260,147 @@ def home():
     except:
         status = '<div class="alert alert-warning">⚠️ Demo Mode Active</div>'
     return render_template_string(BASE_HTML, content=HOME_HTML + status)
+
+
+@app.route("/admin")
+@safe_db
+def admin():
+    try:
+        conn, cur = get_db()
+
+        # Bookings data
+        cur.execute("SELECT * FROM bookings ORDER BY created_at DESC LIMIT 20")
+        bookings = cur.fetchall()
+
+        # Schedules data
+        cur.execute("SELECT * FROM schedules")
+        schedules = cur.fetchall()
+
+        # Stats
+        cur.execute("SELECT COUNT(*) as total FROM bookings")
+        total_bookings = cur.fetchone()['total']
+        cur.execute("SELECT COUNT(*) as buses FROM schedules")
+        total_buses = cur.fetchone()['buses']
+
+        conn.close()
+
+        html = f"""
+        <div class="container py-5">
+            <h2 class="text-center mb-4">📊 Bus Booking Database Dashboard</h2>
+
+            <!-- Stats -->
+            <div class="row mb-5 text-center">
+                <div class="col-md-6">
+                    <div class="card bg-success text-white">
+                        <div class="card-body">
+                            <h1>{total_bookings}</h1>
+                            <p>Total Bookings</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card bg-primary text-white">
+                        <div class="card-body">
+                            <h1>{total_buses}</h1>
+                            <p>Total Buses</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Bookings Table -->
+            <h4>📋 Recent Bookings</h4>
+            <div class="table-responsive mb-5">
+                <table class="table table-dark table-striped">
+                    <thead>
+                        <tr><th>ID</th><th>Seat</th><th>Name</th><th>Mobile</th><th>Route</th><th>Date</th><th>Fare</th></tr>
+                    </thead>
+                    <tbody>
+        """
+
+        for booking in bookings:
+            html += f"""
+            <tr>
+                <td><strong>#{booking['id']}</strong></td>
+                <td>💺{booking['seat_number']}</td>
+                <td>{booking['passenger_name']}</td>
+                <td>{booking['mobile']}</td>
+                <td>{booking['from_station']}→{booking['to_station']}</td>
+                <td>{booking['travel_date']}</td>
+                <td>₹{booking['fare']}</td>
+            </tr>
+            """
+
+        html += f"""
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Bus Schedules -->
+            <h4>🚌 Available Buses</h4>
+            <div class="table-responsive">
+                <table class="table table-dark table-striped">
+                    <thead><tr><th>ID</th><th>Bus Name</th><th>Departure</th><th>Route ID</th></tr></thead>
+                    <tbody>
+        """
+
+        for bus in schedules:
+            html += f"""
+            <tr>
+                <td>{bus['id']}</td>
+                <td>{bus['bus_name']}</td>
+                <td>{bus['departure_time']}</td>
+                <td>{bus['route_id']}</td>
+            </tr>
+            """
+
+        html += """
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        """
+        return render_template_string(BASE_HTML, content=html)
+
+    except Exception as e:
+        return f'<div class="alert alert-danger text-center">❌ Database Error: {str(e)}</div>'
+
+#======== test-db =======
+@app.route("/test-db")
+def test_db():
+    try:
+        conn, cur = get_db()
+        cur.execute("SELECT COUNT(*) as buses FROM schedules WHERE route_id=1")
+        buses = cur.fetchone()['buses']
+        cur.execute("SELECT COUNT(*) as bookings FROM bookings")
+        bookings = cur.fetchone()['bookings']
+        conn.close()
+        return f"""
+        <div class="container text-center py-5">
+            <h2>✅ Database Connection OK!</h2>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card bg-success">
+                        <div class="card-body">
+                            <h3>{buses}</h3>
+                            <p>Buses (route_id=1)</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card bg-info">
+                        <div class="card-body">
+                            <h3>{bookings}</h3>
+                            <p>Total Bookings</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <a href="/admin" class="btn btn-primary btn-lg mt-4">📊 View Full Data</a>
+        </div>
+        """
+    except Exception as e:
+        return f"<h2>❌ DB Error: {str(e)}</h2><p>Check Environment Variables!</p>"
 @app.route("/buses/<int:rid>")
 @safe_db
 def buses(rid):
