@@ -7,11 +7,11 @@ from flask import Flask, render_template_string, request, redirect, jsonify
 from flask_socketio import SocketIO
 from psycopg import connect, rows
 from flask_compress import Compress
-
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
-from flask_compress import Compress
 Compress(app)
 app.jinja_env.auto_reload = False
 
@@ -22,24 +22,42 @@ def after_request(response):
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DB CONFIG =================
-DB_CONFIG = {
+
+"""DB_CONFIG = {
     "host": os.getenv("DB_HOST","dpg-d5g7u19r0fns739mbng0-a.oregon-postgres.render.com"),
     "dbname": os.getenv("DB_NAME","busdb1_yl2r"),
     "user": os.getenv("DB_USER","busdb1_yl2r_user"),
     "password": os.getenv("DB_PASSWORD","49Tv97dLOzE8yd0WlYyns49KnyB646py"),
     "port": int(os.getenv("DB_PORT", 5432)),
     "sslmode": "require"
-}
-pool = psycopg_pool.ConnectionPool(
-    conninfo="host={host} dbname={dbname} user={user} password={password} port={port} sslmode={sslmode}".format(**DB_CONFIG),
-    min_size=4, max_size=20,  # Render के लिए perfect
-    timeout=10
-)
+}"""
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=2,        # Free tier के लिए कम
+        max_size=10,
+        timeout=5.0,
+        max_waiting=5,
+        max_idle=30,
+        reconnect_timeout=300
+    )
+    print("✅ ConnectionPool initialized!")
+else:
+    print("❌ DATABASE_URL missing!")
+    pool = None
 
+# अब पुराना get_db function replace करें:
 def get_db():
-    conn = pool.getconn()  # ✅ सही तरीका
-    cur = conn.cursor(row_factory=rows.dict_row)
+    if not pool:
+        raise Exception("No database pool available")
+    conn = pool.getconn()
+    cur = conn.cursor(row_factory=dict_row)
     return conn, cur
+
+def close_db(conn):
+    if conn:
+        pool.putconn(conn)
 
 
 # ================= INIT DB =================
@@ -119,7 +137,7 @@ def init_db():
             for st, order in stations:
                 cur.execute("INSERT INTO route_stations (route_id, station_name, station_order) VALUES (1,%s,%s) ON CONFLICT DO NOTHING",(st,order))
             conn.commit()
-        conn.close()
+        close_db(conn)
     except Exception as e:
         print(f"Init DB error: {e}")
 
@@ -231,7 +249,7 @@ def buses(rid):
     conn, cur = get_db()
     cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s ORDER BY departure_time",(rid,))
     buses_data = cur.fetchall()
-    conn.close()
+    close_db(conn)
     html = '<div class="alert alert-info text-center">No Buses for this route</div>'
     if buses_data:
         html = '<div class="text-center mb-4"><h4>Available Buses</h4></div>'
@@ -256,7 +274,7 @@ def select(sid):
     route_id = row["route_id"] if row else 1
     cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order",(route_id,))
     stations = [r["station_name"] for r in cur.fetchall()]
-    conn.close()
+    close_db(conn)
     opts = "".join(f"<option>{s}</option>" for s in stations)
     today = date.today().isoformat()
     if request.method=="POST":
@@ -295,7 +313,7 @@ def seats(sid):
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
     """,(sid,d))
     booked = [r["seat_number"] for r in cur.fetchall()]
-    conn.close()
+    close_db(conn)
 
     seat_buttons = ""
     for i in range(1,41):
@@ -407,7 +425,7 @@ def book():
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """, (data.get("sid"), seat, name, mobile, from_st, to_st, travel_date, fare))
     conn.commit()
-    conn.close()
+    close_db(conn)
     return jsonify(ok=True,msg=f"✅ Seat {seat} Booked! Fare ₹{fare}")
 
 # ================= RUN =================
