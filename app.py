@@ -58,74 +58,62 @@ def init_db():
     try:
         conn, cur = get_db()
 
-        # Table 1: Routes
+        # Tables create (same)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
-            id SERIAL PRIMARY KEY,
-            route_name VARCHAR(100),
-            distance_km INT
-        )
-        """)
+            id SERIAL PRIMARY KEY, route_name VARCHAR(100), distance_km INT
+        )""")
 
-        # Table 2: Schedules (Buses)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS schedules (
-            id SERIAL PRIMARY KEY,
-            route_id INT REFERENCES routes(id),
-            bus_name VARCHAR(100),
-            departure_time TIME,
-            total_seats INT DEFAULT 40
-        )
-        """)
+            id SERIAL PRIMARY KEY, route_id INT, bus_name VARCHAR(100), 
+            departure_time TIME, total_seats INT DEFAULT 40
+        )""")
 
-        # Table 3: Bookings ⭐ सबसे जरूरी
         cur.execute("""
         CREATE TABLE IF NOT EXISTS bookings (
-            id SERIAL PRIMARY KEY,
-            schedule_id INT REFERENCES schedules(id),
-            seat_number INT,
-            passenger_name VARCHAR(100),
-            mobile VARCHAR(15),
-            from_station VARCHAR(50),
-            to_station VARCHAR(50),
-            travel_date DATE,
-            status VARCHAR(20) DEFAULT 'confirmed',
-            fare INT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-        """)
+            id SERIAL PRIMARY KEY, schedule_id INT, seat_number INT, 
+            passenger_name VARCHAR(100), mobile VARCHAR(15), from_station VARCHAR(50), 
+            to_station VARCHAR(50), travel_date DATE, status VARCHAR(20) DEFAULT 'confirmed', 
+            fare INT, created_at TIMESTAMP DEFAULT NOW()
+        )""")
 
-        # Table 4: Route Stations
         cur.execute("""
         CREATE TABLE IF NOT EXISTS route_stations (
-            id SERIAL PRIMARY KEY,
-            route_id INT,
-            station_name VARCHAR(50),
-            station_order INT
-        )
-        """)
+            id SERIAL PRIMARY KEY, route_id INT, station_name VARCHAR(50), station_order INT
+        )""")
 
         conn.commit()
 
-        # Sample Data ✅
-        cur.execute("SELECT COUNT(*) as count FROM routes")
+        # ✅ FIXED: Multiple buses + route_id=1 guaranteed
+        cur.execute("SELECT COUNT(*) as count FROM schedules WHERE route_id=1")
         if cur.fetchone()['count'] == 0:
-            # Routes
-            cur.execute("INSERT INTO routes (route_name, distance_km) VALUES ('Jaipur-Delhi', 280)")
-            route_id = 1
+            # Route बनाएं
+            cur.execute(
+                "INSERT INTO routes (id, route_name, distance_km) VALUES (1, 'Jaipur-Delhi', 280) ON CONFLICT (id) DO NOTHING")
+
+            # ✅ 3 Buses route_id=1 पर (अब /buses/1 काम करेगा!)
+            buses = [
+                (1, 'Volvo AC Sleeper', '08:00:00'),
+                (2, 'Semi Sleeper AC', '10:30:00'),
+                (3, 'Volvo AC Seater', '14:00:00')
+            ]
+            for bus_id, bus_name, time in buses:
+                cur.execute("""
+                    INSERT INTO schedules (id, route_id, bus_name, departure_time) 
+                    VALUES (%s, 1, %s, %s) ON CONFLICT (id) DO NOTHING
+                """, (bus_id, bus_name, time))
 
             # Stations
             stations = [('Jaipur', 1), ('Ajmer', 2), ('Pushkar', 3), ('Kishangarh', 4), ('Delhi', 5)]
             for station, order in stations:
-                cur.execute("INSERT INTO route_stations (route_id, station_name, station_order) VALUES (%s, %s, %s)",
-                            (route_id, station, order))
-
-            # Bus Schedule
-            cur.execute("INSERT INTO schedules (route_id, bus_name, departure_time) VALUES (%s, %s, %s)",
-                        (route_id, 'Volvo AC Sleeper', '08:00:00'))
+                cur.execute("""
+                    INSERT INTO route_stations (route_id, station_name, station_order) 
+                    VALUES (1, %s, %s) ON CONFLICT DO NOTHING
+                """, (station, order))
 
             conn.commit()
-            print("✅ Database initialized with sample data!")
+            print("✅ FIXED: 3 buses added for route_id=1! /buses/1 अब काम करेगा!")
 
         conn.close()
     except Exception as e:
@@ -422,25 +410,98 @@ def seats(sid):
     ts = request.args.get("ts", "Delhi")
     d = request.args.get("d", date.today().isoformat())
 
-    seat_buttons = ''.join(
-        f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\')">{i}</button>'
-        for i in range(1, 41)
-    )
+    # ⭐ STEP 1: Booked seats database से fetch करें
+    booked_seats = []
+    try:
+        conn, cur = get_db()
+        cur.execute("""
+            SELECT seat_number FROM bookings 
+            WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+        """, (sid, d))
+        booked_seats = [row['seat_number'] for row in cur.fetchall()]
+        conn.close()
+    except Exception as e:
+        print(f"Booked seats fetch error: {e}")
 
+    available_seats = 40 - len(booked_seats)
+
+    # ⭐ STEP 2: Green (Available) vs Red (Booked) seats generate करें
+    seat_buttons = ''
+    for i in range(1, 41):
+        if i in booked_seats:
+            # Booked seat - Red + Disabled
+            seat_buttons += f'''
+            <button class="btn btn-danger seat" disabled title="Booked">
+                ⛔ {i}
+            </button>
+            '''
+        else:
+            # Available seat - Green + Clickable
+            seat_buttons += f'''
+            <button class="btn btn-success seat" onclick="bookSeat({i},'{fs}','{ts}','{d}')" title="Click to Book">
+                💺 {i}
+            </button>
+            '''
+
+    # ⭐ STEP 3: Complete HTML with Live GPS Map
     html = f"""
-    <div class="text-center mb-5">
-        <h3 class="mb-3">{fs} → {ts}</h3>
-        <p class="lead text-muted mb-4">Date: {d} | 40 Seats Available</p>
+    <div class="row">
+        <div class="col-md-8">
+            <div class="text-center mb-5">
+                <h3 class="mb-3">🚌 {fs} → {ts}</h3>
+                <p class="lead text-muted mb-4">
+                    📅 Date: <strong>{d}</strong> | 
+                    💺 Available: <span class="text-success">{available_seats}</span>/40 | 
+                    <span class="text-danger">{len(booked_seats)} Booked</span>
+                </p>
+            </div>
+
+            <!-- Live GPS Map -->
+            <div id="mapId" class="mb-5"></div>
+
+            <!-- Bus Seats Layout -->
+            <h5 class="text-center mb-4">💺 उपलब्ध सीटें (Click to Book)</h5>
+            <div class="bus-row justify-content-center">{seat_buttons}</div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="card bg-warning text-dark">
+                <div class="card-body text-center">
+                    <h5>📋 Booking Info</h5>
+                    <p><strong>Bus ID:</strong> {sid}</p>
+                    <p><strong>From:</strong> {fs}</p>
+                    <p><strong>To:</strong> {ts}</p>
+                    <p><strong>Date:</strong> {d}</p>
+                    <hr>
+                    <div class="legend">
+                        <div><span class="btn btn-success btn-sm me-2">💺</span> Available</div>
+                        <div><span class="btn btn-danger btn-sm me-2">⛔</span> Booked</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    <div id="mapId" style="height:350px;margin:0 auto 30px;max-width:800px"></div>
-    <h5 class="text-center mb-4">💺 उपलब्ध सीटें</h5>
-    <div class="bus-row justify-content-center">{seat_buttons}</div>
 
     <script>
     setTimeout(function() {{
-        window.map = L.map('mapId').setView([27.5, 76.0], 8);
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(window.map);
+        // Initialize Live GPS Map
+        window.map = L.map('mapId').setView([27.5, 76.0], 9);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap'
+        }}).addTo(window.map);
 
+        // Route polyline (Jaipur to Delhi)
+        L.polyline([
+            [27.0, 75.8],  // Jaipur
+            [27.5, 76.0],  // Ajmer  
+            [28.6, 77.2]   // Delhi
+        ], {{
+            color: 'blue',
+            weight: 8,
+            opacity: 0.7
+        }}).addTo(window.map);
+
+        // Live GPS Update हर 3 सेकंड
         setInterval(function() {{
             fetch('/bus_location/{sid}')
                 .then(r => r.json())
@@ -450,20 +511,25 @@ def seats(sid):
                             window.busMarker = L.marker([d.lat, d.lng], {{
                                 icon: L.divIcon({{
                                     className: 'custom-div-icon',
-                                    html: '🚌',
-                                    iconSize: [40, 40]
+                                    html: '<div style="background:green;color:white;padding:5px;border-radius:50%;font-size:20px">🚌</div>',
+                                    iconSize: [50, 50],
+                                    iconAnchor: [25, 25]
                                 }})
-                            }}).addTo(window.map);
+                            }}).addTo(window.map)
+                            .bindPopup('Live Bus Location');
                         }} else {{
                             window.busMarker.setLatLng([d.lat, d.lng]);
                         }}
                     }}
-                }});
+                }})
+                .catch(e => console.log('GPS update error:', e));
         }}, 3000);
-    }}, 200);
+    }}, 300);
     </script>
     """
     return render_template_string(BASE_HTML, content=html)
+
+
 #======= driver=========
 
 @app.route("/driver/<int:bus_id>")
