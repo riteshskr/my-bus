@@ -13,11 +13,11 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DB CONFIG =================
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST","dpg-d5g7u19r0fns739mbng0-a.oregon-postgres.render.com"),
-    "dbname": os.getenv("DB_NAME", "busdb1_yl2r"),
-    "user": os.getenv("DB_USER","busdb1_yl2r_user"),
-    "password": os.getenv("DB_PASSWORD","49Tv97dLOzE8yd0WlYyns49KnyB646py"),  # fixed
-    "port": int(os.getenv("DB_PORT", 5432))
+    "host": "dpg-d5g7u19r0fns739mbng0-a.oregon-postgres.render.com",
+    "dbname": "busdb1_yl2r",
+    "user": "busdb1_yl2r_user",
+    "password": "49Tv97dLOzE8yd0WlYyns49KnyB646py",  # fixed
+    "port":  5432
 }
 
 def get_db():
