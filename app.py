@@ -35,14 +35,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL:
     pool = ConnectionPool(
         conninfo=DATABASE_URL,
-        min_size=2,        # Free tier के लिए कम
-        max_size=10,
-        timeout=5.0,
-        max_waiting=5,
-        max_idle=30,
-        reconnect_timeout=300
+        min_size=0,           # ❌ 2 → 0 (no pre-connections)
+        max_size=1,           # ❌ 10 → 1 (Render free tier limit)
+        timeout=10.0,         # ❌ 5 → 10 sec
+        max_waiting=1,        # ❌ 5 → 1
+        max_idle=600,         # 10 minutes idle
+        reconnect_timeout=300,
+        open=False            # Lazy connection
     )
-    print("✅ ConnectionPool initialized!")
+    print("✅ ConnectionPool initialized (SAFE MODE)")
 else:
     print("❌ DATABASE_URL missing!")
     pool = None
@@ -63,7 +64,17 @@ def close_db(conn):
 # ================= INIT DB =================
 def init_db():
     try:
+        # Skip init_db अगर pool ready नहीं
+        if not pool:
+            print("⚠️ Skipping init_db - no pool")
+            return
+
         conn, cur = get_db()
+        # ... बाकी same code ...
+
+        close_db(conn)  # ✅ Fixed
+    except Exception as e:
+        print(f"Init DB error: {e}")
         # Routes
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
