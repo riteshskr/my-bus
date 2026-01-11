@@ -120,6 +120,15 @@ def safe_db(func):
                 content=f'<div class="alert alert-danger text-center">❌ Server Error: {e}</div>'
             )
     return wrapper
+#======== gps =========
+@socketio.on("driver_gps")
+def handle_gps(data):
+    # data = { sid, lat, lng }
+    print("📡 GPS:", data)
+
+    # सभी passengers को भेजो
+    socketio.emit("bus_location", data)
+
 
 # ================= HTML =================
 BASE_HTML = """
@@ -263,24 +272,108 @@ def seats(sid):
     fs = request.args.get("fs","Jaipur")
     ts = request.args.get("ts","Delhi")
     d = request.args.get("d", date.today().isoformat())
+
     conn, cur = get_db()
-    cur.execute("SELECT seat_number FROM seat_bookings WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'",(sid,d))
+    cur.execute("""
+        SELECT seat_number 
+        FROM seat_bookings 
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """,(sid,d))
     booked = [r["seat_number"] for r in cur.fetchall()]
     conn.close()
-    seat_buttons=""
+
+    seat_buttons = ""
     for i in range(1,41):
         if i in booked:
-            seat_buttons+=f'<button class="btn btn-danger seat" disabled>{i}</button>'
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
         else:
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
-    html=f"""
+
+    html = f"""
     <div class="text-center">
         <h4>{fs} → {ts} | {d}</h4>
-        <div class="bus-row">{seat_buttons}</div>
+
+        <!-- 🗺 LIVE MAP -->
+        <div id="map"></div>
+
+        <!-- 🪑 SEATS -->
+        <div class="bus-row mt-3">
+            {seat_buttons}
+        </div>
     </div>
+
+    <script>
+    // Default Jaipur Location
+   window.map = L.map('map').setView([26.9124, 75.7873], 7);
+
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18
+    }}).addTo(map);
+
+    // 🚌 Bus Marker
+    window.busMarker = L.marker([26.9124,75.7873], {{
+        icon: L.divIcon({{
+            className:'custom-div-icon',
+            html:'🚌',
+            iconSize:[40,40]
+        }})
+    }}).addTo(map).bindPopup("Live Bus Location");
+    </script>
     """
+
     return render_template_string(BASE_HTML, content=html)
 
+#========= driver=========
+@app.route("/driver/<int:sid>")
+def driver(sid):
+    return f"""
+    <html>
+    <head><title>Driver GPS</title></head>
+    <body style="text-align:center;font-family:sans-serif">
+        <h2>🚗 Driver Live GPS (Bus {sid})</h2>
+        <p>Phone में ये page खोलो और नीचे वाला बटन दबाओ</p>
+
+        <button onclick="start()" style="padding:15px;font-size:18px;">
+            Start Sending Location
+        </button>
+
+        <p id="status"></p>
+
+        <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+        <script>
+            var socket = io();
+
+            function start(){{
+                if(!navigator.geolocation){{
+                    alert("GPS not supported");
+                    return;
+                }}
+
+                document.getElementById("status").innerText = "📡 Sending GPS...";
+
+                navigator.geolocation.watchPosition(
+                    function(pos){{
+                        socket.emit("driver_gps", {{
+                            sid: {sid},
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude
+                        }});
+                    }},
+                    function(err){{
+                        alert("GPS Error: " + err.message);
+                    }},
+                    {{
+                        enableHighAccuracy: true
+                    }}
+                );
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+
+#=======seat book ==========
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
