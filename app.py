@@ -18,7 +18,7 @@ app.jinja_env.auto_reload = False
 def after_request(response):
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DB CONFIG =================
 
@@ -440,9 +440,11 @@ def book():
     AND sb.travel_date=%s
     AND sb.seat_number=%s
     AND (nf.station_order < t.station_order AND nt.station_order > f.station_order)
+    AND f.route_id = (SELECT route_id FROM schedules WHERE id=%s)
     """, (
         data["from"], data["to"],
-        data["sid"], data["date"], data["seat"]
+        data["sid"], data["date"], data["seat"],
+        data["sid"]
     ))
 
     if cur.fetchone():
@@ -452,7 +454,7 @@ def book():
     # Insert booking
     cur.execute("""
     INSERT INTO seat_bookings 
-    (schedule_id, travel_date, seat_number, passenger, mobile, from_station, to_station, status)
+    (schedule_id, travel_date, seat_number, passenger_name, mobile, from_station, to_station, status)
     VALUES (%s,%s,%s,%s,%s,%s,%s,'confirmed')
     """,(
         data["sid"], data["date"], data["seat"],
@@ -476,5 +478,5 @@ def book():
 # ================= RUN =================
 if __name__=="__main__":
     print("🚀 Bus App Starting on Render...")
-    # socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))  # ❌ DISABLED
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
+     socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    #app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
