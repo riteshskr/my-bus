@@ -36,51 +36,52 @@ pool = None
 
 if DATABASE_URL:
     try:
-        # Render SSL fix
-        conninfo = f"{DATABASE_URL}?sslmode=require&target_session_attrs=read-write"
-
         pool = ConnectionPool(
-            conninfo=DATABASE_URL,  # Render पहले से SSL handle करता है
-            min_size=2,
-            max_size=8,
-            timeout=15.0,
-            open=True
+            conninfo=DATABASE_URL,
+            min_size=0,      # ← 0 रखें startup पर
+            max_size=4,      # ← Free tier के लिए safe
+            max_waiting=2,   # ← कम
+            timeout=10.0,    # ← कम timeout
+            max_idle=120,    # ← 2 मिनट
+            reconnect_timeout=10,
+            open=False       # ← Manual open करें
         )
-        print("✅ SSL ConnectionPool ready!")
+        print("✅ Minimal ConnectionPool ready!")
     except Exception as e:
         print(f"❌ Pool error: {e}")
         pool = None
 
 
 # अब पुराना get_db function replace करें:
-def get_db():
-    if not pool:
-        raise Exception("No database pool available")
+from psycopg import connect
 
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            conn = pool.getconn()
-            cur = conn.cursor(row_factory=dict_row)
-            return conn, cur
-        except Exception as e:
-            if "SSL" in str(e) and attempt < max_retries - 1:
-                print(f"⚠️ SSL retry {attempt + 1}/{max_retries}")
-                continue
-            raise e
+
+def get_db():
+    """No pooling - direct connection for Render Free Tier"""
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL missing")
+
+    conn = connect(DATABASE_URL)
+    cur = conn.cursor(row_factory=dict_row)
+    return conn, cur
 
 
 def close_db(conn):
     if conn:
-        pool.putconn(conn)
+        conn.close()
 
 
 # ================= INIT DB =================
 
 def init_db():
     if not pool:
-        print("⚠️ Skipping DB init - no pool")
+        print("⚠️ No pool - skipping init")
         return
+
+    # Manual pool open
+    if pool.status() == "closed":  # status() method use करें
+        pool.open()
+
     conn = None
     try:
         conn, cur = get_db()
