@@ -53,8 +53,6 @@ if DATABASE_URL:
 
 
 # अब पुराना get_db function replace करें:
-from psycopg import connect
-
 
 def get_db():
     """No pooling - direct connection for Render Free Tier"""
@@ -74,13 +72,7 @@ def close_db(conn):
 # ================= INIT DB =================
 
 def init_db():
-    if not pool:
-        print("⚠️ No pool - skipping init")
-        return
-
-    # Manual pool open
-    if pool.status() == "closed":  # status() method use करें
-        pool.open()
+        # Manual pool open
 
     conn = None
     try:
@@ -136,12 +128,9 @@ def safe_db(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
-            # ❌ pool.status हटाया - psycopg_pool में यह नहीं है
-            if not pool:
-                raise Exception("No database pool available")
             return func(*args, **kwargs)
         except Exception as e:
-            print(f"❌ DB Error: {e}")
+            print("❌ DB Error:", e)
             return render_template_string(BASE_HTML,
                 content=f'<div class="alert alert-danger text-center">❌ डेटाबेस त्रुटि: {str(e)}</div>'
             )
