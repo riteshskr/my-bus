@@ -19,7 +19,7 @@ app.jinja_env.auto_reload = False
 def after_request(response):
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
 
 # ================= DB CONFIG =================
 
@@ -62,20 +62,13 @@ def close_db(conn):
 
 
 # ================= INIT DB =================
+
 def init_db():
     try:
-        # Skip init_db अगर pool ready नहीं
         if not pool:
             print("⚠️ Skipping init_db - no pool")
             return
-
         conn, cur = get_db()
-        # ... बाकी same code ...
-
-        close_db(conn)  # ✅ Fixed
-    except Exception as e:
-        print(f"Init DB error: {e}")
-        # Routes
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY,
@@ -248,11 +241,12 @@ function bookSeat(seatId, fs, ts, d, sid){
 @app.route("/")
 @safe_db
 def home():
-    init_db()
+    if pool:  # ✅ Pool ready check
+        init_db()
     return render_template_string(BASE_HTML, content="""
-    <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
-    <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
-    """)
+        <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
+        <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
+        """)
 
 @app.route("/buses/<int:rid>")
 @safe_db
@@ -442,4 +436,5 @@ def book():
 # ================= RUN =================
 if __name__=="__main__":
     print("🚀 Bus App Starting on Render...")
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    # socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))  # ❌ DISABLED
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
