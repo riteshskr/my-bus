@@ -132,10 +132,13 @@ BASE_HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bus Booking India</title>
+
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 <style>
 .seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold}
 .bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
@@ -144,20 +147,39 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 .card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
 </style>
 </head>
+
 <body class="text-white">
 <div class="container py-5">
+
 <h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
+
 {{content|safe}}
+
 <div class="text-center mt-4">
 <a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
 <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
 </div>
+
 </div>
+
 <script>
 var socket = io();
-socket.on("seat_update", function(data){
 
-    // अगर ये दूसरी bus / दूसरी date की booking है तो ignore
+/* 🚌 Live Bus GPS */
+socket.on("bus_location", d => {
+    if(window.map && d.lat){
+        if(!window.busMarker){
+            window.busMarker = L.marker([d.lat,d.lng],{
+                icon:L.divIcon({className:'custom-div-icon',html:'🚌',iconSize:[40,40]})
+            }).addTo(window.map).bindPopup("Live Bus");
+        }else{
+            window.busMarker.setLatLng([d.lat,d.lng]);
+        }
+    }
+});
+
+/* 🔴 Realtime Seat Sync */
+socket.on("seat_update", function(data){
     if(window.currentSid != data.sid || window.currentDate != data.date){
         return;
     }
@@ -170,27 +192,19 @@ socket.on("seat_update", function(data){
         btn.innerText = data.seat;
     }
 });
-</script>
-socket.on("bus_location", d => {
-    if(window.map && d.lat){
-        if(!window.busMarker){
-            window.busMarker = L.marker([d.lat,d.lng],{
-                icon:L.divIcon({className:'custom-div-icon',html:'🚌',iconSize:[40,40]})
-            }).addTo(window.map).bindPopup("Live Bus");
-        }else{
-            window.busMarker.setLatLng([d.lat,d.lng]);
-        }
-    }
-});
+
+/* 🪑 Seat Booking */
 function bookSeat(seatId, fs, ts, d, sid){
-    let name = prompt("Enter Name:"), mobile = prompt("Enter Mobile:");
+    let name = prompt("Enter Name:");
+    let mobile = prompt("Enter Mobile:");
+
     if(!name || !mobile) return;
 
     fetch("/book", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-            sid: sid,       // schedule id add किया
+            sid: sid,
             seat: seatId,
             name: name,
             mobile: mobile,
@@ -202,13 +216,14 @@ function bookSeat(seatId, fs, ts, d, sid){
     .then(r => r.json())
     .then(r => {
         alert(r.msg);
-        if(r.ok) location.reload();
     });
 }
 </script>
+
 </body>
 </html>
 """
+
 
 # ================= ROUTES =================
 
