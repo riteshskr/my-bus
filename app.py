@@ -155,6 +155,22 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 </div>
 <script>
 var socket = io();
+socket.on("seat_update", function(data){
+
+    // अगर ये दूसरी bus / दूसरी date की booking है तो ignore
+    if(window.currentSid != data.sid || window.currentDate != data.date){
+        return;
+    }
+
+    let btn = document.getElementById("seat-" + data.seat);
+    if(btn){
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-danger");
+        btn.disabled = true;
+        btn.innerText = data.seat;
+    }
+});
+</script>
 socket.on("bus_location", d => {
     if(window.map && d.lat){
         if(!window.busMarker){
@@ -268,49 +284,76 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    date = request.args.get("date")
-    fs = request.args.get("from")
-    ts = request.args.get("to")
+    fs = request.args.get("fs","Jaipur")
+    ts = request.args.get("ts","Delhi")
+    d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
-    # total seats
-    cur.execute("SELECT total_seats FROM schedules WHERE id=%s",(sid,))
-    total = cur.fetchone()["total_seats"]
-
-    # stations order
     cur.execute("""
-        SELECT station_name, station_order 
-        FROM route_stations 
-        WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s)
-    """,(sid,))
-    stations = cur.fetchall()
+        SELECT seat_number 
+        FROM seat_bookings 
+        WHERE schedule_id=%s 
+        AND travel_date=%s 
+        AND status='confirmed'
+    """,(sid,d))
 
-    # Busy seats (segment based)
-    cur.execute("""
-    SELECT sb.seat_number
-    FROM seat_bookings sb
-    JOIN route_stations f ON f.station_name = sb.from_station
-    JOIN route_stations t ON t.station_name = sb.to_station
-    JOIN route_stations nf ON nf.station_name = %s
-    JOIN route_stations nt ON nt.station_name = %s
-    WHERE sb.schedule_id=%s 
-    AND sb.travel_date=%s
-    AND (nf.station_order < t.station_order AND nt.station_order > f.station_order)
-    """,(fs,ts,sid,date))
+    booked = [r["seat_number"] for r in cur.fetchall()]
+    close_db(conn)
 
-    busy = [r["seat_number"] for r in cur.fetchall()]
+    seat_buttons = ""
+    for i in range(1,41):
+        if i in booked:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>
+                {i}
+            </button>
+            '''
+        else:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-success seat"
+            onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
+                {i}
+            </button>
+            '''
 
-    conn.close()
+    html = f"""
+    <div class="text-center">
+        <h4>{fs} → {ts} | {d}</h4>
 
-    seats = []
-    for i in range(1, total+1):
-        seats.append({
-            "seat": i,
-            "available": i not in busy
-        })
+        <!-- Map -->
+        <div id="map"></div>
 
-    return jsonify(seats)
+        <!-- Seats -->
+        <div class="bus-row mt-3">
+            {seat_buttons}
+        </div>
+    </div>
+
+    <script>
+    // current page info for realtime matching
+    window.currentSid = {sid};
+    window.currentDate = "{d}";
+
+    // Leaflet map
+    window.map = L.map('map').setView([26.9124, 75.7873], 7);
+
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18
+    }}).addTo(map);
+
+    window.busMarker = L.marker([26.9124,75.7873], {{
+        icon: L.divIcon({{
+            className:'custom-div-icon',
+            html:'🚌',
+            iconSize:[40,40]
+        }})
+    }}).addTo(map);
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=html)
+
 
 #========= driver=========
 @app.route("/driver/<int:sid>")
@@ -403,6 +446,12 @@ def book():
     ))
 
     conn.commit()
+    socketio.emit("seat_update", {
+        "sid": data.get("sid"),
+        "seat": data.get("seat"),
+        "date": data.get("date")
+    })
+
     conn.close()
 
     return jsonify({"ok":True,"msg":"✅ Seat booked successfully"})
