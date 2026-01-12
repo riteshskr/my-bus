@@ -39,13 +39,13 @@ if DATABASE_URL:
         from psycopg_pool import ConnectionPool
         pool = ConnectionPool(
             conninfo=DATABASE_URL,
-            min_size=0,
-            max_size=1,
-            timeout=10.0,
-            max_waiting=1,
+            min_size=4,  # ↑ बढ़ाएं
+            max_size=10,  # ↑ मुख्य समस्या यहाँ!
+            max_waiting=10,  # ↑ बढ़ाएं
+            timeout=20.0,  # ↑ समय बढ़ाएं
             max_idle=600,
             reconnect_timeout=300,
-            open=True  # ← ये जरूरी!
+            open=True
         )
         print("✅ ConnectionPool ready!")
     except Exception as e:
@@ -76,12 +76,12 @@ def init_db():
         return
     try:
         conn, cur = get_db()
-
-            # Pool open check + wait
-        if pool.status == psycopg_pool.Status.CLOSED:
-                pool.open()
-
-        conn, cur = get_db()
+        # गलत if-block हटाएं
+        cur.execute("CREATE TABLE IF NOT EXISTS routes ...")  # बाकी कोड
+        conn.commit()
+        close_db(conn)
+    except Exception as e:
+        print(f"Init DB error: {e}")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY,
@@ -163,11 +163,12 @@ def safe_db(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
+            if pool.status == psycopg_pool.Status.CLOSED:
+                pool.open()
             return func(*args, **kwargs)
         except Exception as e:
-            return render_template_string(
-                BASE_HTML,
-                content=f'<div class="alert alert-danger text-center">❌ Server Error: {e}</div>'
+            return render_template_string(BASE_HTML,
+                content=f'<div class="alert alert-danger">❌ DB Error: {str(e)}</div>'
             )
     return wrapper
 #======== gps =========
