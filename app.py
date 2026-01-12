@@ -59,9 +59,13 @@ else:
 def get_db():
     if not pool:
         raise Exception("No database pool available")
-    conn = pool.getconn()
-    cur = conn.cursor(row_factory=dict_row)
-    return conn, cur
+    try:
+        conn = pool.getconn()
+        cur = conn.cursor(row_factory=dict_row)
+        return conn, cur
+    except Exception as e:
+        print(f"❌ Pool getconn error: {e}")
+        raise
 
 def close_db(conn):
     if conn:
@@ -127,11 +131,10 @@ def init_db():
 def safe_db(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
-        conn = None
         try:
-            if not pool or pool.status == psycopg_pool.Status.CLOSED:
-                print("🔄 Reopening pool...")
-                pool.open()
+            # ❌ pool.status हटाया - psycopg_pool में यह नहीं है
+            if not pool:
+                raise Exception("No database pool available")
             return func(*args, **kwargs)
         except Exception as e:
             print(f"❌ DB Error: {e}")
