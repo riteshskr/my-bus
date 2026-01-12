@@ -36,36 +36,42 @@ pool = None
 
 if DATABASE_URL:
     try:
-        from psycopg_pool import ConnectionPool
+        # Render SSL fix
+        conninfo = f"{DATABASE_URL}?sslmode=require&target_session_attrs=read-write"
+
         pool = ConnectionPool(
-            conninfo=DATABASE_URL,
-            min_size=4,  # ↑ बढ़ाएं
-            max_size=10,  # ↑ मुख्य समस्या यहाँ!
-            max_waiting=10,  # ↑ बढ़ाएं
-            timeout=20.0,  # ↑ समय बढ़ाएं
-            max_idle=600,
-            reconnect_timeout=300,
+            conninfo=conninfo,
+            min_size=2,  # ↓ Free tier के लिए कम
+            max_size=8,  # ↓ Conservative
+            max_waiting=5,
+            timeout=15.0,
+            max_idle=180,  # ↓ 3 मिनट - stale fix
+            reconnect_timeout=30,
             open=True
         )
-        print("✅ ConnectionPool ready!")
+        print("✅ SSL ConnectionPool ready!")
     except Exception as e:
         print(f"❌ Pool error: {e}")
         pool = None
-else:
-    print("❌ DATABASE_URL missing!")
 
 
 # अब पुराना get_db function replace करें:
 def get_db():
     if not pool:
         raise Exception("No database pool available")
-    try:
-        conn = pool.getconn()
-        cur = conn.cursor(row_factory=dict_row)
-        return conn, cur
-    except Exception as e:
-        print(f"❌ Pool getconn error: {e}")
-        raise
+
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            conn = pool.getconn()
+            cur = conn.cursor(row_factory=dict_row)
+            return conn, cur
+        except Exception as e:
+            if "SSL" in str(e) and attempt < max_retries - 1:
+                print(f"⚠️ SSL retry {attempt + 1}/{max_retries}")
+                continue
+            raise e
+
 
 def close_db(conn):
     if conn:
