@@ -74,101 +74,69 @@ def init_db():
     if not pool:
         print("⚠️ Skipping DB init - no pool")
         return
+    conn = None
     try:
         conn, cur = get_db()
-        # गलत if-block हटाएं
-        cur.execute("CREATE TABLE IF NOT EXISTS routes ...")  # बाकी कोड
-        conn.commit()
-        close_db(conn)
-    except Exception as e:
-        print(f"Init DB error: {e}")
+
+        # Tables CREATE
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
-            id SERIAL PRIMARY KEY,
-            route_name VARCHAR(100),
-            distance_km INT
-        )
-        """)
-        # Schedules
+            id SERIAL PRIMARY KEY, route_name VARCHAR(100), distance_km INT
+        )""")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS schedules (
-            id SERIAL PRIMARY KEY,
-            route_id INT,
-            bus_name VARCHAR(100),
-            departure_time TIME,
-            current_lat double precision,
-            current_lng double precision,
-            created_at timestamp DEFAULT NOW(),
-            updated_at timestamp DEFAULT NOW(),
-            seating_rate double precision,
-            single_sleeper_rate double precision,
-            double_sleeper_rate double precision,
+            id SERIAL PRIMARY KEY, route_id INT, bus_name VARCHAR(100),
+            departure_time TIME, current_lat double precision, current_lng double precision,
+            created_at timestamp DEFAULT NOW(), seating_rate double precision,
             total_seats INT DEFAULT 40
-        )
-        """)
-        # Seat Bookings
+        )""")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS seat_bookings (
-            id SERIAL PRIMARY KEY,
-            schedule_id INT,
-            seat_number INT,
-            passenger_name VARCHAR(100),
-            mobile VARCHAR(15),
-            from_station VARCHAR(50),
-            to_station VARCHAR(50),
-            travel_date DATE,
-            status VARCHAR(20) DEFAULT 'confirmed',
-            fare INT,
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-        """)
-        # Route Stations
+            id SERIAL PRIMARY KEY, schedule_id INT, seat_number INT,
+            passenger_name VARCHAR(100), mobile VARCHAR(15), from_station VARCHAR(50),
+            to_station VARCHAR(50), travel_date DATE, status VARCHAR(20) DEFAULT 'confirmed',
+            fare INT, created_at TIMESTAMP DEFAULT NOW()
+        )""")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS route_stations (
-            id SERIAL PRIMARY KEY,
-            route_id INT,
-            station_name VARCHAR(50),
-            station_order INT
-        )
-        """)
+            id SERIAL PRIMARY KEY, route_id INT, station_name VARCHAR(50), station_order INT
+        )""")
         conn.commit()
 
-        # ✅ Add sample route + buses if missing
+        # Sample data
         cur.execute("SELECT COUNT(*) AS count FROM schedules WHERE route_id=1")
         if cur.fetchone()['count'] == 0:
-            # Route
-            cur.execute("INSERT INTO routes (id, route_name, distance_km) VALUES (1,'Jaipur-Delhi',280) ON CONFLICT DO NOTHING")
-            # Buses
-            buses = [
-                (1,'Volvo AC Sleeper','08:00:00'),
-                (2,'Semi Sleeper AC','10:30:00'),
-                (3,'Volvo AC Seater','14:00:00')
-            ]
-            for bus_id, bus_name, t in buses:
-                cur.execute("""
-                INSERT INTO schedules (id, route_id, bus_name, departure_time) 
-                VALUES (%s,1,%s,%s) ON CONFLICT DO NOTHING
-                """,(bus_id,bus_name,t))
-            # Stations
-            stations = [('Jaipur',1),('Ajmer',2),('Pushkar',3),('Kishangarh',4),('Delhi',5)]
-            for st, order in stations:
-                cur.execute("INSERT INTO route_stations (route_id, station_name, station_order) VALUES (1,%s,%s) ON CONFLICT DO NOTHING",(st,order))
+            cur.execute(
+                "INSERT INTO routes (id, route_name, distance_km) VALUES (1,'Jaipur-Delhi',280) ON CONFLICT DO NOTHING")
+            cur.execute(
+                "INSERT INTO schedules (id, route_id, bus_name, departure_time) VALUES (1,1,'Volvo AC Sleeper','08:00:00') ON CONFLICT DO NOTHING")
+            cur.execute(
+                "INSERT INTO schedules (id, route_id, bus_name, departure_time) VALUES (2,1,'Semi Sleeper AC','10:30:00') ON CONFLICT DO NOTHING")
+            cur.execute(
+                "INSERT INTO route_stations (route_id, station_name, station_order) VALUES (1,'Jaipur',1),(1,'Delhi',2) ON CONFLICT DO NOTHING")
             conn.commit()
-        close_db(conn)
+        print("✅ DB Init Complete!")
+
     except Exception as e:
-        print(f"Init DB error: {e}")
+        print(f"❌ Init DB error: {e}")
+    finally:
+        if conn:
+            close_db(conn)
 
 # ================= SAFE DB DECORATOR =================
 def safe_db(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
+        conn = None
         try:
-            if pool.status == psycopg_pool.Status.CLOSED:
+            if not pool or pool.status == psycopg_pool.Status.CLOSED:
+                print("🔄 Reopening pool...")
                 pool.open()
             return func(*args, **kwargs)
         except Exception as e:
+            print(f"❌ DB Error: {e}")
             return render_template_string(BASE_HTML,
-                content=f'<div class="alert alert-danger">❌ DB Error: {str(e)}</div>'
+                content=f'<div class="alert alert-danger text-center">❌ डेटाबेस त्रुटि: {str(e)}</div>'
             )
     return wrapper
 #======== gps =========
@@ -431,21 +399,36 @@ def driver(sid):
 @safe_db
 def book():
     data = request.get_json() or {}
-    seat = data.get("seat")
-    name = data.get("name")
-    mobile = data.get("mobile")
-    from_st = data.get("from_station")
-    to_st = data.get("to_station")
-    travel_date = data.get("date")
-    fare = random.randint(250,450)
-    conn, cur = get_db()
-    cur.execute("""
-        INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, from_station, to_station, travel_date, fare)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (data.get("sid"), seat, name, mobile, from_st, to_st, travel_date, fare))
-    conn.commit()
-    close_db(conn)
-    return jsonify(ok=True,msg=f"✅ Seat {seat} Booked! Fare ₹{fare}")
+    conn = None
+    try:
+        conn, cur = get_db()
+        fare = random.randint(250, 450)
+
+        # ✅ JS keys के exact names use करें
+        cur.execute("""
+            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
+                                     from_station, to_station, travel_date, fare)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            data.get("sid"),  # JS: "sid"
+            data.get("seat"),  # JS: "seat"
+            data.get("name"),  # JS: "name"
+            data.get("mobile"),  # JS: "mobile"
+            data.get("from"),  # JS: "from" ← fs का value
+            data.get("to"),  # JS: "to"   ← ts का value
+            data.get("date"),  # JS: "date"
+            fare
+        ))
+        conn.commit()
+        close_db(conn)
+        return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} बुक! Fare ₹{fare}"})
+
+    except Exception as e:
+        if conn:
+            close_db(conn)
+        print(f"❌ Booking error: {e}")
+        return jsonify({"ok": False, "msg": f"❌ बुकिंग त्रुटि: {str(e)}"}), 500
+
 
 # ================= RUN =================
 if __name__=="__main__":
