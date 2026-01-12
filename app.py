@@ -2,13 +2,12 @@ import os
 import random
 from datetime import date
 from functools import wraps
-import psycopg_pool
 from flask import Flask, render_template_string, request, redirect, jsonify
 from flask_socketio import SocketIO
 from psycopg import connect, rows
 from flask_compress import Compress
-from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+db_initialized = False
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
@@ -32,25 +31,6 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
     "sslmode": "require"
 }"""
 DATABASE_URL = os.getenv("DATABASE_URL")
-pool = None
-
-if DATABASE_URL:
-    try:
-        pool = ConnectionPool(
-            conninfo=DATABASE_URL,
-            min_size=0,      # ← 0 रखें startup पर
-            max_size=4,      # ← Free tier के लिए safe
-            max_waiting=2,   # ← कम
-            timeout=10.0,    # ← कम timeout
-            max_idle=120,    # ← 2 मिनट
-            reconnect_timeout=10,
-            open=False       # ← Manual open करें
-        )
-        print("✅ Minimal ConnectionPool ready!")
-    except Exception as e:
-        print(f"❌ Pool error: {e}")
-        pool = None
-
 
 # अब पुराना get_db function replace करें:
 
@@ -219,12 +199,15 @@ function bookSeat(seatId, fs, ts, d, sid){
 @app.route("/")
 @safe_db
 def home():
-    if pool:  # ✅ Pool ready check
+    global db_initialized
+    if not db_initialized:
         init_db()
+        db_initialized = True
+
     return render_template_string(BASE_HTML, content="""
         <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
         <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
-        """)
+    """)
 
 @app.route("/buses/<int:rid>")
 @safe_db
@@ -285,59 +268,49 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs","Jaipur")
-    ts = request.args.get("ts","Delhi")
-    d = request.args.get("d", date.today().isoformat())
+    date = request.args.get("date")
+    fs = request.args.get("from")
+    ts = request.args.get("to")
 
     conn, cur = get_db()
+
+    # total seats
+    cur.execute("SELECT total_seats FROM schedules WHERE id=%s",(sid,))
+    total = cur.fetchone()["total_seats"]
+
+    # stations order
     cur.execute("""
-        SELECT seat_number 
-        FROM seat_bookings 
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """,(sid,d))
-    booked = [r["seat_number"] for r in cur.fetchall()]
-    close_db(conn)
+        SELECT station_name, station_order 
+        FROM route_stations 
+        WHERE route_id=(SELECT route_id FROM schedules WHERE id=%s)
+    """,(sid,))
+    stations = cur.fetchall()
 
-    seat_buttons = ""
-    for i in range(1,41):
-        if i in booked:
-            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
-        else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
+    # Busy seats (segment based)
+    cur.execute("""
+    SELECT sb.seat_number
+    FROM seat_bookings sb
+    JOIN route_stations f ON f.station_name = sb.from_station
+    JOIN route_stations t ON t.station_name = sb.to_station
+    JOIN route_stations nf ON nf.station_name = %s
+    JOIN route_stations nt ON nt.station_name = %s
+    WHERE sb.schedule_id=%s 
+    AND sb.travel_date=%s
+    AND (nf.station_order < t.station_order AND nt.station_order > f.station_order)
+    """,(fs,ts,sid,date))
 
-    html = f"""
-    <div class="text-center">
-        <h4>{fs} → {ts} | {d}</h4>
+    busy = [r["seat_number"] for r in cur.fetchall()]
 
-        <!-- 🗺 LIVE MAP -->
-        <div id="map"></div>
+    conn.close()
 
-        <!-- 🪑 SEATS -->
-        <div class="bus-row mt-3">
-            {seat_buttons}
-        </div>
-    </div>
+    seats = []
+    for i in range(1, total+1):
+        seats.append({
+            "seat": i,
+            "available": i not in busy
+        })
 
-    <script>
-    // Default Jaipur Location
-   window.map = L.map('map').setView([26.9124, 75.7873], 7);
-
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 18
-    }}).addTo(map);
-
-    // 🚌 Bus Marker
-    window.busMarker = L.marker([26.9124,75.7873], {{
-        icon: L.divIcon({{
-            className:'custom-div-icon',
-            html:'🚌',
-            iconSize:[40,40]
-        }})
-    }}).addTo(map).bindPopup("Live Bus Location");
-    </script>
-    """
-
-    return render_template_string(BASE_HTML, content=html)
+    return jsonify(seats)
 
 #========= driver=========
 @app.route("/driver/<int:sid>")
@@ -394,36 +367,46 @@ def driver(sid):
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
-    data = request.get_json() or {}
-    conn = None
-    try:
-        conn, cur = get_db()
-        fare = random.randint(250, 450)
+    data = request.json
+    conn, cur = get_db()
 
-        # ✅ JS keys के exact names use करें
-        cur.execute("""
-            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
-                                     from_station, to_station, travel_date, fare)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            data.get("sid"),  # JS: "sid"
-            data.get("seat"),  # JS: "seat"
-            data.get("name"),  # JS: "name"
-            data.get("mobile"),  # JS: "mobile"
-            data.get("from"),  # JS: "from" ← fs का value
-            data.get("to"),  # JS: "to"   ← ts का value
-            data.get("date"),  # JS: "date"
-            fare
-        ))
-        conn.commit()
-        close_db(conn)
-        return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} बुक! Fare ₹{fare}"})
+    # Overlap check
+    cur.execute("""
+    SELECT 1
+    FROM seat_bookings sb
+    JOIN route_stations f ON f.station_name = sb.from_station
+    JOIN route_stations t ON t.station_name = sb.to_station
+    JOIN route_stations nf ON nf.station_name = %s
+    JOIN route_stations nt ON nt.station_name = %s
+    WHERE sb.schedule_id=%s 
+    AND sb.travel_date=%s
+    AND sb.seat_number=%s
+    AND (nf.station_order < t.station_order AND nt.station_order > f.station_order)
+    """, (
+        data["from"], data["to"],
+        data["sid"], data["date"], data["seat"]
+    ))
 
-    except Exception as e:
-        if conn:
-            close_db(conn)
-        print(f"❌ Booking error: {e}")
-        return jsonify({"ok": False, "msg": f"❌ बुकिंग त्रुटि: {str(e)}"}), 500
+    if cur.fetchone():
+        conn.close()
+        return jsonify({"ok":False,"msg":"❌ यह सीट इस route हिस्से में पहले से booked है"})
+
+    # Insert booking
+    cur.execute("""
+    INSERT INTO seat_bookings 
+    (schedule_id, travel_date, seat_number, passenger, mobile, from_station, to_station, status)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,'confirmed')
+    """,(
+        data["sid"], data["date"], data["seat"],
+        data["name"], data["mobile"],
+        data["from"], data["to"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({"ok":True,"msg":"✅ Seat booked successfully"})
+
 
 
 # ================= RUN =================
