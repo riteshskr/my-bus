@@ -40,13 +40,10 @@ if DATABASE_URL:
         conninfo = f"{DATABASE_URL}?sslmode=require&target_session_attrs=read-write"
 
         pool = ConnectionPool(
-            conninfo=conninfo,
-            min_size=2,  # ↓ Free tier के लिए कम
-            max_size=8,  # ↓ Conservative
-            max_waiting=5,
+            conninfo=DATABASE_URL,  # Render पहले से SSL handle करता है
+            min_size=2,
+            max_size=8,
             timeout=15.0,
-            max_idle=180,  # ↓ 3 मिनट - stale fix
-            reconnect_timeout=30,
             open=True
         )
         print("✅ SSL ConnectionPool ready!")
