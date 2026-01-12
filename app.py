@@ -30,11 +30,13 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
     "password": os.getenv("DB_PASSWORD","49Tv97dLOzE8yd0WlYyns49KnyB646py"),
     "port": int(os.getenv("DB_PORT", 5432)),
     "sslmode": "require"
-}"""DATABASE_URL = os.getenv("DATABASE_URL")
+}"""
+DATABASE_URL = os.getenv("DATABASE_URL")
 pool = None
 
 if DATABASE_URL:
     try:
+        from psycopg_pool import ConnectionPool
         pool = ConnectionPool(
             conninfo=DATABASE_URL,
             min_size=0,
@@ -43,16 +45,15 @@ if DATABASE_URL:
             max_waiting=1,
             max_idle=600,
             reconnect_timeout=300,
-            open=True  # ← ये बदलें! False → True
+            open=True  # ← ये जरूरी!
         )
-        pool.open()  # ← ये add करें!
-        print("✅ ConnectionPool opened successfully!")
+        print("✅ ConnectionPool ready!")
     except Exception as e:
-        print(f"❌ Pool init failed: {e}")
+        print(f"❌ Pool error: {e}")
         pool = None
 else:
     print("❌ DATABASE_URL missing!")
-    pool = None
+
 
 # अब पुराना get_db function replace करें:
 def get_db():
@@ -70,17 +71,17 @@ def close_db(conn):
 # ================= INIT DB =================
 
 def init_db():
-    def init_db():
-        try:
-            if not pool:
-                print("⚠️ No pool available")
-                return
+    if not pool:
+        print("⚠️ Skipping DB init - no pool")
+        return
+    try:
+        conn, cur = get_db()
 
             # Pool open check + wait
-            if pool.status == psycopg_pool.Status.CLOSED:
+        if pool.status == psycopg_pool.Status.CLOSED:
                 pool.open()
 
-            conn, cur = get_db()
+        conn, cur = get_db()
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY,
