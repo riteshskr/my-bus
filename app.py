@@ -30,20 +30,26 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
     "password": os.getenv("DB_PASSWORD","49Tv97dLOzE8yd0WlYyns49KnyB646py"),
     "port": int(os.getenv("DB_PORT", 5432)),
     "sslmode": "require"
-}"""
-DATABASE_URL = os.getenv("DATABASE_URL")
+}"""DATABASE_URL = os.getenv("DATABASE_URL")
+pool = None
+
 if DATABASE_URL:
-    pool = ConnectionPool(
-        conninfo=DATABASE_URL,
-        min_size=0,           # ❌ 2 → 0 (no pre-connections)
-        max_size=1,           # ❌ 10 → 1 (Render free tier limit)
-        timeout=10.0,         # ❌ 5 → 10 sec
-        max_waiting=1,        # ❌ 5 → 1
-        max_idle=600,         # 10 minutes idle
-        reconnect_timeout=300,
-        open=False            # Lazy connection
-    )
-    print("✅ ConnectionPool initialized (SAFE MODE)")
+    try:
+        pool = ConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=0,
+            max_size=1,
+            timeout=10.0,
+            max_waiting=1,
+            max_idle=600,
+            reconnect_timeout=300,
+            open=True  # ← ये बदलें! False → True
+        )
+        pool.open()  # ← ये add करें!
+        print("✅ ConnectionPool opened successfully!")
+    except Exception as e:
+        print(f"❌ Pool init failed: {e}")
+        pool = None
 else:
     print("❌ DATABASE_URL missing!")
     pool = None
@@ -64,11 +70,17 @@ def close_db(conn):
 # ================= INIT DB =================
 
 def init_db():
-    try:
-        if not pool:
-            print("⚠️ Skipping init_db - no pool")
-            return
-        conn, cur = get_db()
+    def init_db():
+        try:
+            if not pool:
+                print("⚠️ No pool available")
+                return
+
+            # Pool open check + wait
+            if pool.status == psycopg_pool.Status.CLOSED:
+                pool.open()
+
+            conn, cur = get_db()
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY,
