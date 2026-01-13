@@ -230,42 +230,54 @@ function bookSeat(seatId, fs, ts, d, sid){
 """
 # ================= ROUTES =================
 @app.route("/")
+@safe_db
 def home():
     try:
         conn, cur = get_db()
-        cur.execute("SELECT COUNT(*) FROM routes")
-        total = cur.fetchone()["count"]
+
+        # ✅ Fetch all routes from DB
+        cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
+        routes = cur.fetchall()
         close_db(conn)
 
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
-            <div class="alert alert-success text-center">
-                ✅ System Active — {total} Routes Loaded
-            </div>
-            <a href="/buses/1" class="btn btn-success btn-lg">
-                Book Jaipur → Delhi
-            </a>
-            """
-        )
+        if not routes:
+            content = '<div class="alert alert-warning text-center">No routes available</div>'
+        else:
+            content = '<div class="text-center mb-4"><h4>Available Routes</h4></div>'
+            for route in routes:
+                content += f'''
+                <div class="card bg-info mb-3">
+                    <div class="card-body">
+                        <h6>{route["route_name"]} — {route["distance_km"]} km</h6>
+                        <a href="/buses/{route["id"]}" class="btn btn-success w-100">Book Seats</a>
+                    </div>
+                </div>
+                '''
+
+        return render_template_string(BASE_HTML, content=content)
 
     except Exception as e:
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
+        return render_template_string(BASE_HTML, content=f'''
             <div class="alert alert-danger text-center">
                 ❌ Database Error: {str(e)}
             </div>
-            """
-        )
+        ''')
+
 
 @app.route("/buses/<int:rid>")
 @safe_db
 def buses(rid):
     conn, cur = get_db()
-    cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s ORDER BY departure_time",(rid,))
+    # Fetch all schedules for this route
+    cur.execute("""
+        SELECT id, bus_name, departure_time 
+        FROM schedules 
+        WHERE route_id=%s 
+        ORDER BY departure_time
+    """, (rid,))
     buses_data = cur.fetchall()
     close_db(conn)
+
     html = '<div class="alert alert-info text-center">No Buses for this route</div>'
     if buses_data:
         html = '<div class="text-center mb-4"><h4>Available Buses</h4></div>'
@@ -280,6 +292,7 @@ def buses(rid):
             </div>
             '''
     return render_template_string(BASE_HTML, content=html)
+
 
 @app.route("/select/<int:sid>", methods=["GET","POST"])
 @safe_db
