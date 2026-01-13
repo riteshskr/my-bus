@@ -590,7 +590,7 @@ def book():
         # Socket emit AFTER commit
         socketio.emit("seat_update", {
             "sid": data["sid"], "seat": data["seat"], "date": data["date"]
-        }, broadcast=True)
+        })
 
         close_db(conn)
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक हो गई!"})
