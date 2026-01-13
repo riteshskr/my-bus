@@ -235,10 +235,23 @@ def home():
         init_db()
         db_initialized = True
 
+    # सभी routes show करें
+    conn, cur = get_db()
+    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
+    routes = cur.fetchall()
+    close_db(conn)
+
+    routes_html = ""
+    for r in routes:
+        routes_html += f'''
+        <a href="/buses/{r["id"]}" class="btn btn-success btn-lg mb-2 d-block">
+            Book {r["route_name"]}
+        </a>
+        '''
+
     return render_template_string(BASE_HTML, content="""
-        <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
-        <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
-    """)
+        <div class="alert alert-success text-center">✅ सभी Routes Active!</div>
+        """ + routes_html)
 
 @app.route("/buses/<int:rid>")
 @safe_db
@@ -314,6 +327,17 @@ def seats(sid):
     """,(sid,d))
 
     booked = [r["seat_number"] for r in cur.fetchall()]
+    cur.execute("""
+    SELECT rs.lat, rs.lng
+    FROM route_stations rs
+    JOIN schedules s ON s.route_id = rs.route_id
+    WHERE s.id = %s
+    ORDER BY rs.station_order
+    """, (sid,))
+
+    route_points = [[r["lat"], r["lng"]] for r in cur.fetchall()]
+    import json
+    route_js = json.dumps(route_points)
     close_db(conn)
 
     seat_buttons = ""
@@ -333,6 +357,7 @@ def seats(sid):
             '''
 
     html = f"""
+    
     <div class="text-center">
         <h4>{fs} → {ts} | {d}</h4>
 
@@ -367,7 +392,7 @@ def seats(sid):
     </script>
     """
 
-    return render_template_string(BASE_HTML, content=html)
+    return render_template_string(BASE_HTML, content=html, route_js=route_js)
 
 
 #========= driver=========
@@ -476,7 +501,7 @@ def book():
 
 
 # ================= RUN =================
-if __name__=="__main__":
+if __name__ == "__main__":
     print("🚀 Bus App Starting on Render...")
-     socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     #app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
