@@ -22,9 +22,16 @@ if not DATABASE_URL:
 pool = ConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
-    max_size=3,
-    timeout=30,
-    max_idle=120
+    max_size=5,
+    timeout=60,
+    max_idle=30,
+    kwargs={
+        "sslmode": "require",
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5
+    }
 )
 
 print("✅ Connection pool ready")
@@ -129,6 +136,8 @@ init_db()
 # ================= HELPERS =================
 def get_db():
     conn = pool.getconn()
+    if conn.closed:
+        conn = pool.getconn()
     cur = conn.cursor(row_factory=dict_row)
     return conn, cur
 
@@ -224,13 +233,33 @@ function bookSeat(seatId, fs, ts, d, sid){
 # ================= ROUTES =================
 @app.route("/")
 def home():
-    if pool:  # ✅ Pool ready check
-        init_db()
-    return render_template_string(BASE_HTML, content="""
-        <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
-        <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
-        """)
-    return "✅ Bus Booking App Running"
+    try:
+        conn, cur = get_db()
+        cur.execute("SELECT COUNT(*) FROM routes")
+        total = cur.fetchone()["count"]
+        close_db(conn)
+
+        return render_template_string(
+            BASE_HTML,
+            content=f"""
+            <div class="alert alert-success text-center">
+                ✅ System Active — {total} Routes Loaded
+            </div>
+            <a href="/buses/1" class="btn btn-success btn-lg">
+                Book Jaipur → Delhi
+            </a>
+            """
+        )
+
+    except Exception as e:
+        return render_template_string(
+            BASE_HTML,
+            content=f"""
+            <div class="alert alert-danger text-center">
+                ❌ Database Error: {str(e)}
+            </div>
+            """
+        )
 
 @app.route("/buses/<int:rid>")
 @safe_db
