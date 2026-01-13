@@ -496,7 +496,7 @@ def seats(sid):
     }}
     </script>
     """
-
+    return render_template_string(BASE_HTML, content=html)
 
 #========= driver=========
 @app.route("/driver/<int:sid>")
@@ -551,6 +551,7 @@ def driver(sid):
 
 #=======seat book ==========
 @app.route("/book", methods=["POST"])
+@safe_db
 def book():
     print("🔥 BOOK REQUEST RECEIVED!")  # Debug log
 
@@ -605,5 +606,5 @@ def book():
 # ================= RUN =================
 if __name__ == "__main__":
     print("🚀 Bus App Starting on Render...")
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-    #app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
+    #socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
