@@ -28,7 +28,6 @@ pool = ConnectionPool(
     kwargs={
         "sslmode": "require",
         "connect_timeout": 10,
-        "statement_timeout": 30000,
         "keepalives": 1,
         "keepalives_idle": 60,  # ↑ बढ़ाओ
         "keepalives_interval": 30,
