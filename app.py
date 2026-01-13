@@ -22,15 +22,17 @@ if not DATABASE_URL:
 pool = ConnectionPool(
     conninfo=DATABASE_URL,
     min_size=1,
-    max_size=5,
-    timeout=60,
-    max_idle=30,
+    max_size=3,
+    timeout=20,
+    max_idle=10,
     kwargs={
         "sslmode": "require",
+        "connect_timeout": 10,
+        "statement_timeout": 30000,
         "keepalives": 1,
-        "keepalives_idle": 30,
-        "keepalives_interval": 10,
-        "keepalives_count": 5
+        "keepalives_idle": 60,  # ↑ बढ़ाओ
+        "keepalives_interval": 30,
+        "keepalives_count": 3
     }
 )
 
