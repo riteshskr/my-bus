@@ -98,7 +98,7 @@ def init_db():
         conn.commit()
 
         # Insert default data if not exists
-        cur.execute("SELECT COUNT(*) FROM routes WHERE id=1")
+        cur.execute("SELECT COUNT(*) FROM routes")
         if cur.fetchone()[0] == 0:
             cur.execute("""
             INSERT INTO routes (id, route_name, distance_km)
@@ -116,9 +116,7 @@ def init_db():
             INSERT INTO route_stations (route_id,station_name,station_order)
             VALUES 
             (1,'Jaipur',1),
-            (1,'Delhi',2)
-            ON CONFLICT (id) DO NOTHING
-            """)
+            (1,'Delhi',2)""")
             conn.commit()
 
         print("✅ DB Init Complete!")
