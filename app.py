@@ -2,12 +2,12 @@ import os
 import random
 from datetime import date
 from functools import wraps
+import psycopg_pool
 from flask import Flask, render_template_string, request, redirect, jsonify
 from flask_socketio import SocketIO
-from psycopg import connect, rows
 from flask_compress import Compress
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
-db_initialized = False
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
@@ -18,7 +18,7 @@ app.jinja_env.auto_reload = False
 def after_request(response):
     response.headers["Cache-Control"] = "public, max-age=3600"
     return response
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
 
 # ================= DB CONFIG =================
 
@@ -31,22 +31,41 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
     "sslmode": "require"
 }"""
 DATABASE_URL = os.getenv("DATABASE_URL")
+pool = None
+
+if DATABASE_URL:
+    try:
+        pool = ConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=0,      # ← 0 रखें startup पर
+            max_size=4,      # ← Free tier के लिए safe
+            max_waiting=2,   # ← कम
+            timeout=10.0,    # ← कम timeout
+            max_idle=120,    # ← 2 मिनट
+            reconnect_timeout=10,
+            open=False       # ← Manual open करें
+        )
+        pool.open()
+        print("✅ Minimal ConnectionPool ready!")
+    except Exception as e:
+        print(f"❌ Pool error: {e}")
+        pool = None
+
 
 # अब पुराना get_db function replace करें:
 
 def get_db():
-    """No pooling - direct connection for Render Free Tier"""
-    if not DATABASE_URL:
-        raise Exception("DATABASE_URL missing")
+    if not pool:
+        raise Exception("DB pool not ready")
 
-    conn = connect(DATABASE_URL)
+    conn = pool.getconn()
     cur = conn.cursor(row_factory=dict_row)
     return conn, cur
 
 
 def close_db(conn):
     if conn:
-        conn.close()
+        pool.putconn(conn)
 
 
 # ================= INIT DB =================
@@ -57,12 +76,8 @@ def init_db():
     conn = None
     try:
         conn, cur = get_db()
-        cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_seat_bookings_lookup 
-        ON seat_bookings(schedule_id, travel_date, seat_number)
-        """)
-        # Tables CREATE
 
+        # Tables CREATE
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY, route_name VARCHAR(100), distance_km INT
@@ -85,7 +100,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS route_stations (
             id SERIAL PRIMARY KEY, route_id INT, station_name VARCHAR(50), station_order INT
         )""")
-
         conn.commit()
 
         # Sample data
@@ -137,13 +151,10 @@ BASE_HTML = """
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bus Booking India</title>
-
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
 <style>
 .seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold}
 .bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
@@ -152,25 +163,17 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 .card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
 </style>
 </head>
-
 <body class="text-white">
 <div class="container py-5">
-
 <h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
-
 {{content|safe}}
-
 <div class="text-center mt-4">
 <a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
 <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
 </div>
-
 </div>
-
 <script>
 var socket = io();
-
-/* 🚌 Live Bus GPS */
 socket.on("bus_location", d => {
     if(window.map && d.lat){
         if(!window.busMarker){
@@ -182,34 +185,15 @@ socket.on("bus_location", d => {
         }
     }
 });
-
-/* 🔴 Realtime Seat Sync */
-socket.on("seat_update", function(data){
-    if(window.currentSid != data.sid || window.currentDate != data.date){
-        return;
-    }
-
-    let btn = document.getElementById("seat-" + data.seat);
-    if(btn){
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.disabled = true;
-        btn.innerText = data.seat;
-    }
-});
-
-/* 🪑 Seat Booking */
 function bookSeat(seatId, fs, ts, d, sid){
-    let name = prompt("Enter Name:");
-    let mobile = prompt("Enter Mobile:");
-
+    let name = prompt("Enter Name:"), mobile = prompt("Enter Mobile:");
     if(!name || !mobile) return;
 
     fetch("/book", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-            sid: sid,
+            sid: sid,       // schedule id add किया
             seat: seatId,
             name: name,
             mobile: mobile,
@@ -221,42 +205,25 @@ function bookSeat(seatId, fs, ts, d, sid){
     .then(r => r.json())
     .then(r => {
         alert(r.msg);
+        if(r.ok) location.reload();
     });
 }
 </script>
-
 </body>
 </html>
 """
-
 
 # ================= ROUTES =================
 
 @app.route("/")
 @safe_db
 def home():
-    global db_initialized
-    if not db_initialized:
+    if pool:  # ✅ Pool ready check
         init_db()
-        db_initialized = True
-
-    # सभी routes show करें
-    conn, cur = get_db()
-    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
-    routes = cur.fetchall()
-    close_db(conn)
-
-    routes_html = ""
-    for r in routes:
-        routes_html += f'''
-        <a href="/buses/{r["id"]}" class="btn btn-success btn-lg mb-2 d-block">
-            Book {r["route_name"]}
-        </a>
-        '''
-
     return render_template_string(BASE_HTML, content="""
-        <div class="alert alert-success text-center">✅ सभी Routes Active!</div>
-        """ + routes_html)
+        <div class="alert alert-success text-center">✅ System Active - Render DB Connected!</div>
+        <a href="/buses/1" class="btn btn-success btn-lg">Book Jaipur → Delhi</a>
+        """)
 
 @app.route("/buses/<int:rid>")
 @safe_db
@@ -314,188 +281,61 @@ def select(sid):
     """
     return render_template_string(BASE_HTML, content=form)
 
-
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
+    fs = request.args.get("fs","Jaipur")
+    ts = request.args.get("ts","Delhi")
     d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
-
-    # Booked seats
     cur.execute("""
         SELECT seat_number 
         FROM seat_bookings 
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """, (sid, d))
+    """,(sid,d))
     booked = [r["seat_number"] for r in cur.fetchall()]
-
-    # Route info
-    cur.execute("SELECT route_id, bus_name FROM schedules WHERE id=%s", (sid,))
-    route_info = cur.fetchone() or {}
-
     close_db(conn)
 
     seat_buttons = ""
-    for i in range(1, 41):
+    for i in range(1,41):
         if i in booked:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
-            '''
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
         else:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
-                {i}
-            </button>
-            '''
+            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
 
     html = f"""
-    <div class="row text-center">
-        <div class="col-md-12">
-            <h4 class="mb-4">🚌 {route_info.get('bus_name', 'Bus')} | {fs} → {ts}</h4>
-            <p class="text-muted">📅 {d} | 💺 {40 - len(booked)} seats available</p>
-        </div>
-    </div>
+    <div class="text-center">
+        <h4>{fs} → {ts} | {d}</h4>
 
-    <!-- Live GPS Map -->
-    <div class="card bg-dark mb-4">
-        <div class="card-body">
-            <div id="map" style="height:300px;border-radius:10px"></div>
-        </div>
-    </div>
+        <!-- 🗺 LIVE MAP -->
+        <div id="map"></div>
 
-    <!-- Seat Layout -->
-    <div class="card">
-        <div class="card-body p-3">
-            <h6 class="text-center mb-3">🪑 Seat Selection</h6>
-            <div class="bus-row justify-content-center">
-                {seat_buttons}
-            </div>
+        <!-- 🪑 SEATS -->
+        <div class="bus-row mt-3">
+            {seat_buttons}
         </div>
     </div>
 
     <script>
-    // 🔴 Current page context
-    window.currentSid = {sid};
-    window.currentDate = '{d}';
-    console.log('🎯 Seats page loaded:', window.currentSid, window.currentDate);
+    // Default Jaipur Location
+   window.map = L.map('map').setView([26.9124, 75.7873], 7);
 
-    // 🗺️ Initialize Map
-    window.map = L.map('map').setView([27.5, 75.0], 7);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 18, attribution: '© OpenStreetMap'
-    }}).addTo(window.map);
+        maxZoom: 18
+    }}).addTo(map);
 
-    window.busMarker = L.marker([27.39, 75.14], {{
+    // 🚌 Bus Marker
+    window.busMarker = L.marker([26.9124,75.7873], {{
         icon: L.divIcon({{
-            className: 'custom-div-icon text-primary',
-            html: '<div style=\\"font-size:30px\\">🚌</div>',
-            iconSize: [40,40], iconAnchor: [20,20]
+            className:'custom-div-icon',
+            html:'🚌',
+            iconSize:[40,40]
         }})
-    }}).addTo(window.map).bindPopup('Live Bus Location');
-
-    // 🚀 Real-time Socket Events
-    socket.on('connect', function() {{
-        console.log('✅ Socket Connected!');
-    }});
-
-    socket.on('bus_location', function(data) {{
-        console.log('📡 GPS Update:', data);
-        if(data.lat && data.lng && window.map) {{
-            if(window.busMarker) {{
-                window.busMarker.setLatLng([data.lat, data.lng]);
-            }}
-        }}
-    }});
-
-    // 🔥 INSTANT Seat Update (Real-time)
-    socket.on('seat_update', function(data) {{
-        console.log('🔴 SEAT UPDATE RECEIVED:', data);
-
-        // Match current page
-        if(window.currentSid != data.sid || window.currentDate != data.date) {{
-            console.log('⏭️ Different bus/date, ignoring');
-            return;
-        }}
-
-        let seatBtn = document.getElementById('seat-' + data.seat);
-        if(seatBtn) {{
-            seatBtn.classList.remove('btn-success', 'btn-outline-success');
-            seatBtn.classList.add('btn-danger');
-            seatBtn.disabled = true;
-            seatBtn.innerHTML = '<i class="fas fa-user-check"></i> X' + data.seat;
-            console.log('✅ Seat ' + data.seat + ' turned RED instantly!');
-
-            // Visual feedback
-            seatBtn.style.transform = 'scale(1.1)';
-            setTimeout(() => seatBtn.style.transform = 'scale(1)', 200);
-        }} else {{
-            console.log('❌ Seat button not found:', data.seat);
-        }}
-    }});
-
-    // 🪑 Book Seat Function (Improved)
-    function bookSeat(seatId, fromStation, toStation, travelDate, scheduleId) {{
-        console.log('🎫 Booking seat:', seatId);
-
-        let name = prompt('👤 Passenger Name:');
-        if(!name || name.trim() === '') {{
-            alert('❌ नाम भरें!');
-            return;
-        }}
-
-        let mobile = prompt('📱 Mobile Number:');
-        if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)) {{
-            alert('❌ Valid mobile number दें!');
-            return;
-        }}
-
-        // Show loading
-        let seatBtn = document.getElementById('seat-' + seatId);
-        let originalText = seatBtn.innerHTML;
-        seatBtn.innerHTML = '⏳ Booking...';
-        seatBtn.disabled = true;
-
-        fetch('/book', {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{
-                sid: scheduleId,
-                seat: seatId,
-                name: name.trim(),
-                mobile: mobile,
-                from: fromStation,
-                to: toStation,
-                date: travelDate
-            }})
-        }})
-        .then(response => {{
-            console.log('📡 Response status:', response.status);
-            return response.json();
-        }})
-        .then(result => {{
-            console.log('📋 Booking result:', result);
-            if(result.ok) {{
-                alert('🎉 ' + result.msg);
-                // Socket update भी आएगा automatically
-            }} else {{
-                alert('❌ ' + result.msg);
-                // Re-enable button
-                seatBtn.innerHTML = originalText;
-                seatBtn.disabled = false;
-            }}
-        }})
-        .catch(error => {{
-            console.error('❌ Fetch error:', error);
-            alert('❌ Network error! फिर कोशिश करें।');
-            seatBtn.innerHTML = originalText;
-            seatBtn.disabled = false;
-        }});
-    }}
+    }}).addTo(map).bindPopup("Live Bus Location");
     </script>
     """
+
     return render_template_string(BASE_HTML, content=html)
 
 #========= driver=========
@@ -553,58 +393,40 @@ def driver(sid):
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
-    print("🔥 BOOK REQUEST RECEIVED!")  # Debug log
-
+    data = request.get_json() or {}
+    conn = None
     try:
-        data = request.get_json()
-        print(f"📋 Data: {data}")
-
-        if not data:
-            return jsonify({"ok": False, "msg": "❌ No data received"})
-
         conn, cur = get_db()
+        fare = random.randint(250, 450)
 
-        # ✅ SIMPLE CHECK - बस ये ही चाहिए
+        # ✅ JS keys के exact names use करें
         cur.execute("""
-            SELECT 1 FROM seat_bookings 
-            WHERE schedule_id=%s AND travel_date=%s AND seat_number=%s 
-            AND status='confirmed'
-        """, (data["sid"], data["date"], data["seat"]))
-
-        if cur.fetchone():
-            close_db(conn)
-            return jsonify({"ok": False, "msg": "❌ Seat पहले से बुक है!"})
-
-        # ✅ FIXED INSERT - सारे fields match
-        cur.execute("""
-            INSERT INTO seat_bookings 
-            (schedule_id, travel_date, seat_number, passenger_name, mobile, 
-             from_station, to_station, status, fare, created_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,'confirmed',500,NOW())
-        """, (data["sid"], data["date"], data["seat"], data["name"],
-              data["mobile"], data["from"], data["to"]))
-
+            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
+                                     from_station, to_station, travel_date, fare)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            data.get("sid"),  # JS: "sid"
+            data.get("seat"),  # JS: "seat"
+            data.get("name"),  # JS: "name"
+            data.get("mobile"),  # JS: "mobile"
+            data.get("from"),  # JS: "from" ← fs का value
+            data.get("to"),  # JS: "to"   ← ts का value
+            data.get("date"),  # JS: "date"
+            fare
+        ))
         conn.commit()
-        print(f"✅ Seat {data['seat']} BOOKED!")
-
-        # Socket emit AFTER commit
-        socketio.emit("seat_update", {
-            "sid": data["sid"], "seat": data["seat"], "date": data["date"]
-        })
-
         close_db(conn)
-        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक हो गई!"})
+        return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} बुक! Fare ₹{fare}"})
 
     except Exception as e:
-        print(f"❌ BOOK ERROR: {e}")
-        if 'conn' in locals():
+        if conn:
             close_db(conn)
-        return jsonify({"ok": False, "msg": f"❌ त्रुटि: {str(e)}"})
-
+        print(f"❌ Booking error: {e}")
+        return jsonify({"ok": False, "msg": f"❌ बुकिंग त्रुटि: {str(e)}"}), 500
 
 
 # ================= RUN =================
 if __name__ == "__main__":
     print("🚀 Bus App Starting on Render...")
-    #socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",5000)))
+    #app.run(host="0.0.0.0", port=int(os.environ.get("PORT",5000)), debug=False)  # ✅ Gunicorn के लिए

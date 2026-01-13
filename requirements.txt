@@ -1,5 +1,6 @@
 Flask==2.3.3
 Flask-SocketIO==5.3.6
 Flask-Compress==1.15
-psycopg[binary,pool]>=3.2
+psycopg[binary,pool]==3.2.12
 gunicorn==21.2.0
+razorpay==1.4.1
