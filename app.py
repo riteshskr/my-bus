@@ -200,6 +200,8 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 </div>
 <script>
 var socket = io();
+window.currentSid = null;  // ← ये add करें
+window.currentDate = null; // ← ये add करें
 socket.on("bus_location", d => {
     if(window.map && d.lat){
         if(!window.busMarker){
@@ -229,8 +231,16 @@ function bookSeat(seatId, fs, ts, d, sid){
     fetch("/book",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         sid: sid, seat: seatId, name: name, mobile: mobile, from: fs, to: ts, date: d
     })})
-    .then(r=>r.json())
-    .then(r=>{alert(r.msg);if(r.ok)location.reload();});
+   .then(r=>r.json())
+    .then(r=>{
+        alert(r.msg || r.error || "Booking failed");
+        if(r.ok){
+            window.currentSid = sid;
+            window.currentDate = d;
+            location.reload();  // ✅ अब ये चलेगा!
+        }
+    })
+    .catch(err=>alert("❌ Network error: " + err));
 }
 </script>
 </body>
@@ -353,6 +363,8 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     <script>
+    window.currentSid = {sid};        // ← ये add करें
+    window.currentDate = '{d}';    
     window.map = L.map('map').setView([26.9124, 75.7873], 7);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
     window.busMarker = L.marker([26.9124,75.7873], {{
