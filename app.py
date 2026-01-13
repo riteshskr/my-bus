@@ -36,7 +36,7 @@ pool = ConnectionPool(
 
 print("✅ Connection pool ready")
 
-# ================= CLEANUP ON EXIT =================
+# ================= CLEANUP =================
 @atexit.register
 def shutdown_pool():
     print("🛑 Shutting down DB pool...")
@@ -89,7 +89,6 @@ def init_db():
             station_name VARCHAR(50), 
             station_order INT
         )""")
-
         conn.commit()
 
         # Insert default routes if empty
@@ -226,6 +225,7 @@ function bookSeat(seatId, fs, ts, d, sid){
 """
 
 # ================= ROUTES =================
+
 @app.route("/")
 @safe_db
 def home():
@@ -272,8 +272,136 @@ def buses(rid):
             '''
     return render_template_string(BASE_HTML, content=html)
 
-# ... rest of your /select, /seats, /driver, /book routes same as above ...
+@app.route("/select/<int:sid>", methods=["GET","POST"])
+@safe_db
+def select(sid):
+    conn, cur = get_db()
+    cur.execute("SELECT route_id FROM schedules WHERE id=%s",(sid,))
+    row = cur.fetchone()
+    route_id = row["route_id"] if row else 1
+
+    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order",(route_id,))
+    stations = [r["station_name"] for r in cur.fetchall()]
+    close_db(conn)
+
+    opts = "".join(f"<option>{s}</option>" for s in stations)
+    today = date.today().isoformat()
+
+    if request.method=="POST":
+        fs = request.form["from"]
+        ts = request.form["to"]
+        d = request.form["date"]
+        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+
+    form = f"""
+    <div class="card mx-auto" style="max-width:500px">
+        <div class="card-body">
+            <form method="POST">
+                <label>From:</label>
+                <select name="from" required>{opts}</select>
+                <label>To:</label>
+                <select name="to" required>{opts}</select>
+                <label>Date:</label>
+                <input type="date" name="date" value="{today}" min="{today}" required>
+                <button class="btn btn-success w-100 mt-3">View Seats</button>
+            </form>
+        </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=form)
+
+@app.route("/seats/<int:sid>")
+@safe_db
+def seats(sid):
+    fs = request.args.get("fs","बीकानेर")
+    ts = request.args.get("ts","जयपुर")
+    d = request.args.get("d", date.today().isoformat())
+
+    conn, cur = get_db()
+    cur.execute("""
+        SELECT seat_number 
+        FROM seat_bookings 
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """,(sid,d))
+    booked = [r["seat_number"] for r in cur.fetchall()]
+    close_db(conn)
+
+    seat_buttons = ""
+    for i in range(1,41):
+        if i in booked:
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
+        else:
+            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
+
+    html = f"""
+    <div class="text-center">
+        <h4>{fs} → {ts} | {d}</h4>
+        <div id="map"></div>
+        <div class="bus-row mt-3">{seat_buttons}</div>
+    </div>
+    <script>
+    window.map = L.map('map').setView([26.9124, 75.7873], 7);
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
+    window.busMarker = L.marker([26.9124,75.7873], {{
+        icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
+    }}).addTo(map).bindPopup("Live Bus Location");
+    </script>
+    """
+    return render_template_string(BASE_HTML, content=html)
+
+@app.route("/driver/<int:sid>")
+@safe_db
+def driver(sid):
+    return f"""
+    <html>
+    <head><title>Driver GPS</title></head>
+    <body style="text-align:center;font-family:sans-serif">
+        <h2>🚗 Driver Live GPS (Bus {sid})</h2>
+        <p>Phone में ये page खोलो और नीचे वाला बटन दबाओ</p>
+        <button onclick="start()" style="padding:15px;font-size:18px;">Start Sending Location</button>
+        <p id="status"></p>
+        <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+        <script>
+            var socket = io();
+            function start(){{
+                if(!navigator.geolocation){{
+                    alert("GPS not supported");
+                    return;
+                }}
+                document.getElementById("status").innerText = "📡 Sending GPS...";
+                navigator.geolocation.watchPosition(
+                    function(pos){{
+                        socket.emit("driver_gps", {{
+                            sid: {sid},
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude
+                        }});
+                    }},
+                    function(err){{
+                        alert("GPS Error: " + err.message);
+                    }},
+                    {{ enableHighAccuracy: true }}
+                );
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route("/book", methods=["POST"])
+@safe_db
+def book():
+    data = request.get_json() or {}
+    conn, cur = get_db()
+    fare = random.randint(250,450)
+    cur.execute("""
+        INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, from_station, to_station, travel_date, fare)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (data.get("sid"), data.get("seat"), data.get("name"), data.get("mobile"), data.get("from"), data.get("to"), data.get("date"), fare))
+    conn.commit()
+    close_db(conn)
+    return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} booked! Fare ₹{fare}"})
 
 # ================= RUN =================
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
