@@ -1,1 +1,1 @@
-web: gunicorn app:app --worker-class eventlet --workers 1 --worker-connections 500 --timeout 30
+web: gunicorn app:app --worker-class gthread --threads 100 --timeout 120 --bind 0.0.0.0:$PORT
