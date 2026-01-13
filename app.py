@@ -232,35 +232,204 @@ def home():
         """)
     return "✅ Bus Booking App Running"
 
+@app.route("/buses/<int:rid>")
+@safe_db
+def buses(rid):
+    conn, cur = get_db()
+    cur.execute("SELECT id,bus_name,departure_time FROM schedules WHERE route_id=%s ORDER BY departure_time",(rid,))
+    buses_data = cur.fetchall()
+    close_db(conn)
+    html = '<div class="alert alert-info text-center">No Buses for this route</div>'
+    if buses_data:
+        html = '<div class="text-center mb-4"><h4>Available Buses</h4></div>'
+        for bus in buses_data:
+            html += f'''
+            <div class="card bg-info mb-3">
+                <div class="card-body">
+                    <h6>{bus["bus_name"]}</h6>
+                    <p>{bus["departure_time"]}</p>
+                    <a href="/select/{bus["id"]}" class="btn btn-success w-100">Book Seats</a>
+                </div>
+            </div>
+            '''
+    return render_template_string(BASE_HTML, content=html)
 
+@app.route("/select/<int:sid>", methods=["GET","POST"])
+@safe_db
+def select(sid):
+    conn, cur = get_db()
+    cur.execute("SELECT route_id FROM schedules WHERE id=%s",(sid,))
+    row = cur.fetchone()
+    route_id = row["route_id"] if row else 1
+    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order",(route_id,))
+    stations = [r["station_name"] for r in cur.fetchall()]
+    close_db(conn)
+    opts = "".join(f"<option>{s}</option>" for s in stations)
+    today = date.today().isoformat()
+    if request.method=="POST":
+        fs = request.form["from"]
+        ts = request.form["to"]
+        d = request.form["date"]
+        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+    form = f"""
+    <div class="card mx-auto" style="max-width:500px">
+        <div class="card-body">
+            <form method="POST">
+                <label>From:</label>
+                <select name="from" required>{opts}</select>
+                <label>To:</label>
+                <select name="to" required>{opts}</select>
+                <label>Date:</label>
+                <input type="date" name="date" value="{today}" min="{today}" required>
+                <button class="btn btn-success w-100 mt-3">View Seats</button>
+            </form>
+        </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, content=form)
+
+@app.route("/seats/<int:sid>")
+@safe_db
+def seats(sid):
+    fs = request.args.get("fs","Jaipur")
+    ts = request.args.get("ts","Delhi")
+    d = request.args.get("d", date.today().isoformat())
+
+    conn, cur = get_db()
+    cur.execute("""
+        SELECT seat_number 
+        FROM seat_bookings 
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """,(sid,d))
+    booked = [r["seat_number"] for r in cur.fetchall()]
+    close_db(conn)
+
+    seat_buttons = ""
+    for i in range(1,41):
+        if i in booked:
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
+        else:
+            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
+
+    html = f"""
+    <div class="text-center">
+        <h4>{fs} → {ts} | {d}</h4>
+
+        <!-- 🗺 LIVE MAP -->
+        <div id="map"></div>
+
+        <!-- 🪑 SEATS -->
+        <div class="bus-row mt-3">
+            {seat_buttons}
+        </div>
+    </div>
+
+    <script>
+    // Default Jaipur Location
+   window.map = L.map('map').setView([26.9124, 75.7873], 7);
+
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18
+    }}).addTo(map);
+
+    // 🚌 Bus Marker
+    window.busMarker = L.marker([26.9124,75.7873], {{
+        icon: L.divIcon({{
+            className:'custom-div-icon',
+            html:'🚌',
+            iconSize:[40,40]
+        }})
+    }}).addTo(map).bindPopup("Live Bus Location");
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=html)
+
+#========= driver=========
+@app.route("/driver/<int:sid>")
+@safe_db
+def driver(sid):
+    return f"""
+    <html>
+    <head><title>Driver GPS</title></head>
+    <body style="text-align:center;font-family:sans-serif">
+        <h2>🚗 Driver Live GPS (Bus {sid})</h2>
+        <p>Phone में ये page खोलो और नीचे वाला बटन दबाओ</p>
+
+        <button onclick="start()" style="padding:15px;font-size:18px;">
+            Start Sending Location
+        </button>
+
+        <p id="status"></p>
+
+        <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+        <script>
+            var socket = io();
+
+            function start(){{
+                if(!navigator.geolocation){{
+                    alert("GPS not supported");
+                    return;
+                }}
+
+                document.getElementById("status").innerText = "📡 Sending GPS...";
+
+                navigator.geolocation.watchPosition(
+                    function(pos){{
+                        socket.emit("driver_gps", {{
+                            sid: {sid},
+                            lat: pos.coords.latitude,
+                            lng: pos.coords.longitude
+                        }});
+                    }},
+                    function(err){{
+                        alert("GPS Error: " + err.message);
+                    }},
+                    {{
+                        enableHighAccuracy: true
+                    }}
+                );
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+
+#=======seat book ==========
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
-    data = request.json
-    conn, cur = get_db()
+    data = request.get_json() or {}
+    conn = None
+    try:
+        conn, cur = get_db()
+        fare = random.randint(250, 450)
 
-    # Check if seat already booked
-    cur.execute("""
-    SELECT COUNT(*) FROM seat_bookings 
-    WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
-    """, (data["sid"], data["seat"], data["date"]))
-
-    if cur.fetchone()[0] > 0:
+        # ✅ JS keys के exact names use करें
+        cur.execute("""
+            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
+                                     from_station, to_station, travel_date, fare)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            data.get("sid"),  # JS: "sid"
+            data.get("seat"),  # JS: "seat"
+            data.get("name"),  # JS: "name"
+            data.get("mobile"),  # JS: "mobile"
+            data.get("from"),  # JS: "from" ← fs का value
+            data.get("to"),  # JS: "to"   ← ts का value
+            data.get("date"),  # JS: "date"
+            fare
+        ))
+        conn.commit()
         close_db(conn)
-        return jsonify({"ok": False, "error": "Seat already booked"})
+        return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} बुक! Fare ₹{fare}"})
 
-    fare = random.randint(200, 500)
-
-    cur.execute("""
-    INSERT INTO seat_bookings (schedule_id,seat_number,passenger_name,mobile,
-    from_station,to_station,travel_date,fare)
-    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (data["sid"], data["seat"], data["name"], data["mobile"], data["from_station"],
-          data["to_station"], data["date"], fare))
-
-    conn.commit()
-    close_db(conn)
-    return jsonify({"ok": True, "fare": fare})
+    except Exception as e:
+        if conn:
+            close_db(conn)
+        print(f"❌ Booking error: {e}")
+        return jsonify({"ok": False, "msg": f"❌ बुकिंग त्रुटि: {str(e)}"}), 500
 
 
 # ================= RUN =================
