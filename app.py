@@ -200,8 +200,6 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 </div>
 <script>
 var socket = io();
-window.currentSid = null;  // ← ये add करें
-window.currentDate = null; // ← ये add करें
 socket.on("bus_location", d => {
     if(window.map && d.lat){
         if(!window.busMarker){
@@ -213,18 +211,6 @@ socket.on("bus_location", d => {
         }
     }
 });
-// 🔥 LIVE SEAT UPDATES
-socket.on("seat_update", data => {
-    if(window.currentSid == data.sid && window.currentDate == data.date){
-        // Seat को red करो
-        let seatBtn = document.querySelector(`button[onclick*="bookSeat(${data.seat}")`);
-        if(seatBtn){
-            seatBtn.className = 'btn btn-danger seat';
-            seatBtn.disabled = true;
-            seatBtn.textContent = data.seat;
-        }
-    }
-});
 function bookSeat(seatId, fs, ts, d, sid){
     let name = prompt("Enter Name:"), mobile = prompt("Enter Mobile:");
     if(!name || !mobile) return;
@@ -233,12 +219,6 @@ function bookSeat(seatId, fs, ts, d, sid){
     })})
     .then(r=>r.json())
     .then(r=>{alert(r.msg);if(r.ok)location.reload();});
-     if(r.ok){
-            // ✅ ये 3 तरीके try करें (कोई भी 1 काम करेगा)
-            window.currentSid = sid;      // ← IMPORTANT
-            window.currentDate = d;        // ← IMPORTANT  
-            location.reload();             // Page refresh
-        }
 }
 </script>
 </body>
