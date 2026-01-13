@@ -174,16 +174,6 @@ def gps(data):
     socketio.emit("bus_location", data)
 
 # ================= HTML =================
-✅ Complete
-Fixed
-BASE_HTML(Live
-Seat
-Red + Page
-Refresh
-दोनों
-काम
-करेंगे)
-python
 BASE_HTML = """<html>
 <head><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bus Booking India</title>
