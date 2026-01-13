@@ -57,8 +57,12 @@ def init_db():
     conn = None
     try:
         conn, cur = get_db()
-
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_seat_bookings_lookup 
+        ON seat_bookings(schedule_id, travel_date, seat_number)
+        """)
         # Tables CREATE
+        
         cur.execute("""
         CREATE TABLE IF NOT EXISTS routes (
             id SERIAL PRIMARY KEY, route_name VARCHAR(100), distance_km INT
@@ -81,6 +85,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS route_stations (
             id SERIAL PRIMARY KEY, route_id INT, station_name VARCHAR(50), station_order INT
         )""")
+
         conn.commit()
 
         # Sample data
@@ -309,90 +314,196 @@ def select(sid):
     """
     return render_template_string(BASE_HTML, content=form)
 
+/ seats / < int: sid > Complete
+Fixed
+Code(Real - time
+instant
+red
+seats):
+python
+
+
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs","Jaipur")
-    ts = request.args.get("ts","Delhi")
+    fs = request.args.get("fs", "बीकानेर")
+    ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
+    # Booked seats
     cur.execute("""
         SELECT seat_number 
         FROM seat_bookings 
-        WHERE schedule_id=%s 
-        AND travel_date=%s 
-        AND status='confirmed'
-    """,(sid,d))
-
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """, (sid, d))
     booked = [r["seat_number"] for r in cur.fetchall()]
-    cur.execute("""
-    SELECT rs.lat, rs.lng
-    FROM route_stations rs
-    JOIN schedules s ON s.route_id = rs.route_id
-    WHERE s.id = %s
-    ORDER BY rs.station_order
-    """, (sid,))
 
-    route_points = [[r["lat"], r["lng"]] for r in cur.fetchall()]
-    import json
-    route_js = json.dumps(route_points)
+    # Route info
+    cur.execute("SELECT route_id, bus_name FROM schedules WHERE id=%s", (sid,))
+    route_info = cur.fetchone() or {}
+
     close_db(conn)
 
     seat_buttons = ""
-    for i in range(1,41):
+    for i in range(1, 41):
         if i in booked:
             seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-danger seat" disabled>
-                {i}
-            </button>
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
             '''
         else:
             seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat"
-            onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
                 {i}
             </button>
             '''
 
     html = f"""
-    
-    <div class="text-center">
-        <h4>{fs} → {ts} | {d}</h4>
+    <div class="row text-center">
+        <div class="col-md-12">
+            <h4 class="mb-4">🚌 {route_info.get('bus_name', 'Bus')} | {fs} → {ts}</h4>
+            <p class="text-muted">📅 {d} | 💺 {40 - len(booked)} seats available</p>
+        </div>
+    </div>
 
-        <!-- Map -->
-        <div id="map"></div>
+    <!-- Live GPS Map -->
+    <div class="card bg-dark mb-4">
+        <div class="card-body">
+            <div id="map" style="height:300px;border-radius:10px"></div>
+        </div>
+    </div>
 
-        <!-- Seats -->
-        <div class="bus-row mt-3">
-            {seat_buttons}
+    <!-- Seat Layout -->
+    <div class="card">
+        <div class="card-body p-3">
+            <h6 class="text-center mb-3">🪑 Seat Selection</h6>
+            <div class="bus-row justify-content-center">
+                {seat_buttons}
+            </div>
         </div>
     </div>
 
     <script>
-    // current page info for realtime matching
+    // 🔴 Current page context
     window.currentSid = {sid};
-    window.currentDate = "{d}";
+    window.currentDate = '{d}';
+    console.log('🎯 Seats page loaded:', window.currentSid, window.currentDate);
 
-    // Leaflet map
-    window.map = L.map('map').setView([26.9124, 75.7873], 7);
-
+    // 🗺️ Initialize Map
+    window.map = L.map('map').setView([27.5, 75.0], 7);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 18
-    }}).addTo(map);
+        maxZoom: 18, attribution: '© OpenStreetMap'
+    }}).addTo(window.map);
 
-    window.busMarker = L.marker([26.9124,75.7873], {{
+    window.busMarker = L.marker([27.39, 75.14], {{
         icon: L.divIcon({{
-            className:'custom-div-icon',
-            html:'🚌',
-            iconSize:[40,40]
+            className: 'custom-div-icon text-primary',
+            html: '<div style=\\"font-size:30px\\">🚌</div>',
+            iconSize: [40,40], iconAnchor: [20,20]
         }})
-    }}).addTo(map);
+    }}).addTo(window.map).bindPopup('Live Bus Location');
+
+    // 🚀 Real-time Socket Events
+    socket.on('connect', function() {{
+        console.log('✅ Socket Connected!');
+    }});
+
+    socket.on('bus_location', function(data) {{
+        console.log('📡 GPS Update:', data);
+        if(data.lat && data.lng && window.map) {{
+            if(window.busMarker) {{
+                window.busMarker.setLatLng([data.lat, data.lng]);
+            }}
+        }}
+    }});
+
+    // 🔥 INSTANT Seat Update (Real-time)
+    socket.on('seat_update', function(data) {{
+        console.log('🔴 SEAT UPDATE RECEIVED:', data);
+
+        // Match current page
+        if(window.currentSid != data.sid || window.currentDate != data.date) {{
+            console.log('⏭️ Different bus/date, ignoring');
+            return;
+        }}
+
+        let seatBtn = document.getElementById('seat-' + data.seat);
+        if(seatBtn) {{
+            seatBtn.classList.remove('btn-success', 'btn-outline-success');
+            seatBtn.classList.add('btn-danger');
+            seatBtn.disabled = true;
+            seatBtn.innerHTML = '<i class="fas fa-user-check"></i> X' + data.seat;
+            console.log('✅ Seat ' + data.seat + ' turned RED instantly!');
+
+            // Visual feedback
+            seatBtn.style.transform = 'scale(1.1)';
+            setTimeout(() => seatBtn.style.transform = 'scale(1)', 200);
+        }} else {{
+            console.log('❌ Seat button not found:', data.seat);
+        }}
+    }});
+
+    // 🪑 Book Seat Function (Improved)
+    function bookSeat(seatId, fromStation, toStation, travelDate, scheduleId) {{
+        console.log('🎫 Booking seat:', seatId);
+
+        let name = prompt('👤 Passenger Name:');
+        if(!name || name.trim() === '') {{
+            alert('❌ नाम भरें!');
+            return;
+        }}
+
+        let mobile = prompt('📱 Mobile Number:');
+        if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)) {{
+            alert('❌ Valid mobile number दें!');
+            return;
+        }}
+
+        // Show loading
+        let seatBtn = document.getElementById('seat-' + seatId);
+        let originalText = seatBtn.innerHTML;
+        seatBtn.innerHTML = '⏳ Booking...';
+        seatBtn.disabled = true;
+
+        fetch('/book', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{
+                sid: scheduleId,
+                seat: seatId,
+                name: name.trim(),
+                mobile: mobile,
+                from: fromStation,
+                to: toStation,
+                date: travelDate
+            }})
+        }})
+        .then(response => {{
+            console.log('📡 Response status:', response.status);
+            return response.json();
+        }})
+        .then(result => {{
+            console.log('📋 Booking result:', result);
+            if(result.ok) {{
+                alert('🎉 ' + result.msg);
+                // Socket update भी आएगा automatically
+            }} else {{
+                alert('❌ ' + result.msg);
+                // Re-enable button
+                seatBtn.innerHTML = originalText;
+                seatBtn.disabled = false;
+            }}
+        }})
+        .catch(error => {{
+            console.error('❌ Fetch error:', error);
+            alert('❌ Network error! फिर कोशिश करें।');
+            seatBtn.innerHTML = originalText;
+            seatBtn.disabled = false;
+        }});
+    }}
     </script>
     """
-
-    return render_template_string(BASE_HTML, content=html, route_js=route_js)
 
 
 #========= driver=========
