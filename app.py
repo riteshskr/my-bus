@@ -231,16 +231,14 @@ function bookSeat(seatId, fs, ts, d, sid){
     fetch("/book",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         sid: sid, seat: seatId, name: name, mobile: mobile, from: fs, to: ts, date: d
     })})
-   .then(r=>r.json())
-    .then(r=>{
-        alert(r.msg || r.error || "Booking failed");
-        if(r.ok){
-            window.currentSid = sid;
-            window.currentDate = d;
-            location.reload();  // ✅ अब ये चलेगा!
+    .then(r=>r.json())
+    .then(r=>{alert(r.msg);if(r.ok)location.reload();});
+     if(r.ok){
+            // ✅ ये 3 तरीके try करें (कोई भी 1 काम करेगा)
+            window.currentSid = sid;      // ← IMPORTANT
+            window.currentDate = d;        // ← IMPORTANT  
+            location.reload();             // Page refresh
         }
-    })
-    .catch(err=>alert("❌ Network error: " + err));
 }
 </script>
 </body>
@@ -363,8 +361,6 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     <script>
-    window.currentSid = {sid};        // ← ये add करें
-    window.currentDate = '{d}';    
     window.map = L.map('map').setView([26.9124, 75.7873], 7);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
     window.busMarker = L.marker([26.9124,75.7873], {{
