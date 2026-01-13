@@ -448,55 +448,54 @@ def driver(sid):
 
 #=======seat book ==========
 @app.route("/book", methods=["POST"])
-@safe_db
 def book():
-    data = request.json
-    conn, cur = get_db()
+    print("🔥 BOOK REQUEST RECEIVED!")  # Debug log
 
-    # Overlap check
-    cur.execute("""
-    SELECT 1
-    FROM seat_bookings sb
-    JOIN route_stations f ON f.station_name = sb.from_station
-    JOIN route_stations t ON t.station_name = sb.to_station
-    JOIN route_stations nf ON nf.station_name = %s
-    JOIN route_stations nt ON nt.station_name = %s
-    WHERE sb.schedule_id=%s 
-    AND sb.travel_date=%s
-    AND sb.seat_number=%s
-    AND (nf.station_order < t.station_order AND nt.station_order > f.station_order)
-    AND f.route_id = (SELECT route_id FROM schedules WHERE id=%s)
-    """, (
-        data["from"], data["to"],
-        data["sid"], data["date"], data["seat"],
-        data["sid"]
-    ))
+    try:
+        data = request.get_json()
+        print(f"📋 Data: {data}")
 
-    if cur.fetchone():
-        conn.close()
-        return jsonify({"ok":False,"msg":"❌ यह सीट इस route हिस्से में पहले से booked है"})
+        if not data:
+            return jsonify({"ok": False, "msg": "❌ No data received"})
 
-    # Insert booking
-    cur.execute("""
-    INSERT INTO seat_bookings 
-    (schedule_id, travel_date, seat_number, passenger_name, mobile, from_station, to_station, status)
-    VALUES (%s,%s,%s,%s,%s,%s,%s,'confirmed')
-    """,(
-        data["sid"], data["date"], data["seat"],
-        data["name"], data["mobile"],
-        data["from"], data["to"]
-    ))
+        conn, cur = get_db()
 
-    conn.commit()
-    socketio.emit("seat_update", {
-        "sid": data.get("sid"),
-        "seat": data.get("seat"),
-        "date": data.get("date")
-    })
+        # ✅ SIMPLE CHECK - बस ये ही चाहिए
+        cur.execute("""
+            SELECT 1 FROM seat_bookings 
+            WHERE schedule_id=%s AND travel_date=%s AND seat_number=%s 
+            AND status='confirmed'
+        """, (data["sid"], data["date"], data["seat"]))
 
-    conn.close()
+        if cur.fetchone():
+            close_db(conn)
+            return jsonify({"ok": False, "msg": "❌ Seat पहले से बुक है!"})
 
-    return jsonify({"ok":True,"msg":"✅ Seat booked successfully"})
+        # ✅ FIXED INSERT - सारे fields match
+        cur.execute("""
+            INSERT INTO seat_bookings 
+            (schedule_id, travel_date, seat_number, passenger_name, mobile, 
+             from_station, to_station, status, fare, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'confirmed',500,NOW())
+        """, (data["sid"], data["date"], data["seat"], data["name"],
+              data["mobile"], data["from"], data["to"]))
+
+        conn.commit()
+        print(f"✅ Seat {data['seat']} BOOKED!")
+
+        # Socket emit AFTER commit
+        socketio.emit("seat_update", {
+            "sid": data["sid"], "seat": data["seat"], "date": data["date"]
+        })
+
+        close_db(conn)
+        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक हो गई!"})
+
+    except Exception as e:
+        print(f"❌ BOOK ERROR: {e}")
+        if 'conn' in locals():
+            close_db(conn)
+        return jsonify({"ok": False, "msg": f"❌ त्रुटि: {str(e)}"})
 
 
 
