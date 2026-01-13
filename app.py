@@ -211,6 +211,18 @@ socket.on("bus_location", d => {
         }
     }
 });
+// 🔥 LIVE SEAT UPDATES
+socket.on("seat_update", data => {
+    if(window.currentSid == data.sid && window.currentDate == data.date){
+        // Seat को red करो
+        let seatBtn = document.querySelector(`button[onclick*="bookSeat(${data.seat}")`);
+        if(seatBtn){
+            seatBtn.className = 'btn btn-danger seat';
+            seatBtn.disabled = true;
+            seatBtn.textContent = data.seat;
+        }
+    }
+});
 function bookSeat(seatId, fs, ts, d, sid){
     let name = prompt("Enter Name:"), mobile = prompt("Enter Mobile:");
     if(!name || !mobile) return;
@@ -401,6 +413,12 @@ def book():
     """, (data.get("sid"), data.get("seat"), data.get("name"), data.get("mobile"), data.get("from"), data.get("to"), data.get("date"), fare))
     conn.commit()
     close_db(conn)
+    socketio.emit("seat_update", {
+        "sid": data.get("sid"),
+        "seat": data.get("seat"),
+        "date": data.get("date")
+    }, broadcast=True)
+
     return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} booked! Fare ₹{fare}"})
 
 # ================= RUN =================
