@@ -401,12 +401,6 @@ def book():
     """, (data.get("sid"), data.get("seat"), data.get("name"), data.get("mobile"), data.get("from"), data.get("to"), data.get("date"), fare))
     conn.commit()
     close_db(conn)
-    socketio.emit("seat_update", {
-        "sid": data.get("sid"),
-        "seat": data.get("seat"),
-        "date": data.get("date")
-    }, broadcast=True)
-
     return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} booked! Fare ₹{fare}"})
 
 # ================= RUN =================
