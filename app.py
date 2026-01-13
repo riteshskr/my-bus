@@ -174,6 +174,16 @@ def gps(data):
     socketio.emit("bus_location", data)
 
 # ================= HTML =================
+✅ Complete
+Fixed
+BASE_HTML(Live
+Seat
+Red + Page
+Refresh
+दोनों
+काम
+करेंगे)
+python
 BASE_HTML = """<html>
 <head><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bus Booking India</title>
@@ -182,7 +192,7 @@ BASE_HTML = """<html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-.seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold}
+.seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s ease;}
 .bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
 #map{height:400px;margin:20px 0;border-radius:10px}
 body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
@@ -198,43 +208,111 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
 </div>
 </div>
+
+<!-- 🔥 LIVE SOCKETIO SCRIPT -->
 <script>
 var socket = io();
+window.currentSid = null;
+window.currentDate = null;
+
+// 🚌 Live GPS Tracking
 socket.on("bus_location", d => {
-    if(window.map && d.lat){
+    if(window.map && d.lat && d.lng){
         if(!window.busMarker){
             window.busMarker = L.marker([d.lat,d.lng],{
                 icon:L.divIcon({className:'custom-div-icon',html:'🚌',iconSize:[40,40]})
-            }).addTo(window.map).bindPopup("Live Bus");
+            }).addTo(window.map).bindPopup(`Bus ${d.sid || ''}`);
         }else{
             window.busMarker.setLatLng([d.lat,d.lng]);
         }
     }
 });
-// 🔥 LIVE SEAT UPDATES
+
+// 🔥 LIVE SEAT UPDATES (Real-time Red)
 socket.on("seat_update", data => {
+    console.log("🔴 Live seat update:", data);
     if(window.currentSid == data.sid && window.currentDate == data.date){
-        // Seat को red करो
-        let seatBtn = document.querySelector(`button[onclick*="bookSeat(${data.seat}")`);
+        // Multiple selectors try करें
+        let seatBtn = document.querySelector(`button[data-seat="${data.seat}"]`) ||
+                     document.querySelector(`[onclick*="bookSeat(${data.seat}"]`) ||
+                     Array.from(document.querySelectorAll('.seat')).find(btn => 
+                         btn.textContent == data.seat && btn.classList.contains('btn-success'));
+
         if(seatBtn){
             seatBtn.className = 'btn btn-danger seat';
             seatBtn.disabled = true;
-            seatBtn.textContent = data.seat;
+            seatBtn.innerHTML = `<strong>${data.seat}</strong>`;
+            console.log("✅ Seat red की:", data.seat);
         }
     }
 });
+
+// 🎫 PERFECT BOOKING FUNCTION
 function bookSeat(seatId, fs, ts, d, sid){
-    let name = prompt("Enter Name:"), mobile = prompt("Enter Mobile:");
-    if(!name || !mobile) return;
-    fetch("/book",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        sid: sid, seat: seatId, name: name, mobile: mobile, from: fs, to: ts, date: d
-    })})
+    let seatBtn = event ? event.target : document.activeElement;
+
+    // Temporarily disable button
+    seatBtn.disabled = true;
+    seatBtn.className = 'btn btn-warning seat';
+    seatBtn.innerHTML = '⏳';
+
+    let name = prompt("👤 नाम डालें:");
+    if(!name || name.trim() === ''){
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
+        return;
+    }
+
+    let mobile = prompt("📱 10 अंकों का मोबाइल:");
+    if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)){
+        alert("❌ 10 अंकों का valid मोबाइल डालें (6-9 से शुरू)");
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
+        return;
+    }
+
+    fetch("/book",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            sid: sid, 
+            seat: seatId, 
+            name: name.trim(), 
+            mobile: mobile,
+            from: fs, 
+            to: ts, 
+            date: d
+        })
+    })
     .then(r=>r.json())
-    .then(r=>{alert(r.msg);if(r.ok)location.reload();});
+    .then(r=>{
+        if(r.ok){
+            alert("✅ " + r.msg);
+            // Live update के लिए wait + fallback reload
+            setTimeout(() => {
+                location.reload();
+            }, 300);
+        } else {
+            alert("❌ " + (r.error || "Booking failed"));
+            seatBtn.disabled = false;
+            seatBtn.className = 'btn btn-success seat';
+            seatBtn.innerHTML = seatId;
+        }
+    })
+    .catch(err=>{
+        console.error("Network error:", err);
+        alert("❌ Network error - कनेक्शन check करें");
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
+    });
 }
 </script>
 </body>
 </html>
+
 """
 
 # ================= ROUTES =================
@@ -323,24 +401,27 @@ def select(sid):
     """
     return render_template_string(BASE_HTML, content=form)
 
+
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs","बीकानेर")
-    ts = request.args.get("ts","जयपुर")
+    fs = request.args.get("fs", "बीकानेर")
+    ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
-    cur.execute("""
-        SELECT seat_number 
-        FROM seat_bookings 
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """,(sid,d))
-    booked = [r["seat_number"] for r in cur.fetchall()]
-    close_db(conn)
+    try:  # ← try/finally add करें
+        cur.execute("""
+            SELECT seat_number 
+            FROM seat_bookings 
+            WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+        """, (sid, d))
+        booked = [r["seat_number"] for r in cur.fetchall()]
+    finally:
+        close_db(conn)
 
     seat_buttons = ""
-    for i in range(1,41):
+    for i in range(1, 41):
         if i in booked:
             seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
         else:
@@ -353,14 +434,19 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     <script>
-    window.map = L.map('map').setView([26.9124, 75.7873], 7);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
-    window.busMarker = L.marker([26.9124,75.7873], {{
-        icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
-    }}).addTo(map).bindPopup("Live Bus Location");
+        // 🔥 ये 2 lines सबसे important हैं!
+        window.currentSid = {sid};
+        window.currentDate = '{d}';
+
+        window.map = L.map('map').setView([26.9124, 75.7873], 7);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
+        window.busMarker = L.marker([26.9124,75.7873], {{
+            icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
+        }}).addTo(map).bindPopup("Live Bus Location");
     </script>
     """
     return render_template_string(BASE_HTML, content=html)
+
 
 @app.route("/driver/<int:sid>")
 @safe_db
