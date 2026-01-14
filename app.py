@@ -500,7 +500,7 @@ def book():
               data.get("from", "बीकानेर"), data.get("to", "जयपुर"), data["date"], fare))
 
         conn.commit()
-        socketio.emit("seat_update", data, broadcast=True)
+        socketio.emit("seat_update", data)
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} | ₹{fare}"})
     finally:
         close_db(conn)
