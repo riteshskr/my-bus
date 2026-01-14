@@ -183,6 +183,17 @@ def safe_db(func):
 def gps(data):
     socketio.emit("bus_location", data)
 
+@socketio.on('join')
+def on_join(data):
+    room = data['room']
+    join_room(room)
+    print(f"👤 Client joined room: {room}")
+
+@socketio.on('disconnect')
+def on_disconnect():
+    print("👋 Client disconnected")
+
+
 # ================= HTML =================
 BASE_HTML = """<html>
 <head><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -224,15 +235,34 @@ var socket = io({
 
 socket.on('connect', function() {
     console.log('✅ Socket Connected:', socket.id);
+    
+    // 🔥 ROOM JOIN - same schedule के सभी browsers connect होंगे
+    const roomName = `sid_${window.currentSid}_${window.currentDate}`;
+    socket.emit('join', {room: roomName});
+    console.log('🏠 Joined room:', roomName);
 });
 
-socket.on('connect_error', function(error) {
-    console.log('❌ Socket Error:', error);
+// Perfect seat matching
+socket.on("seat_update", data => {
+    console.log("🔴 LIVE UPDATE:", data);
+    
+    if(window.currentSid == data.sid && window.currentDate == data.date){
+        console.log("✅ MATCH - Updating seat", data.seat);
+        
+        // ALL seats check करें
+        document.querySelectorAll('.seat').forEach(seatBtn => {
+            const seatText = seatBtn.textContent.trim() || seatBtn.innerHTML.trim();
+            
+            if(seatText === data.seat && seatBtn.classList.contains('btn-success')){
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = '<strong>X</strong>';
+                console.log("✅ COLOR CHANGED:", data.seat);
+            }
+        });
+    }
 });
 
-socket.on('disconnect', function() {
-    console.log('❌ Socket Disconnected');
-});
 
 
 // 🚌 Live GPS Tracking
@@ -553,13 +583,14 @@ def book():  # safe_db हटाएं temporarily
         print(f"✅ Seat {data['seat']} BOOKED | ₹{fare}")
 
         # 🔥 BULLETPROOF EMIT - Multiple formats
+        room_name = f"sid_{data['sid']}_{data['date']}"
         socketio.emit("seat_update", {
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        })
+        }, room=room_name)
 
-        print(f"📡 EMITTED to {len(socketio.server.manager.rooms['/'])} clients")
+        print(f"📡 EMITTED to room: {room_name}")
 
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
 
