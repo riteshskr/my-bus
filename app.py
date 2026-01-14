@@ -302,64 +302,59 @@ socket.on("seat_update", function(data) {
     }
 
     // 🎫 PERFECT BOOKING FUNCTION
-    function bookSeat(seatId, fs, ts, d, sid) {
-        <button
- class="btn btn-success seat"
- data-seat="{i}"
- onclick="bookSeat(this, {i}, '{fs}', '{ts}', '{d}', {sid})">
- {i}
-</button>
+    function bookSeat(seatBtn, seatId, fs, ts, d, sid) {
+    console.log("🟡 bookSeat called:", seatId, sid, d);
 
-        seatBtn.disabled = true;
-        seatBtn.className = 'btn btn-warning seat';
-        seatBtn.innerHTML = '⏳';
+    seatBtn.disabled = true;
+    seatBtn.className = 'btn btn-warning seat';
+    seatBtn.innerHTML = '⏳';
 
-        let name = prompt("👤 नाम डालें:");
-        if(!name || name.trim() === '') {
-            resetSeat(seatBtn, seatId);
-            return;
-        }
-
-        let mobile = prompt("📱 10 अंकों का मोबाइल:");
-        if(!mobile || mobile.trim() === '') {
-            alert("❌ मोबाइल नंबर जरूरी है");
-            resetSeat(seatBtn, seatId);
-            return;
-        }
-
-        fetch("/book", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({
-                sid: sid, 
-                seat: seatId, 
-                name: name.trim(), 
-                mobile: mobile,
-                from: fs, 
-                to: ts, 
-                date: d
-            })
-        })
-        .then(r => r.json())
-        .then(r => {
-            if(r.ok) {
-                alert("✅ " + r.msg);
-                seatBtn.className = 'btn btn-danger seat';
-                seatBtn.innerHTML = '✅';
-
-                // 2 सेकंड बाद refresh
-                
-            } else {
-                alert("❌ " + r.error);
-                resetSeat(seatBtn, seatId);
-            }
-        })
-        .catch(err => {
-            console.error("Network error:", err);
-            alert("❌ Network error - कनेक्शन check करें");
-            resetSeat(seatBtn, seatId);
-        });
+    let name = prompt("👤 नाम डालें:");
+    if (!name) {
+        resetSeat(seatBtn, seatId);
+        return;
     }
+
+    let mobile = prompt("📱 10 अंकों का मोबाइल:");
+    mobile = mobile.trim();
+    if (!/^\d{10}$/.test(mobile)) {
+        alert("❌ गलत मोबाइल नंबर");
+        resetSeat(seatBtn, seatId);
+        return;
+    }
+
+    console.log("📡 Sending booking request...");
+
+    fetch("/book", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            sid: sid,
+            seat: seatId,
+            name: name,
+            mobile: mobile,
+            from: fs,
+            to: ts,
+            date: d
+        })
+    })
+    .then(r => r.json())
+    .then(r => {
+        if (r.ok) {
+            alert(r.msg);
+            seatBtn.className = 'btn btn-danger seat';
+            seatBtn.innerHTML = '✅';
+        } else {
+            alert(r.error);
+            resetSeat(seatBtn, seatId);
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        resetSeat(seatBtn, seatId);
+    });
+}
+
 </script>
 </body>
 </html>"""
@@ -487,10 +482,10 @@ def seats(sid):  # safe_db हटाएं
         else:
             seat_buttons += f'''
             <button 
-                class="btn btn-success seat"
-                data-seat="{i}"
-                onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
-                {i}
+            class="btn btn-success seat"
+            data-seat="{i}"
+            onclick="bookSeat(this, {i}, '{fs}', '{ts}', '{d}', {sid})">
+            {i}
             </button>
             '''
 
@@ -560,61 +555,68 @@ def driver(sid):
 
 
 @app.route("/book", methods=["POST"])
-def book():  # safe_db हटाएं temporarily
-    data = request.get_json()
+def book():
+    data = request.get_json(force=True)   # 🔥 IMPORTANT
 
-    if not data or not all(k in data for k in ['sid', 'seat', 'name', 'mobile', 'date']):
+    if not data:
+        return jsonify({"ok": False, "error": "❌ No data received"}), 400
+
+    sid = int(data["sid"])
+    seat_no = int(data["seat"])
+
+    if not data.get("name") or not data.get("mobile"):
         return jsonify({"ok": False, "error": "❌ सभी fields भरें"}), 400
 
-    if len(str(data['mobile'])) != 10 or not str(data['mobile']).isdigit():
+    if not data["mobile"].isdigit() or len(data["mobile"]) != 10:
         return jsonify({"ok": False, "error": "❌ 10 अंकों का मोबाइल"}), 400
 
     conn = None
     try:
-        print(f"🔍 Booking: Seat {data['seat']}")
+        print(f"🔍 Booking: Seat {seat_no}")
         conn, cur = get_db()
 
-        # Duplicate check
         cur.execute("""
-                   SELECT id FROM seat_bookings 
-                   WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
-               """, (int(data["sid"]), int(data["seat"]), data["date"]))
+            SELECT 1 FROM seat_bookings
+            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
+        """, (sid, seat_no, data["date"]))
 
         if cur.fetchone():
-            return jsonify({"ok": False, "error": f"❌ Seat {data['seat']} पहले से बुक है"}), 409
+            return jsonify({"ok": False, "error": f"❌ Seat {seat_no} पहले से बुक है"}), 409
 
-        # Booking save
         fare = random.randint(250, 450)
         cur.execute("""
-                   INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
-                       mobile, from_station, to_station, travel_date, fare, status)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
-               """, (int(data["sid"]), int(data["seat"]), data["name"], data["mobile"],
-                     data.get("from", "बीकानेर"), data.get("to", "जयपुर"),
-                     data["date"], fare))
+            INSERT INTO seat_bookings
+            (schedule_id, seat_number, passenger_name, mobile,
+             from_station, to_station, travel_date, fare, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
+        """, (
+            sid, seat_no, data["name"], data["mobile"],
+            data.get("from"), data.get("to"),
+            data["date"], fare
+        ))
+
         conn.commit()
-        print(f"✅ Seat {data['seat']} BOOKED | ₹{fare}")
 
-        # 🔥 BULLETPROOF EMIT - Multiple formats
-        room_name = f"sid_{data['sid']}_{data['date']}"
+        room = f"sid_{sid}_{data['date']}"
         socketio.emit("seat_update", {
-            "sid": int(data["sid"]),
-            "seat": str(data["seat"]),
+            "sid": sid,
+            "seat": str(seat_no),
             "date": data["date"]
-        }, room=room_name,include_self=True )
+        }, room=room, include_self=True)
 
-        print(f"📡 EMITTED to room: {room_name}")
+        print(f"✅ Seat {seat_no} BOOKED")
 
-        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
+        return jsonify({"ok": True, "msg": f"Seat {seat_no} बुक हो गई ₹{fare}"})
 
     except Exception as e:
         if conn:
             conn.rollback()
-        print(f"❌ Booking error: {e}")
-        return jsonify({"ok": False, "error": f"❌ Booking failed: {str(e)}"}), 500
+        print("❌ Booking error:", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
     finally:
         if conn:
             close_db(conn)
+
 
 
 # ================= RUN =================
