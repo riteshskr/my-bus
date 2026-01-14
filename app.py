@@ -265,21 +265,18 @@ function bookSeat(seatId, fs, ts, d, sid){
             date: d
         })
     })
-    .then(r=>r.json())
-    .then(r=>{
+    .then(r => r.json())
+    .then(r => {
         if(r.ok){
-        alert("✅ " + r.msg);
-        // ✅ पहले seat को local red करें, फिर reload
-        seatBtn.className = 'btn btn-danger seat';
-        seatBtn.disabled = true;
-        seatBtn.innerHTML = '✅';
-        
-        // Socket के लिए wait + फिर reload  
-        setTimeout(() => location.reload(), 1000);  // 1 second
-    } else {
-        // error handling same
-    }
-})
+            alert("✅ " + r.msg);
+            seatBtn.className = 'btn btn-danger seat';
+            seatBtn.innerHTML = '✅';
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            alert("❌ " + r.error);
+            resetSeat(seatBtn, seatId);
+        }
+    })
     .catch(err=>{
         console.error("Network error:", err);
         alert("❌ Network error - कनेक्शन check करें");
