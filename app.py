@@ -211,21 +211,22 @@ socket.on("bus_location", d => {
 socket.on("seat_update", data => {
     console.log("🔴 Live seat update:", data);
     if(window.currentSid == data.sid && window.currentDate == data.date){
-        // ✅ BETTER SELECTOR - सभी possible seats को target करें
-        let allSeats = document.querySelectorAll('.seat');
-        for(let seatBtn of allSeats){
-            if(seatBtn.textContent.trim() == data.seat && 
-               seatBtn.classList.contains('btn-success')){
+        // ✅ ALL GREEN SEATS को target करें (exact seat number match)
+        document.querySelectorAll('.seat.btn-success').forEach(seatBtn => {
+            if(seatBtn.textContent.trim() == data.seat){
                 seatBtn.className = 'btn btn-danger seat';
                 seatBtn.disabled = true;
-                seatBtn.innerHTML = `<strong>X</strong>`;
+                seatBtn.innerHTML = '<strong>X</strong>';
                 console.log("✅ Live RED:", data.seat);
-                break;
             }
-        }
+        });
     }
 });
-
+function resetSeat(seatBtn, seatId) {
+    seatBtn.disabled = false;
+    seatBtn.className = 'btn btn-success seat';
+    seatBtn.innerHTML = seatId;
+}
 // 🎫 PERFECT BOOKING FUNCTION
 function bookSeat(seatId, fs, ts, d, sid){
     let seatBtn = event ? event.target : document.activeElement;
@@ -468,8 +469,7 @@ def driver(sid):
 @safe_db
 def book():
     data = request.get_json()
-    if not data or not all(k in data for k in ["sid", "seat", "name", "mobile", "date"]):
-        return jsonify({"ok": False, "error": "❌ Missing data"}), 400
+    # ... existing validation code ...
 
     conn, cur = get_db()
     try:
@@ -481,6 +481,15 @@ def book():
         if cur.fetchone():
             return jsonify({"ok": False, "error": "❌ Seat already booked"}), 409
 
+        # ✅ IMMEDIATE BROADCAST सभी clients को
+        socket_data = {
+            "sid": int(data["sid"]),
+            "seat": int(data["seat"]),
+            "date": data["date"]
+        }
+        socketio.emit("seat_update", socket_data, broadcast=True)  # ← broadcast=True add करें
+
+        # Database save (NOW socket emit के बाद)
         fare = random.randint(250, 450)
         cur.execute("""
             INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
@@ -488,14 +497,8 @@ def book():
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         """, (data["sid"], data["seat"], data["name"], data["mobile"],
               data.get("from", "बीकानेर"), data.get("to", "जयपुर"), data["date"], fare))
-
         conn.commit()
-        socket_data = {
-            "sid": int(data["sid"]),
-            "seat": int(data["seat"]),
-            "date": data["date"]
-        }
-        socketio.emit("seat_update", socket_data, namespace="/")
+
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} | ₹{fare}"})
     finally:
         close_db(conn)
