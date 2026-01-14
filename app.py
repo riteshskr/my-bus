@@ -435,7 +435,7 @@ def book():
             "sid": data['sid'],
             "seat": data['seat'],
             "date": data['date']
-        }, broadcast=True)
+        })
 
         print(f"✅ BROADCAST: Seat {data['seat']} booked for bus {data['sid']}")
         return jsonify({"ok": True, "fare": fare})
