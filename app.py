@@ -165,9 +165,12 @@ def close_db(conn):
 def safe_db(func):
     @wraps(func)
     def wrapper(*a, **kw):
+        conn = None  # ← यह ADD करें
         try:
             return func(*a, **kw)
         except Exception as e:
+            if conn:  # ← यह ADD करें
+                close_db(conn)
             return jsonify({"ok": False, "error": str(e)})
     return wrapper
 
@@ -407,8 +410,8 @@ def seats(sid):
             FROM seat_bookings 
             WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
         """, (sid, d))
-        booked = [r["seat_number"] for r in cur.fetchall()]
-        booked = [int(row['seat_number']) for row in booked_rows]  # dict से int निकालें
+        booked_rows = cur.fetchall()
+        booked = [int(row['seat_number']) for row in booked_rows] # dict से int निकालें
         print(f"📋 Booked seats: {booked}")  # Debug देखें
     finally:
         close_db(conn)
