@@ -211,9 +211,21 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 
 <!-- 🔥 LIVE SOCKETIO SCRIPT -->
 <script>
-var socket = io();
-window.currentSid = null;
-window.currentDate = null;
+var socket = io({
+    transports: ['websocket', 'polling'],  // Mobile के लिए जरूरी
+    timeout: 10000,
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000
+});
+
+socket.on('connect', function() {
+    console.log('✅ Socket Connected:', socket.id);
+});
+
+socket.on('disconnect', function() {
+    console.log('❌ Socket Disconnected');
+});
 
 // 🚌 Live GPS Tracking
 socket.on("bus_location", d => {
