@@ -314,101 +314,81 @@ def seats(sid):
     # ✅ COMPLETE WORKING SCRIPT - कोई error नहीं!
     script = f'''
     <script>
-    console.log("🚌 Bus {sid} | {fs} → {ts} | {d}");
-    window.currentSid = {sid};
-    window.currentDate = "{d}";
+    alert("🔥 Seats Page Loaded!");  // यह alert पहले आएगा
+
+    // Global variables
+    window.sid = {sid};
     window.fs = "{fs}";
     window.ts = "{ts}";
 
-    const socket = io({{
-        transports: ["websocket", "polling"],
-        reconnection: true,
-        timeout: 10000
-    }});
-
-    // ⭐ MAIN FIX: सभी green seats पर click listener
+    // ⭐⭐⭐ ULTRA SIMPLE - सीधे onclick हर button में
     document.addEventListener("click", function(e) {{
-        if(e.target.classList.contains("seat") && 
-           e.target.dataset.seat && 
-           !e.target.disabled) {{
-            const seatId = parseInt(e.target.dataset.seat);
-            bookSeat(seatId, e.target);
+        console.log("CLICK DETECTED:", e.target);
+
+        // हर seat button check करें
+        if(e.target.classList.contains("seat") && !e.target.disabled) {{
+            let seatId = e.target.getAttribute("data-seat");
+            console.log("✅ SEAT ID:", seatId);
+
+            if(seatId) {{
+                bookSeat(parseInt(seatId), e.target);
+            }}
         }}
     }});
 
-    function bookSeat(seatId, btn) {{
-        btn.disabled = true;
+    function bookSeat(seat, btn) {{
+        console.log("🎯 Booking Seat:", seat);
+
+        btn.style.backgroundColor = "#ffc107";
         btn.innerHTML = "⏳";
-        btn.className = "btn btn-warning seat";
+        btn.disabled = true;
 
-        let name = prompt("👤 नाम डालें:");
-        if(!name || !name.trim()) {{
-            resetSeat(btn, seatId);
+        let name = prompt("👤 नाम:");
+        if(!name) {{
+            btn.innerHTML = seat;
+            btn.style.backgroundColor = "#198754";
+            btn.disabled = false;
             return;
         }}
 
-        let mobile = prompt("📱 मोबाइल (10 अंक):");
-        if(!/^\\d{{10}}$/.test(mobile)) {{
-            alert("❌ 10 अंक मोबाइल नंबर डालें!");
-            resetSeat(btn, seatId);
+        let phone = prompt("📱 10 digit mobile:");
+        if(!phone || phone.length != 10 || isNaN(phone)) {{
+            alert("❌ Valid 10 digit mobile number!");
+            btn.innerHTML = seat;
+            btn.style.backgroundColor = "#198754";
+            btn.disabled = false;
             return;
         }}
 
+        // API call
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{
-                sid: window.currentSid,
-                seat: seatId,
-                name: name.trim(),
-                mobile: mobile,
+                sid: window.sid,
+                seat: seat,
+                name: name,
+                mobile: phone,
                 from: window.fs,
                 to: window.ts,
-                date: window.currentDate
+                date: "{d}"
             }})
         }})
-        .then(r => r.json())
-        .then(r => {{
-            if(r.ok) {{
+        .then(r=>r.json())
+        .then(data=> {{
+            if(data.ok) {{
                 btn.innerHTML = "✅";
-                btn.className = "btn btn-success seat";
-                alert("🎉 सीट " + seatId + " बुक हो गई! 💰 ₹" + r.fare);
-                setTimeout(() => location.reload(), 1000);
+                btn.style.backgroundColor = "#dc3545";
+                alert("🎉 Seat " + seat + " booked! ₹" + data.fare);
+                setTimeout(()=>location.reload(), 1000);
             }} else {{
-                alert("❌ त्रुटि: " + r.error);
-                resetSeat(btn, seatId);
+                alert("❌ " + data.error);
+                btn.innerHTML = seat;
+                btn.style.backgroundColor = "#198754";
+                btn.disabled = false;
             }}
-        }})
-        .catch(err => {{
-            console.error("Network error:", err);
-            alert("❌ नेटवर्क त्रुटि!");
-            resetSeat(btn, seatId);
         }});
     }}
-
-    function resetSeat(btn, seatId) {{
-        btn.disabled = false;
-        btn.innerHTML = seatId;
-        btn.className = "btn btn-success seat";
-    }}
-
-    // Socket events - Live updates
-    socket.on("connect", () => console.log("✅ Socket Connected"));
-    socket.on("seat_update", (data) => {{
-        console.log("📢 Live update:", data);
-        if(window.currentSid == data.sid && window.currentDate == data.date) {{
-            const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
-            if(seatBtn && !seatBtn.disabled) {{
-                seatBtn.className = "btn btn-danger seat";
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = "X";
-                const countEl = document.getElementById("availableCount");
-                if(countEl) {{
-                    countEl.textContent = parseInt(countEl.textContent) - 1;
-                }}
-            }}
-        }}
-    }});
     </script>
     '''
 
