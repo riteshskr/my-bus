@@ -448,13 +448,6 @@ def seats(sid):  # safe_db हटाएं
         if conn:
             close_db(conn)
 
-    socketio.emit("seat_update", {
-        "sid": sid,
-        "date": d,
-        "booked": booked  # सभी booked seats list
-    }, broadcast=True)
-    print(f"📡 Page load emit: {len(booked)} booked seats")
-
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked:  # अब int comparison सही होगा
