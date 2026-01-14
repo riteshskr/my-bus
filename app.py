@@ -25,14 +25,7 @@ pool = ConnectionPool(
     max_size=3,
     timeout=20,
     max_idle=10,
-    kwargs={
-        "connect_timeout": 10,
-        "keepalives": 1,
-        "keepalives_idle": 60,  # ↑ बढ़ाओ
-        "keepalives_interval": 30,
-        "keepalives_count": 3
-    }
-)
+    )
 
 print("✅ Connection pool ready")
 
@@ -252,7 +245,7 @@ function bookSeat(seatId, fs, ts, d, sid){
 
     let mobile = prompt("📱 10 अंकों का मोबाइल:");
     if(!mobile || mobile.trim() === ''){
-        aalert("❌ मोबाइल नंबर जरूरी है");
+        alert("❌ मोबाइल नंबर जरूरी है");
         seatBtn.disabled = false;
         seatBtn.className = 'btn btn-success seat';
         seatBtn.innerHTML = seatId;
