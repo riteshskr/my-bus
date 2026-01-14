@@ -558,7 +558,7 @@ def book():  # safe_db हटाएं temporarily
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        }, broadcast=True)
+        })
 
         print(f"📡 EMITTED to {len(socketio.server.manager.rooms['/'])} clients")
 
