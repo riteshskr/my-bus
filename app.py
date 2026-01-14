@@ -251,8 +251,8 @@ function bookSeat(seatId, fs, ts, d, sid){
     }
 
     let mobile = prompt("📱 10 अंकों का मोबाइल:");
-    if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)){
-        alert("❌ 10 अंकों का valid मोबाइल डालें (6-9 से शुरू)");
+    if(!mobile || mobile.trim() === ''){
+        aalert("❌ मोबाइल नंबर जरूरी है");
         seatBtn.disabled = false;
         seatBtn.className = 'btn btn-success seat';
         seatBtn.innerHTML = seatId;
