@@ -423,7 +423,7 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     {script}
-
+     '''
     return render_template_string(BASE_HTML, content=html)
 
 
