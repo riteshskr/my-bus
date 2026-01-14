@@ -286,10 +286,13 @@ def seats(sid):
         ORDER BY station_order
     """, (sid,))
     stations_data = cur.fetchall()
+    stations = [r['station_name'] for r in stations_data]
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
+
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
+    # Booked seats calculation (same as before)
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
@@ -311,6 +314,9 @@ def seats(sid):
         else:
             seat_buttons += f'<button class="btn btn-success seat" data-seat="{i}">{i}</button>'
 
+    # ✅ ROUTE STATIONS के लिए OPTIONS
+    station_opts = "".join(f'<option value="{s}">{s}</option>' for s in stations)
+
     html = f'''
     <div class="text-center mb-4">
         <h4>🚌 {fs} → {ts} | 📅 {d}</h4>
@@ -318,80 +324,123 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
 
+    <!-- ✅ PROPER BOOKING MODAL FORM -->
+    <div class="modal fade" id="bookingModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content bg-dark text-white">
+                <div class="modal-header bg-success">
+                    <h5 class="modal-title">🎫 Seat Booking</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">सीट नंबर:</label>
+                        <input type="text" id="selectedSeat" class="form-control bg-secondary" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">👤 नाम:</label>
+                        <input type="text" id="passengerName" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">📱 मोबाइल (10 अंक):</label>
+                        <input type="tel" id="mobileNo" class="form-control" maxlength="10" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">📍 From:</label>
+                        <select id="fromStation" class="form-select">{station_opts}</select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">📍 To:</label>
+                        <select id="toStation" class="form-select">{station_opts}</select>
+                    </div>
+                    <input type="hidden" id="bookingSid" value="{sid}">
+                    <input type="hidden" id="bookingDate" value="{d}">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-success" onclick="confirmBooking()">✅ Confirm & Book</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-    console.log("🔄 Loading Bus {sid} | {fs}→{ts} | {d}");
+    console.log("🔄 Bus {sid} | {fs}→{ts} | {d}");
     window.currentSid = {sid};
     window.currentDate = '{d}';
+    const socket = io({{transports:['websocket','polling']}});
+    const bookingModal = new bootstrap.Modal(document.getElementById('bookingModal'));
 
-    // ✅ PERFECT Socket.IO Connection
-    const socket = io({{
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        timeout: 10000
-    }});
-
-    socket.on('connect', function() {{
-        console.log('✅ Socket Connected:', socket.id);
-    }});
-
-    socket.on('disconnect', function() {{
-        console.log('❌ Socket Disconnected');
-    }});
-
-    // ✅ PERFECT Seat Update Handler
-    socket.on('seat_update', function(data) {{
-        console.log('📢 LIVE UPDATE:', data);
+    socket.on('connect', () => console.log('✅ Socket Connected'));
+    socket.on('seat_update', (data) => {{
         if(window.currentSid == data.sid && window.currentDate == data.date) {{
             const seatBtn = document.querySelector('[data-seat="' + data.seat + '"]');
             if(seatBtn) {{
                 seatBtn.className = 'btn btn-danger seat';
                 seatBtn.disabled = true;
                 seatBtn.innerHTML = 'X';
-                console.log('🔴 Seat', data.seat, 'marked BOOKED');
-                document.getElementById('availableCount').textContent = parseInt(document.getElementById('availableCount').textContent) - 1;
+                document.getElementById('availableCount').textContent--;
             }}
         }}
     }});
 
-    function bookSeat(seatId, fs, ts, d, sid) {{
-        event.target.disabled = true;
-        event.target.innerHTML = '⏳';
+    // ✅ SEAT CLICK → OPEN FORM MODAL
+    document.querySelectorAll('.seat:not([disabled])').forEach(btn => {{
+        btn.onclick = function() {{
+            document.getElementById('selectedSeat').value = this.dataset.seat;
+            document.getElementById('fromStation').value = '{fs}';
+            document.getElementById('toStation').value = '{ts}';
+            bookingModal.show();
+        }}
+    }});
 
-        let name = prompt("👤 नाम:");
-        if(!name || name.trim() === "") return resetSeat(event.target, seatId);
+    function confirmBooking() {{
+        const seat = document.getElementById('selectedSeat').value;
+        const name = document.getElementById('passengerName').value.trim();
+        const mobile = document.getElementById('mobileNo').value.trim();
+        const from = document.getElementById('fromStation').value;
+        const to = document.getElementById('toStation').value;
+        const sid = document.getElementById('bookingSid').value;
+        const date = document.getElementById('bookingDate').value;
 
-        let mobile = prompt("📱 मोबाइल (10 अंक):");
-        if(!/^\d{{10}}$/.test(mobile)) return alert("❌ 10 अंक मोबाइल नंबर डालें"), resetSeat(event.target, seatId);
+        // ✅ VALIDATION
+        if(!name) return alert('❌ नाम डालें');
+        if(!/^\d{{10}}$/.test(mobile)) return alert('❌ 10 अंक मोबाइल नंबर');
+        if(from === to) return alert('❌ From और To अलग चुनें');
+
+        // Disable form during booking
+        document.querySelector('.modal-footer .btn-success').innerHTML = '⏳ Booking...';
+        document.querySelector('.modal-footer .btn-success').disabled = true;
 
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
-            body: JSON.stringify({{
-                sid: sid, seat: seatId, name: name.trim(), mobile: mobile,
-                from: fs, to: ts, date: d
-            }})
+            body: JSON.stringify({{sid, seat, name, mobile, from, to, date}})
         }})
         .then(r => r.json())
         .then(r => {{
+            bookingModal.hide();
             if(r.ok) {{
-                event.target.innerHTML = '✅';
-                alert('🎉 सीट ' + seatId + ' बुक हो गई | ₹' + r.fare);
-                setTimeout(() => location.reload(), 1500);
+                alert('🎉 सीट ' + seat + ' बुक हो गई! 💰 ₹' + r.fare);
+                location.reload();
             }} else {{
                 alert('❌ ' + r.error);
-                resetSeat(event.target, seatId);
+                // Reset seat button
+                const seatBtn = document.querySelector(`[data-seat="${{seat}}"]`);
+                if(seatBtn) seatBtn.disabled = false;
             }}
         }})
         .catch(() => {{
             alert('❌ नेटवर्क त्रुटि');
-            resetSeat(event.target, seatId);
+            bookingModal.hide();
+        }})
+        .finally(() => {{
+            // Reset form
+            document.getElementById('passengerName').value = '';
+            document.getElementById('mobileNo').value = '';
         }});
-    }}
-
-    function resetSeat(btn, seatId) {{
-        btn.disabled = false;
-        btn.innerHTML = seatId;
-        btn.className = 'btn btn-success seat';
     }}
     </script>'''
 
