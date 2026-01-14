@@ -2,10 +2,10 @@ import os, random
 from datetime import date
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, redirect
-from flask_socketio import SocketIO
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+from flask_socketio import SocketIO, join_room  # ← यह add करें
 import atexit
 
 # ================= APP =================
@@ -194,180 +194,178 @@ def on_disconnect():
     print("👋 Client disconnected")
 
 
+
 # ================= HTML =================
 BASE_HTML = """<html>
-<head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bus Booking India</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>
-.seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s ease;}
-.bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
-#map{height:400px;margin:20px 0;border-radius:10px}
-body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
-.card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
-</style>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bus Booking India</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        .seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s ease;}
+        .bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
+        #map{height:400px;margin:20px 0;border-radius:10px}
+        body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
+        .card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
+        .custom-div-icon {background: transparent; border: none; text-align: center;}
+    </style>
 </head>
 <body class="text-white">
 <div class="container py-5">
-<h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
-{{content|safe}}
-<div class="text-center mt-4">
-<a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
-<a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
-</div>
+    <h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
+    {{content|safe}}
+    <div class="text-center mt-4">
+        <a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
+        <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
+    </div>
 </div>
 
-<!-- 🔥 LIVE SOCKETIO SCRIPT -->
+<!-- 🔥 PERFECT MOBILE SOCKETIO SCRIPT -->
 <script>
-var socket = io({
-    transports: ['polling', 'websocket'],  // Polling FIRST for mobile
-    timeout: 20000,
-    forceNew: true,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    path: '/socket.io/'
-});
-
-socket.on('connect', function() {
-    console.log('✅ Socket Connected:', socket.id);
-    
-    // 🔥 ROOM JOIN - same schedule के सभी browsers connect होंगे
-    const roomName = `sid_${window.currentSid}_${window.currentDate}`;
-    socket.emit('join', {room: roomName});
-    console.log('🏠 Joined room:', roomName);
-});
-
-// Perfect seat matching
-socket.on("seat_update", data => {
-    console.log("🔴 LIVE UPDATE:", data);
-    
-    if(window.currentSid == data.sid && window.currentDate == data.date){
-        console.log("✅ MATCH - Updating seat", data.seat);
-        
-        // ALL seats check करें
-        document.querySelectorAll('.seat').forEach(seatBtn => {
-            const seatText = seatBtn.textContent.trim() || seatBtn.innerHTML.trim();
-            
-            if(seatText === data.seat && seatBtn.classList.contains('btn-success')){
-                seatBtn.className = 'btn btn-danger seat';
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = '<strong>X</strong>';
-                console.log("✅ COLOR CHANGED:", data.seat);
-            }
-        });
-    }
-});
-
-
-
-// 🚌 Live GPS Tracking
-socket.on("bus_location", d => {
-    if(window.map && d.lat && d.lng){
-        if(!window.busMarker){
-            window.busMarker = L.marker([d.lat,d.lng],{
-                icon:L.divIcon({className:'custom-div-icon',html:'🚌',iconSize:[40,40]})
-            }).addTo(window.map).bindPopup(`Bus ${d.sid || ''}`);
-        }else{
-            window.busMarker.setLatLng([d.lat,d.lng]);
-        }
-    }
-});
-
-// 🔥 LIVE SEAT UPDATES (Real-time Red)
-socket.on("seat_update", data => {
-    console.log("🔴 Live seat update:", data);
-    if(window.currentSid == data.sid && window.currentDate == data.date){
-        // ALL seats को check करें - GREEN + RED दोनों
-        document.querySelectorAll('.seat').forEach(seatBtn => {
-            const seatText = seatBtn.textContent.trim();
-            if(seatText == data.seat || seatText == 'X' || seatText == '✅'){
-                // Already booked - skip
-                return;
-            }
-            if(seatText == data.seat){
-                seatBtn.className = 'btn btn-danger seat';
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = '<strong>X</strong>';
-                console.log("✅ Seat RED:", data.seat);
-            }
-        });
-    }
-});
-
-function resetSeat(seatBtn, seatId) {
-    seatBtn.disabled = false;
-    seatBtn.className = 'btn btn-success seat';
-    seatBtn.innerHTML = seatId;
-}
-// 🎫 PERFECT BOOKING FUNCTION
-function bookSeat(seatId, fs, ts, d, sid){
-    let seatBtn = event ? event.target : document.activeElement;
-
-    // Temporarily disable button
-    seatBtn.disabled = true;
-    seatBtn.className = 'btn btn-warning seat';
-    seatBtn.innerHTML = '⏳';
-
-    let name = prompt("👤 नाम डालें:");
-    if(!name || name.trim() === ''){
-        seatBtn.disabled = false;
-        seatBtn.className = 'btn btn-success seat';
-        seatBtn.innerHTML = seatId;
-        return;
-    }
-
-    let mobile = prompt("📱 10 अंकों का मोबाइल:");
-    if(!mobile || mobile.trim() === ''){
-        alert("❌ मोबाइल नंबर जरूरी है");
-        seatBtn.disabled = false;
-        seatBtn.className = 'btn btn-success seat';
-        seatBtn.innerHTML = seatId;
-        return;
-    }
-
-    fetch("/book",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-            sid: sid, 
-            seat: seatId, 
-            name: name.trim(), 
-            mobile: mobile,
-            from: fs, 
-            to: ts, 
-            date: d
-        })
-    })
-    .then(r => r.json())
-    .then(r => {
-        if(r.ok){
-            alert("✅ " + r.msg);
-            seatBtn.className = 'btn btn-danger seat';
-            seatBtn.innerHTML = '✅';
-            setTimeout(() => location.reload(), 1500);
-        } else {
-            alert("❌ " + r.error);
-            resetSeat(seatBtn, seatId);
-        }
-    })
-    .catch(err=>{
-        console.error("Network error:", err);
-        alert("❌ Network error - कनेक्शन check करें");
-        seatBtn.disabled = false;
-        seatBtn.className = 'btn btn-success seat';
-        seatBtn.innerHTML = seatId;
+    // 🔥 MOBILE-OPTIMIZED SOCKET CONFIG
+    var socket = io({
+        transports: ['polling'],  // MOBILE के लिए polling only - 100% reliable
+        timeout: 30000,
+        forceNew: true,
+        reconnection: true,
+        reconnectionAttempts: 20,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
     });
-}
+
+    socket.on('connect', function() {
+        console.log('✅ Socket Connected:', socket.id);
+    });
+
+    socket.on('connect_error', function(error) {
+        console.error('❌ Socket Error:', error);
+    });
+
+    socket.on('disconnect', function() {
+        console.log('❌ Socket Disconnected');
+    });
+
+    // 🔥 ROOM JOIN - Page fully loaded के बाद
+    function joinRoom() {
+        if(window.currentSid && window.currentDate) {
+            const roomName = `sid_${window.currentSid}_${window.currentDate}`;
+            socket.emit('join', {room: roomName});
+            console.log('🏠 Joined room:', roomName);
+        }
+    }
+
+    // 🔥 SINGLE PERFECT SEAT UPDATE HANDLER
+    socket.on("seat_update", function(data) {
+        console.log("🔴 LIVE UPDATE RECEIVED:", data);
+
+        if(window.currentSid && window.currentDate && 
+           window.currentSid == data.sid && window.currentDate == data.date) {
+
+            console.log("✅ MATCH FOUND! Updating seat:", data.seat);
+
+            // सभी seats check करें
+            document.querySelectorAll('.seat').forEach(function(seatBtn) {
+                var seatText = seatBtn.textContent.trim() || seatBtn.innerHTML.trim();
+
+                // Exact match + green seat only
+                if(seatText == data.seat && seatBtn.classList.contains('btn-success')) {
+                    seatBtn.className = 'btn btn-danger seat';
+                    seatBtn.disabled = true;
+                    seatBtn.innerHTML = '<strong>X</strong>';
+                    console.log("✅ COLOR CHANGED TO RED:", data.seat);
+                }
+            });
+        } else {
+            console.log("❌ NO MATCH - Page:", window.currentSid, window.currentDate);
+            console.log("❌ NO MATCH - Data:", data.sid, data.date);
+        }
+    });
+
+    // 🚌 Live GPS Tracking
+    socket.on("bus_location", function(d) {
+        if(window.map && d.lat && d.lng) {
+            if(!window.busMarker) {
+                window.busMarker = L.marker([d.lat, d.lng], {
+                    icon: L.divIcon({
+                        className: 'custom-div-icon',
+                        html: '🚌',
+                        iconSize: [40, 40]
+                    })
+                }).addTo(window.map).bindPopup(`Bus ${d.sid || ''}`);
+            } else {
+                window.busMarker.setLatLng([d.lat, d.lng]);
+            }
+        }
+    });
+
+    // Utility function
+    function resetSeat(seatBtn, seatId) {
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
+    }
+
+    // 🎫 PERFECT BOOKING FUNCTION
+    function bookSeat(seatId, fs, ts, d, sid) {
+        let seatBtn = event ? event.target : document.activeElement;
+
+        seatBtn.disabled = true;
+        seatBtn.className = 'btn btn-warning seat';
+        seatBtn.innerHTML = '⏳';
+
+        let name = prompt("👤 नाम डालें:");
+        if(!name || name.trim() === '') {
+            resetSeat(seatBtn, seatId);
+            return;
+        }
+
+        let mobile = prompt("📱 10 अंकों का मोबाइल:");
+        if(!mobile || mobile.trim() === '') {
+            alert("❌ मोबाइल नंबर जरूरी है");
+            resetSeat(seatBtn, seatId);
+            return;
+        }
+
+        fetch("/book", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                sid: sid, 
+                seat: seatId, 
+                name: name.trim(), 
+                mobile: mobile,
+                from: fs, 
+                to: ts, 
+                date: d
+            })
+        })
+        .then(r => r.json())
+        .then(r => {
+            if(r.ok) {
+                alert("✅ " + r.msg);
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.innerHTML = '✅';
+
+                // 2 सेकंड बाद refresh
+                setTimeout(() => location.reload(), 2000);
+            } else {
+                alert("❌ " + r.error);
+                resetSeat(seatBtn, seatId);
+            }
+        })
+        .catch(err => {
+            console.error("Network error:", err);
+            alert("❌ Network error - कनेक्शन check करें");
+            resetSeat(seatBtn, seatId);
+        });
+    }
 </script>
 </body>
-</html>
+</html>"""
 
-"""
 
 # ================= ROUTES =================
 
@@ -492,15 +490,19 @@ def seats(sid):  # safe_db हटाएं
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     <script>
-        // 🔥 ये 2 lines सबसे important हैं!
         window.currentSid = {sid};
         window.currentDate = '{d}';
+        console.log("🚀 LOADED sid:", {sid}, "date:", '{d}');
 
+        // Map setup
         window.map = L.map('map').setView([26.9124, 75.7873], 7);
         L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
         window.busMarker = L.marker([26.9124,75.7873], {{
             icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
         }}).addTo(map).bindPopup("Live Bus Location");
+
+        // 🔥 यह line add करें - ROOM JOIN!
+        setTimeout(joinRoom, 1000);
     </script>
     """
     return render_template_string(BASE_HTML, content=html)
