@@ -532,7 +532,7 @@ def book():  # safe_db हटाएं temporarily
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        }, broadcast=True)
+        }, include_self=False)
 
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
 
