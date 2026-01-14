@@ -2,10 +2,10 @@ import os, random
 from datetime import date
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, redirect
+from flask_socketio import SocketIO
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
-from flask_socketio import SocketIO, join_room  # ← यह add करें
 import atexit
 
 # ================= APP =================
@@ -183,182 +183,153 @@ def safe_db(func):
 def gps(data):
     socketio.emit("bus_location", data)
 
-@socketio.on('join')
-def on_join(data):
-    room = data['room']
-    join_room(room)
-    print(f"👤 Client joined room: {room}")
-
-@socketio.on('disconnect')
-def on_disconnect():
-    print("👋 Client disconnected")
-
-
-
 # ================= HTML =================
 BASE_HTML = """<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Bus Booking India</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-        .seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s ease;}
-        .bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
-        #map{height:400px;margin:20px 0;border-radius:10px}
-        body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
-        .card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
-        .custom-div-icon {background: transparent; border: none; text-align: center;}
-    </style>
+<head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bus Booking India</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+.seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s ease;}
+.bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
+#map{height:400px;margin:20px 0;border-radius:10px}
+body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
+.card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
+</style>
 </head>
 <body class="text-white">
 <div class="container py-5">
-    <h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
-    {{content|safe}}
-    <div class="text-center mt-4">
-        <a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
-        <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
-    </div>
+<h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
+{{content|safe}}
+<div class="text-center mt-4">
+<a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
+<a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a>
+</div>
 </div>
 
-<!-- 🔥 PERFECT MOBILE SOCKETIO SCRIPT -->
+<!-- 🔥 LIVE SOCKETIO SCRIPT -->
 <script>
-    // 🔥 MOBILE-OPTIMIZED SOCKET CONFIG
-    var socket = io({
-        transports: ['polling'],  // MOBILE के लिए polling only - 100% reliable
-        timeout: 30000,
-        forceNew: true,
-        reconnection: true,
-        reconnectionAttempts: 20,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000
-    });
+var socket = io({
+    transports: ['websocket', 'polling'],  // Mobile के लिए जरूरी
+    timeout: 10000,
+    reconnection: true,
+    reconnectionAttempts: 5,
+    reconnectionDelay: 1000
+});
 
-    socket.on('connect', function() {
-        console.log('✅ Socket Connected:', socket.id);
-    });
+socket.on('connect', function() {
+    console.log('✅ Socket Connected:', socket.id);
+});
 
-    socket.on('connect_error', function(error) {
-        console.error('❌ Socket Error:', error);
-    });
+socket.on('disconnect', function() {
+    console.log('❌ Socket Disconnected');
+});
 
-    socket.on('disconnect', function() {
-        console.log('❌ Socket Disconnected');
-    });
-
-    // 🔥 ROOM JOIN - Page fully loaded के बाद
-    function joinRoom() {
-        if(window.currentSid && window.currentDate) {
-            const roomName = `sid_${window.currentSid}_${window.currentDate}`;
-            socket.emit('join', {room: roomName});
-            console.log('🏠 Joined room:', roomName);
-        }
-    }
-
-    // 🔥 SINGLE PERFECT SEAT UPDATE HANDLER
-    // ✅ FINAL & CORRECT SEAT UPDATE HANDLER
-socket.on("seat_update", function(data) {
-    console.log("🔴 LIVE UPDATE:", data);
-
-    if (window.currentSid == data.sid && window.currentDate == data.date) {
-
-        const btn = document.querySelector(
-            `.seat[data-seat='${data.seat}']`
-        );
-
-        if (btn) {
-            btn.className = 'btn btn-danger seat';
-            btn.disabled = true;
-            btn.innerHTML = '<strong>X</strong>';
-            console.log("✅ Seat RED for everyone:", data.seat);
+// 🚌 Live GPS Tracking
+socket.on("bus_location", d => {
+    if(window.map && d.lat && d.lng){
+        if(!window.busMarker){
+            window.busMarker = L.marker([d.lat,d.lng],{
+                icon:L.divIcon({className:'custom-div-icon',html:'🚌',iconSize:[40,40]})
+            }).addTo(window.map).bindPopup(`Bus ${d.sid || ''}`);
+        }else{
+            window.busMarker.setLatLng([d.lat,d.lng]);
         }
     }
 });
 
-    // 🚌 Live GPS Tracking
-    socket.on("bus_location", function(d) {
-        if(window.map && d.lat && d.lng) {
-            if(!window.busMarker) {
-                window.busMarker = L.marker([d.lat, d.lng], {
-                    icon: L.divIcon({
-                        className: 'custom-div-icon',
-                        html: '🚌',
-                        iconSize: [40, 40]
-                    })
-                }).addTo(window.map).bindPopup(`Bus ${d.sid || ''}`);
-            } else {
-                window.busMarker.setLatLng([d.lat, d.lng]);
+// 🔥 LIVE SEAT UPDATES (Real-time Red)
+socket.on("seat_update", data => {
+    console.log("🔴 Live seat update:", data);
+    if(window.currentSid == data.sid && window.currentDate == data.date){
+        // ALL seats को check करें - GREEN + RED दोनों
+        document.querySelectorAll('.seat').forEach(seatBtn => {
+            const seatText = seatBtn.textContent.trim();
+            if(seatText == data.seat || seatText == 'X' || seatText == '✅'){
+                // Already booked - skip
+                return;
             }
-        }
-    });
-
-    // Utility function
-    function resetSeat(seatBtn, seatId) {
-        seatBtn.disabled = false;
-        seatBtn.className = 'btn btn-success seat';
-        seatBtn.innerHTML = seatId;
+            if(seatText == data.seat){
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = '<strong>X</strong>';
+                console.log("✅ Seat RED:", data.seat);
+            }
+        });
     }
+});
 
-    // 🎫 PERFECT BOOKING FUNCTION
-    function bookSeat(seatBtn, seatId, fs, ts, d, sid) {
-    console.log("🟡 bookSeat called:", seatId, sid, d);
+function resetSeat(seatBtn, seatId) {
+    seatBtn.disabled = false;
+    seatBtn.className = 'btn btn-success seat';
+    seatBtn.innerHTML = seatId;
+}
+// 🎫 PERFECT BOOKING FUNCTION
+function bookSeat(seatId, fs, ts, d, sid){
+    let seatBtn = event ? event.target : document.activeElement;
 
+    // Temporarily disable button
     seatBtn.disabled = true;
     seatBtn.className = 'btn btn-warning seat';
     seatBtn.innerHTML = '⏳';
 
     let name = prompt("👤 नाम डालें:");
-    if (!name) {
-        resetSeat(seatBtn, seatId);
+    if(!name || name.trim() === ''){
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
         return;
     }
 
     let mobile = prompt("📱 10 अंकों का मोबाइल:");
-    mobile = mobile.trim();
-    if (!/^\d{10}$/.test(mobile)) {
-        alert("❌ गलत मोबाइल नंबर");
-        resetSeat(seatBtn, seatId);
+    if(!mobile || mobile.trim() === ''){
+        alert("❌ मोबाइल नंबर जरूरी है");
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
         return;
     }
 
-    console.log("📡 Sending booking request...");
-
-    fetch("/book", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-            sid: sid,
-            seat: seatId,
-            name: name,
+    fetch("/book",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            sid: sid, 
+            seat: seatId, 
+            name: name.trim(), 
             mobile: mobile,
-            from: fs,
-            to: ts,
+            from: fs, 
+            to: ts, 
             date: d
         })
     })
     .then(r => r.json())
     .then(r => {
-        if (r.ok) {
-            alert(r.msg);
+        if(r.ok){
+            alert("✅ " + r.msg);
             seatBtn.className = 'btn btn-danger seat';
             seatBtn.innerHTML = '✅';
+            setTimeout(() => location.reload(), 1500);
         } else {
-            alert(r.error);
+            alert("❌ " + r.error);
             resetSeat(seatBtn, seatId);
         }
     })
-    .catch(err => {
-        console.error(err);
-        resetSeat(seatBtn, seatId);
+    .catch(err=>{
+        console.error("Network error:", err);
+        alert("❌ Network error - कनेक्शन check करें");
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
     });
 }
-
 </script>
 </body>
-</html>"""
+</html>
 
+"""
 
 # ================= ROUTES =================
 
@@ -464,30 +435,17 @@ def seats(sid):  # safe_db हटाएं
         booked_rows = cur.fetchall()
         booked = [int(row['seat_number']) for row in booked_rows]
         print(f"📋 Booked seats ({sid}, {d}): {booked}")
-
     finally:
         if conn:
             close_db(conn)
 
+
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked:  # अब int comparison सही होगा
-            seat_buttons += f'''
-            <button 
-                class="btn btn-danger seat"
-                data-seat="{i}"
-                disabled>X
-            </button>
-            '''
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
-            seat_buttons += f'''
-            <button 
-            class="btn btn-success seat"
-            data-seat="{i}"
-            onclick="bookSeat(this, {i}, '{fs}', '{ts}', '{d}', {sid})">
-            {i}
-            </button>
-            '''
+            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
 
     html = f"""
     <div class="text-center">
@@ -496,19 +454,15 @@ def seats(sid):  # safe_db हटाएं
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     <script>
+        // 🔥 ये 2 lines सबसे important हैं!
         window.currentSid = {sid};
         window.currentDate = '{d}';
-        console.log("🚀 LOADED sid:", {sid}, "date:", '{d}');
 
-        // Map setup
         window.map = L.map('map').setView([26.9124, 75.7873], 7);
         L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
         window.busMarker = L.marker([26.9124,75.7873], {{
             icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
         }}).addTo(map).bindPopup("Live Bus Location");
-
-        // 🔥 यह line add करें - ROOM JOIN!
-        setTimeout(joinRoom, 1000);
     </script>
     """
     return render_template_string(BASE_HTML, content=html)
@@ -555,68 +509,59 @@ def driver(sid):
 
 
 @app.route("/book", methods=["POST"])
-def book():
-    data = request.get_json(force=True)   # 🔥 IMPORTANT
+def book():  # safe_db हटाएं temporarily
+    data = request.get_json()
 
-    if not data:
-        return jsonify({"ok": False, "error": "❌ No data received"}), 400
-
-    sid = int(data["sid"])
-    seat_no = int(data["seat"])
-
-    if not data.get("name") or not data.get("mobile"):
+    if not data or not all(k in data for k in ['sid', 'seat', 'name', 'mobile', 'date']):
         return jsonify({"ok": False, "error": "❌ सभी fields भरें"}), 400
 
-    if not data["mobile"].isdigit() or len(data["mobile"]) != 10:
+    if len(str(data['mobile'])) != 10 or not str(data['mobile']).isdigit():
         return jsonify({"ok": False, "error": "❌ 10 अंकों का मोबाइल"}), 400
 
     conn = None
     try:
-        print(f"🔍 Booking: Seat {seat_no}")
+        print(f"🔍 Booking attempt: Seat {data['seat']}")
         conn, cur = get_db()
 
+        # Duplicate check
         cur.execute("""
-            SELECT 1 FROM seat_bookings
+            SELECT id FROM seat_bookings 
             WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
-        """, (sid, seat_no, data["date"]))
+        """, (int(data["sid"]), int(data["seat"]), data["date"]))
 
         if cur.fetchone():
-            return jsonify({"ok": False, "error": f"❌ Seat {seat_no} पहले से बुक है"}), 409
+            print(f"❌ Seat {data['seat']} already exists")
+            return jsonify({"ok": False, "error": f"❌ Seat {data['seat']} पहले से बुक है"}), 409
 
+        # Booking save
         fare = random.randint(250, 450)
         cur.execute("""
-            INSERT INTO seat_bookings
-            (schedule_id, seat_number, passenger_name, mobile,
-             from_station, to_station, travel_date, fare, status)
+            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
+                mobile, from_station, to_station, travel_date, fare, status)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
-        """, (
-            sid, seat_no, data["name"], data["mobile"],
-            data.get("from"), data.get("to"),
-            data["date"], fare
-        ))
-
+        """, (int(data["sid"]), int(data["seat"]), data["name"], data["mobile"],
+              data.get("from", "बीकानेर"), data.get("to", "जयपुर"),
+              data["date"], fare))
         conn.commit()
+        print(f"✅ Seat {data['seat']} BOOKED | ₹{fare}")
 
-        room = f"sid_{sid}_{data['date']}"
+        # 🔥 LIVE UPDATE - booking के बाद emit करें
         socketio.emit("seat_update", {
-            "sid": sid,
-            "seat": str(seat_no),
+            "sid": int(data["sid"]),
+            "seat": str(data["seat"]),
             "date": data["date"]
-        }, room=room, include_self=True)
+        })
 
-        print(f"✅ Seat {seat_no} BOOKED")
-
-        return jsonify({"ok": True, "msg": f"Seat {seat_no} बुक हो गई ₹{fare}"})
+        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
 
     except Exception as e:
         if conn:
             conn.rollback()
-        print("❌ Booking error:", e)
-        return jsonify({"ok": False, "error": str(e)}), 500
+        print(f"❌ Booking error: {e}")
+        return jsonify({"ok": False, "error": f"❌ Booking failed: {str(e)}"}), 500
     finally:
         if conn:
             close_db(conn)
-
 
 
 # ================= RUN =================
