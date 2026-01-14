@@ -232,17 +232,23 @@ socket.on("bus_location", d => {
 socket.on("seat_update", data => {
     console.log("🔴 Live seat update:", data);
     if(window.currentSid == data.sid && window.currentDate == data.date){
-        // ✅ ALL GREEN SEATS को target करें (exact seat number match)
-        document.querySelectorAll('.seat.btn-success').forEach(seatBtn => {
-            if(seatBtn.textContent.trim() == data.seat){
+        // ALL seats को check करें - GREEN + RED दोनों
+        document.querySelectorAll('.seat').forEach(seatBtn => {
+            const seatText = seatBtn.textContent.trim();
+            if(seatText == data.seat || seatText == 'X' || seatText == '✅'){
+                // Already booked - skip
+                return;
+            }
+            if(seatText == data.seat){
                 seatBtn.className = 'btn btn-danger seat';
                 seatBtn.disabled = true;
                 seatBtn.innerHTML = '<strong>X</strong>';
-                console.log("✅ Live RED:", data.seat);
+                console.log("✅ Seat RED:", data.seat);
             }
         });
     }
 });
+
 function resetSeat(seatBtn, seatId) {
     seatBtn.disabled = false;
     seatBtn.className = 'btn btn-success seat';
@@ -532,7 +538,7 @@ def book():  # safe_db हटाएं temporarily
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        }, include_self=False)
+        })
 
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
 
