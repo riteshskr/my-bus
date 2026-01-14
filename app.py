@@ -258,31 +258,24 @@ BASE_HTML = """<html>
     }
 
     // 🔥 SINGLE PERFECT SEAT UPDATE HANDLER
-    socket.on("seat_update", function(data) {
-        console.log("🔴 LIVE UPDATE RECEIVED:", data);
+    // ✅ FINAL & CORRECT SEAT UPDATE HANDLER
+socket.on("seat_update", function(data) {
+    console.log("🔴 LIVE UPDATE:", data);
 
-        if(window.currentSid && window.currentDate && 
-           window.currentSid == data.sid && window.currentDate == data.date) {
+    if (window.currentSid == data.sid && window.currentDate == data.date) {
 
-            console.log("✅ MATCH FOUND! Updating seat:", data.seat);
+        const btn = document.querySelector(
+            `.seat[data-seat='${data.seat}']`
+        );
 
-            // सभी seats check करें
-            document.querySelectorAll('.seat').forEach(function(seatBtn) {
-                var seatText = seatBtn.textContent.trim() || seatBtn.innerHTML.trim();
-
-                // Exact match + green seat only
-                if(seatText == data.seat && seatBtn.classList.contains('btn-success')) {
-                    seatBtn.className = 'btn btn-danger seat';
-                    seatBtn.disabled = true;
-                    seatBtn.innerHTML = '<strong>X</strong>';
-                    console.log("✅ COLOR CHANGED TO RED:", data.seat);
-                }
-            });
-        } else {
-            console.log("❌ NO MATCH - Page:", window.currentSid, window.currentDate);
-            console.log("❌ NO MATCH - Data:", data.sid, data.date);
+        if (btn) {
+            btn.className = 'btn btn-danger seat';
+            btn.disabled = true;
+            btn.innerHTML = '<strong>X</strong>';
+            console.log("✅ Seat RED for everyone:", data.seat);
         }
-    });
+    }
+});
 
     // 🚌 Live GPS Tracking
     socket.on("bus_location", function(d) {
@@ -310,7 +303,12 @@ BASE_HTML = """<html>
 
     // 🎫 PERFECT BOOKING FUNCTION
     function bookSeat(seatId, fs, ts, d, sid) {
-        let seatBtn = event ? event.target : document.activeElement;
+        <button
+ class="btn btn-success seat"
+ data-seat="{i}"
+ onclick="bookSeat(this, {i}, '{fs}', '{ts}', '{d}', {sid})">
+ {i}
+</button>
 
         seatBtn.disabled = true;
         seatBtn.className = 'btn btn-warning seat';
@@ -350,7 +348,7 @@ BASE_HTML = """<html>
                 seatBtn.innerHTML = '✅';
 
                 // 2 सेकंड बाद refresh
-                setTimeout(() => location.reload(), 2000);
+                
             } else {
                 alert("❌ " + r.error);
                 resetSeat(seatBtn, seatId);
@@ -479,9 +477,22 @@ def seats(sid):  # safe_db हटाएं
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked:  # अब int comparison सही होगा
-            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
+            seat_buttons += f'''
+            <button 
+                class="btn btn-danger seat"
+                data-seat="{i}"
+                disabled>X
+            </button>
+            '''
         else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
+            seat_buttons += f'''
+            <button 
+                class="btn btn-success seat"
+                data-seat="{i}"
+                onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
+                {i}
+            </button>
+            '''
 
     html = f"""
     <div class="text-center">
@@ -590,7 +601,7 @@ def book():  # safe_db हटाएं temporarily
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        }, room=room_name)
+        }, room=room_name,include_self=True )
 
         print(f"📡 EMITTED to room: {room_name}")
 
