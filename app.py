@@ -419,7 +419,7 @@ def select(sid):
 
 
 @app.route("/seats/<int:sid>")
-def seats(sid):  # safe_db हटाएं
+def seats(sid):
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
@@ -434,15 +434,14 @@ def seats(sid):  # safe_db हटाएं
         """, (sid, d))
         booked_rows = cur.fetchall()
         booked = [int(row['seat_number']) for row in booked_rows]
-        print(f"📋 Booked seats ({sid}, {d}): {booked}")
     finally:
         if conn:
             close_db(conn)
 
-
+    # Seats buttons
     seat_buttons = ""
     for i in range(1, 41):
-        if i in booked:  # अब int comparison सही होगा
+        if i in booked:
             seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
@@ -453,19 +452,109 @@ def seats(sid):  # safe_db हटाएं
         <div id="map"></div>
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
-    <script>
-        // 🔥 ये 2 lines सबसे important हैं!
-        window.currentSid = {sid};
-        window.currentDate = '{d}';
 
-        window.map = L.map('map').setView([26.9124, 75.7873], 7);
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
-        window.busMarker = L.marker([26.9124,75.7873], {{
-            icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
-        }}).addTo(map).bindPopup("Live Bus Location");
+    <script>
+    // Current bus info
+    window.currentSid = {sid};
+    window.currentDate = '{d}';
+
+    // Leaflet Map
+    window.map = L.map('map').setView([26.9124, 75.7873], 7);
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{ maxZoom: 18 }}).addTo(map);
+    window.busMarker = L.marker([26.9124, 75.7873], {{
+        icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
+    }}).addTo(map).bindPopup("Live Bus Location");
+
+    // SocketIO connection
+    var socket = io({{
+        transports:['polling', 'websocket'],
+        reconnection:true,
+        timeout:10000
+    }});
+
+    socket.on('connect', () => {{
+        console.log("✅ Socket connected:", socket.id);
+        const room = "sid_" + window.currentSid + "_" + window.currentDate;
+        socket.emit("join", {{ room: room }});
+        console.log("🏠 Joined room:", room);
+    }});
+
+    // Live seat update
+    socket.on("seat_update", data => {{
+        if(window.currentSid == data.sid && window.currentDate == data.date){{
+            const seatBtn = document.querySelector(`.seat[data-seat='${{data.seat}}']`);
+            if(seatBtn){{
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = 'X';
+            }}
+        }}
+    }});
+
+    // Live GPS update
+    socket.on("bus_location", d => {{
+        if(window.map && d.lat && d.lng){{
+            if(!window.busMarker){{
+                window.busMarker = L.marker([d.lat,d.lng], {{
+                    icon: L.divIcon({{className:'custom-div-icon',html:'🚌',iconSize:[40,40]}})
+                }}).addTo(window.map).bindPopup(`Bus ${{d.sid || ''}}`);
+            }} else {{
+                window.busMarker.setLatLng([d.lat,d.lng]);
+            }}
+        }}
+    }});
+
+    // Reset seat button
+    function resetSeat(seatBtn, seatId){{
+        seatBtn.disabled = false;
+        seatBtn.className = 'btn btn-success seat';
+        seatBtn.innerHTML = seatId;
+    }}
+
+    // Book seat function
+    function bookSeat(seatId, fs, ts, d, sid){{
+        let seatBtn = event ? event.target : document.activeElement;
+        seatBtn.disabled = true;
+        seatBtn.className = 'btn btn-warning seat';
+        seatBtn.innerHTML = '⏳';
+
+        let name = prompt("👤 नाम डालें:");
+        if(!name || name.trim() === '') return resetSeat(seatBtn, seatId);
+
+        let mobile = prompt("📱 10 अंकों का मोबाइल:");
+        if(!mobile || !/^\d{{10}}$/.test(mobile.trim())){{
+            alert("❌ मोबाइल सही नहीं है");
+            return resetSeat(seatBtn, seatId);
+        }}
+
+        fetch("/book", {{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body: JSON.stringify({{
+                sid: sid, seat: seatId, name: name.trim(), mobile: mobile.trim(),
+                from: fs, to: ts, date: d
+            }})
+        }}).then(r=>r.json()).then(r=>{{
+            if(r.ok){{
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.innerHTML = '✅';
+                alert(r.msg);
+                setTimeout(()=>location.reload(), 1500);
+            }} else {{
+                alert("❌ " + r.error);
+                resetSeat(seatBtn, seatId);
+            }}
+        }}).catch(err=>{{
+            console.error(err);
+            alert("❌ Network error");
+            resetSeat(seatBtn, seatId);
+        }});
+    }}
     </script>
     """
+
     return render_template_string(BASE_HTML, content=html)
+
 
 
 @app.route("/driver/<int:sid>")
