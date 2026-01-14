@@ -528,32 +528,31 @@ def book():  # safe_db हटाएं temporarily
 
     conn = None
     try:
-        print(f"🔍 Booking attempt: Seat {data['seat']}")
+        print(f"🔍 Booking: Seat {data['seat']}")
         conn, cur = get_db()
 
         # Duplicate check
         cur.execute("""
-            SELECT id FROM seat_bookings 
-            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
-        """, (int(data["sid"]), int(data["seat"]), data["date"]))
+                   SELECT id FROM seat_bookings 
+                   WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
+               """, (int(data["sid"]), int(data["seat"]), data["date"]))
 
         if cur.fetchone():
-            print(f"❌ Seat {data['seat']} already exists")
             return jsonify({"ok": False, "error": f"❌ Seat {data['seat']} पहले से बुक है"}), 409
 
         # Booking save
         fare = random.randint(250, 450)
         cur.execute("""
-            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
-                mobile, from_station, to_station, travel_date, fare, status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
-        """, (int(data["sid"]), int(data["seat"]), data["name"], data["mobile"],
-              data.get("from", "बीकानेर"), data.get("to", "जयपुर"),
-              data["date"], fare))
+                   INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
+                       mobile, from_station, to_station, travel_date, fare, status)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
+               """, (int(data["sid"]), int(data["seat"]), data["name"], data["mobile"],
+                     data.get("from", "बीकानेर"), data.get("to", "जयपुर"),
+                     data["date"], fare))
         conn.commit()
         print(f"✅ Seat {data['seat']} BOOKED | ₹{fare}")
 
-        # 🔥 LIVE UPDATE - booking के बाद emit करें
+        # 🔥 BULLETPROOF EMIT - Multiple formats
         socketio.emit("seat_update", {
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
