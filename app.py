@@ -314,81 +314,105 @@ def seats(sid):
     # ✅ COMPLETE WORKING SCRIPT - कोई error नहीं!
     script = f'''
     <script>
-    alert("🔥 Seats Page Loaded!");  // यह alert पहले आएगा
-
-    // Global variables
+    // NO console.log - silent loading
     window.sid = {sid};
     window.fs = "{fs}";
     window.ts = "{ts}";
+    window.date = "{d}";
 
-    // ⭐⭐⭐ ULTRA SIMPLE - सीधे onclick हर button में
+    // ✅ QUIET Socket connection (no messages)
+    const socket = io({{
+        transports: ["websocket", "polling"],
+        reconnection: true,
+        timeout: 10000
+    }});
+
+    // ⭐ CLICK HANDLER - सीधा काम करेगा
     document.addEventListener("click", function(e) {{
-        console.log("CLICK DETECTED:", e.target);
-
-        // हर seat button check करें
-        if(e.target.classList.contains("seat") && !e.target.disabled) {{
-            let seatId = e.target.getAttribute("data-seat");
-            console.log("✅ SEAT ID:", seatId);
-
-            if(seatId) {{
-                bookSeat(parseInt(seatId), e.target);
-            }}
+        if(e.target.classList.contains("seat") && 
+           e.target.getAttribute("data-seat") && 
+           !e.target.disabled) {{
+            const seatId = parseInt(e.target.getAttribute("data-seat"));
+            bookSeat(seatId, e.target);
         }}
     }});
 
-    function bookSeat(seat, btn) {{
-        console.log("🎯 Booking Seat:", seat);
-
-        btn.style.backgroundColor = "#ffc107";
-        btn.innerHTML = "⏳";
+    // ⭐ BOOKING FUNCTION
+    function bookSeat(seatId, btn) {{
         btn.disabled = true;
+        btn.innerHTML = "⏳";
+        btn.className = "btn btn-warning seat";
 
-        let name = prompt("👤 नाम:");
-        if(!name) {{
-            btn.innerHTML = seat;
-            btn.style.backgroundColor = "#198754";
-            btn.disabled = false;
+        let name = prompt("👤 नाम डालें:");
+        if(!name || !name.trim()) {{
+            resetSeat(btn, seatId);
             return;
         }}
 
-        let phone = prompt("📱 10 digit mobile:");
-        if(!phone || phone.length != 10 || isNaN(phone)) {{
-            alert("❌ Valid 10 digit mobile number!");
-            btn.innerHTML = seat;
-            btn.style.backgroundColor = "#198754";
-            btn.disabled = false;
+        let mobile = prompt("📱 मोबाइल (10 अंक):");
+        if(!/^[0-9]{{10}}$/.test(mobile)) {{
+            alert("❌ 10 अंक मोबाइल डालें!");
+            resetSeat(btn, seatId);
             return;
         }}
 
-        // API call
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{
                 sid: window.sid,
-                seat: seat,
-                name: name,
-                mobile: phone,
+                seat: seatId,
+                name: name.trim(),
+                mobile: mobile,
                 from: window.fs,
                 to: window.ts,
-                date: "{d}"
+                date: window.date
             }})
         }})
-        .then(r=>r.json())
-        .then(data=> {{
-            if(data.ok) {{
+        .then(r => r.json())
+        .then(r => {{
+            if(r.ok) {{
                 btn.innerHTML = "✅";
-                btn.style.backgroundColor = "#dc3545";
-                alert("🎉 Seat " + seat + " booked! ₹" + data.fare);
-                setTimeout(()=>location.reload(), 1000);
+                btn.className = "btn btn-success seat";
+                // ✅ LIVE UPDATE सभी clients को
+                socket.emit("seat_update", {{
+                    sid: window.sid,
+                    seat: seatId,
+                    date: window.date
+                }});
+                setTimeout(() => location.reload(), 1000);
             }} else {{
-                alert("❌ " + data.error);
-                btn.innerHTML = seat;
-                btn.style.backgroundColor = "#198754";
-                btn.disabled = false;
+                alert("❌ " + r.error);
+                resetSeat(btn, seatId);
             }}
+        }})
+        .catch(() => {{
+            alert("❌ Network Error");
+            resetSeat(btn, seatId);
         }});
     }}
+
+    function resetSeat(btn, seatId) {{
+        btn.disabled = false;
+        btn.innerHTML = seatId;
+        btn.className = "btn btn-success seat";
+    }}
+
+    // ✅ LIVE UPDATE HANDLER - दूसरे tab में भी update
+    socket.on("seat_update", function(data) {{
+        if(window.sid == data.sid && window.date == data.date) {{
+            const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
+            if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML != "✅") {{
+                seatBtn.className = "btn btn-danger seat";
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = "X";
+                const count = document.getElementById("availableCount");
+                if(count) {{
+                    count.textContent = parseInt(count.textContent) - 1;
+                }}
+            }}
+        }}
+    }});
     </script>
     '''
 
@@ -399,7 +423,6 @@ def seats(sid):
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
     {script}
-    '''
 
     return render_template_string(BASE_HTML, content=html)
 
