@@ -75,6 +75,7 @@ def init_db():
             fare INT, 
             created_at TIMESTAMP DEFAULT NOW()
         )""")
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS route_stations (
             id SERIAL PRIMARY KEY, 
@@ -82,6 +83,19 @@ def init_db():
             station_name VARCHAR(50), 
             station_order INT
         )""")
+        cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint 
+                WHERE conname = 'unique_seat_booking'
+            ) THEN
+                ALTER TABLE seat_bookings
+                ADD CONSTRAINT unique_seat_booking
+                UNIQUE (schedule_id, seat_number, travel_date);
+            END IF;
+        END$$;
+        """)
         conn.commit()
 
         # Insert default routes if empty
@@ -508,7 +522,7 @@ def book():
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
     except Exception as e:
         conn.rollback()
-        return jsonify({"ok": False, "error": f"❌ Booking failed"}), 500
+        return jsonify({"ok": False, "error": "❌ Seat पहले से बुक है"}), 409
     finally:
         close_db(conn)
 
