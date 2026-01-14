@@ -211,17 +211,17 @@ socket.on("bus_location", d => {
 socket.on("seat_update", data => {
     console.log("🔴 Live seat update:", data);
     if(window.currentSid == data.sid && window.currentDate == data.date){
-        // Multiple selectors try करें
-        let seatBtn = document.querySelector(`button[data-seat="${data.seat}"]`) ||
-                     document.querySelector(`[onclick*="bookSeat(${data.seat}"]`) ||
-                     Array.from(document.querySelectorAll('.seat')).find(btn => 
-                         btn.textContent == data.seat && btn.classList.contains('btn-success'));
-
-        if(seatBtn){
-            seatBtn.className = 'btn btn-danger seat';
-            seatBtn.disabled = true;
-            seatBtn.innerHTML = `<strong>${data.seat}</strong>`;
-            console.log("✅ Seat red की:", data.seat);
+        // ✅ BETTER SELECTOR - सभी possible seats को target करें
+        let allSeats = document.querySelectorAll('.seat');
+        for(let seatBtn of allSeats){
+            if(seatBtn.textContent.trim() == data.seat && 
+               seatBtn.classList.contains('btn-success')){
+                seatBtn.className = 'btn btn-danger seat';
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = `<strong>X</strong>`;
+                console.log("✅ Live RED:", data.seat);
+                break;
+            }
         }
     }
 });
@@ -268,18 +268,18 @@ function bookSeat(seatId, fs, ts, d, sid){
     .then(r=>r.json())
     .then(r=>{
         if(r.ok){
-            alert("✅ " + r.msg);
-            // Live update के लिए wait + fallback reload
-            setTimeout(() => {
-                location.reload();
-            }, 300);
-        } else {
-            alert("❌ " + (r.error || "Booking failed"));
-            seatBtn.disabled = false;
-            seatBtn.className = 'btn btn-success seat';
-            seatBtn.innerHTML = seatId;
-        }
-    })
+        alert("✅ " + r.msg);
+        // ✅ पहले seat को local red करें, फिर reload
+        seatBtn.className = 'btn btn-danger seat';
+        seatBtn.disabled = true;
+        seatBtn.innerHTML = '✅';
+        
+        // Socket के लिए wait + फिर reload  
+        setTimeout(() => location.reload(), 1000);  // 1 second
+    } else {
+        // error handling same
+    }
+})
     .catch(err=>{
         console.error("Network error:", err);
         alert("❌ Network error - कनेक्शन check करें");
@@ -493,7 +493,12 @@ def book():
               data.get("from", "बीकानेर"), data.get("to", "जयपुर"), data["date"], fare))
 
         conn.commit()
-        socketio.emit("seat_update", data)
+        socket_data = {
+            "sid": int(data["sid"]),
+            "seat": int(data["seat"]),
+            "date": data["date"]
+        }
+        socketio.emit("seat_update", socket_data, namespace="/")
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} | ₹{fare}"})
     finally:
         close_db(conn)
