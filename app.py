@@ -212,20 +212,28 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 <!-- 🔥 LIVE SOCKETIO SCRIPT -->
 <script>
 var socket = io({
-    transports: ['websocket', 'polling'],  // Mobile के लिए जरूरी
-    timeout: 10000,
+    transports: ['polling', 'websocket'],  // Polling FIRST for mobile
+    timeout: 20000,
+    forceNew: true,
     reconnection: true,
-    reconnectionAttempts: 5,
-    reconnectionDelay: 1000
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    path: '/socket.io/'
 });
 
 socket.on('connect', function() {
     console.log('✅ Socket Connected:', socket.id);
 });
 
+socket.on('connect_error', function(error) {
+    console.log('❌ Socket Error:', error);
+});
+
 socket.on('disconnect', function() {
     console.log('❌ Socket Disconnected');
 });
+
 
 // 🚌 Live GPS Tracking
 socket.on("bus_location", d => {
@@ -435,10 +443,17 @@ def seats(sid):  # safe_db हटाएं
         booked_rows = cur.fetchall()
         booked = [int(row['seat_number']) for row in booked_rows]
         print(f"📋 Booked seats ({sid}, {d}): {booked}")
+
     finally:
         if conn:
             close_db(conn)
 
+    socketio.emit("seat_update", {
+        "sid": sid,
+        "date": d,
+        "booked": booked  # सभी booked seats list
+    }, broadcast=True)
+    print(f"📡 Page load emit: {len(booked)} booked seats")
 
     seat_buttons = ""
     for i in range(1, 41):
@@ -550,7 +565,9 @@ def book():  # safe_db हटाएं temporarily
             "sid": int(data["sid"]),
             "seat": str(data["seat"]),
             "date": data["date"]
-        })
+        }, broadcast=True)
+
+        print(f"📡 EMITTED to {len(socketio.server.manager.rooms['/'])} clients")
 
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
 
