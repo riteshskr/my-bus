@@ -408,13 +408,15 @@ def seats(sid):
             WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
         """, (sid, d))
         booked = [r["seat_number"] for r in cur.fetchall()]
+        booked = [int(row['seat_number']) for row in booked_rows]  # dict से int निकालें
+        print(f"📋 Booked seats: {booked}")  # Debug देखें
     finally:
         close_db(conn)
 
     seat_buttons = ""
     for i in range(1, 41):
-        if i in booked:
-            seat_buttons += f'<button class="btn btn-danger seat" disabled>{i}</button>'
+        if i in booked:  # अब int comparison सही होगा
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i},\'{fs}\',\'{ts}\',\'{d}\',{sid})">{i}</button>'
 
