@@ -26,7 +26,6 @@ pool = ConnectionPool(
     timeout=20,
     max_idle=10,
     kwargs={
-        "sslmode": "require",
         "connect_timeout": 10,
         "keepalives": 1,
         "keepalives_idle": 60,  # ↑ बढ़ाओ
@@ -150,9 +149,6 @@ init_db()
 # ================= HELPERS =================
 def get_db():
     conn = pool.getconn()
-    if conn.closed:
-        pool.putconn(conn)
-        conn = pool.getconn()
     cur = conn.cursor(row_factory=dict_row)
     return conn, cur
 
@@ -477,25 +473,38 @@ def driver(sid):
     </html>
     """
 
+
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
-    data = request.get_json() or {}
-    conn, cur = get_db()
-    fare = random.randint(250,450)
-    cur.execute("""
-        INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, from_station, to_station, travel_date, fare)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """, (data.get("sid"), data.get("seat"), data.get("name"), data.get("mobile"), data.get("from"), data.get("to"), data.get("date"), fare))
-    conn.commit()
-    close_db(conn)
-    socketio.emit("seat_update", {
-        "sid": data.get("sid"),
-        "seat": data.get("seat"),
-        "date": data.get("date")
-    }, broadcast=True)
+    data = request.get_json()
+    if not data or not all(k in data for k in ["sid", "seat", "name", "mobile", "date"]):
+        return jsonify({"ok": False, "error": "❌ Missing data"}), 400
 
-    return jsonify({"ok": True, "msg": f"✅ Seat {data.get('seat')} booked! Fare ₹{fare}"})
+    conn, cur = get_db()
+    try:
+        # Duplicate check
+        cur.execute("""
+            SELECT 1 FROM seat_bookings 
+            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
+        """, (data["sid"], data["seat"], data["date"]))
+        if cur.fetchone():
+            return jsonify({"ok": False, "error": "❌ Seat already booked"}), 409
+
+        fare = random.randint(250, 450)
+        cur.execute("""
+            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
+                mobile, from_station, to_station, travel_date, fare)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (data["sid"], data["seat"], data["name"], data["mobile"],
+              data.get("from", "बीकानेर"), data.get("to", "जयपुर"), data["date"], fare))
+
+        conn.commit()
+        socketio.emit("seat_update", data, broadcast=True)
+        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} | ₹{fare}"})
+    finally:
+        close_db(conn)
+
 
 # ================= RUN =================
 if __name__ == "__main__":
