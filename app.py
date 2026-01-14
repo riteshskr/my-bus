@@ -303,6 +303,7 @@ def seats(sid):
             if not (ts_order <= booked_fs or fs_order >= booked_ts):
                 booked_seats.add(row['seat_number'])
 
+    # ✅ SEAT BUTTONS - data-seat attribute के साथ
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked_seats:
@@ -310,89 +311,115 @@ def seats(sid):
         else:
             seat_buttons += f'<button class="btn btn-success seat" data-seat="{i}">{i}</button>'
 
-    html = f'''
-    <div class="text-center mb-4">
-        <h4>🚌 {fs} → {ts} | 📅 {d}</h4>
-        <p class="lead">Available Seats: <span id="availableCount">{40 - len(booked_seats)}</span>/40</p>
-        <div class="bus-row mt-3">{seat_buttons}</div>
-    </div>
-
+    # ✅ COMPLETE WORKING SCRIPT - कोई error नहीं!
+    script = f'''
     <script>
-    console.log("🔄 Loading Bus {sid} | {fs}→{ts} | {d}");
+    console.log("🚌 Bus {sid} | {fs} → {ts} | {d}");
     window.currentSid = {sid};
-    window.currentDate = '{d}';
+    window.currentDate = "{d}";
+    window.fs = "{fs}";
+    window.ts = "{ts}";
 
-    // ✅ PERFECT Socket.IO Connection
     const socket = io({{
-        transports: ['websocket', 'polling'],
+        transports: ["websocket", "polling"],
         reconnection: true,
         timeout: 10000
     }});
 
-    socket.on('connect', function() {{
-        console.log('✅ Socket Connected:', socket.id);
-    }});
-
-    socket.on('disconnect', function() {{
-        console.log('❌ Socket Disconnected');
-    }});
-
-    // ✅ PERFECT Seat Update Handler
-    socket.on('seat_update', function(data) {{
-        console.log('📢 LIVE UPDATE:', data);
-        if(window.currentSid == data.sid && window.currentDate == data.date) {{
-            const seatBtn = document.querySelector('[data-seat="' + data.seat + '"]');
-            if(seatBtn) {{
-                seatBtn.className = 'btn btn-danger seat';
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = 'X';
-                console.log('🔴 Seat', data.seat, 'marked BOOKED');
-                document.getElementById('availableCount').textContent = parseInt(document.getElementById('availableCount').textContent) - 1;
-            }}
+    // ⭐ MAIN FIX: सभी green seats पर click listener
+    document.addEventListener("click", function(e) {{
+        if(e.target.classList.contains("seat") && 
+           e.target.dataset.seat && 
+           !e.target.disabled) {{
+            const seatId = parseInt(e.target.dataset.seat);
+            bookSeat(seatId, e.target);
         }}
     }});
 
-    function bookSeat(seatId, fs, ts, d, sid) {{
-        event.target.disabled = true;
-        event.target.innerHTML = '⏳';
+    function bookSeat(seatId, btn) {{
+        btn.disabled = true;
+        btn.innerHTML = "⏳";
+        btn.className = "btn btn-warning seat";
 
-        let name = prompt("👤 नाम:");
-        if(!name || name.trim() === "") return resetSeat(event.target, seatId);
+        let name = prompt("👤 नाम डालें:");
+        if(!name || !name.trim()) {{
+            resetSeat(btn, seatId);
+            return;
+        }}
 
         let mobile = prompt("📱 मोबाइल (10 अंक):");
-        if(!/^\d{{10}}$/.test(mobile)) return alert("❌ 10 अंक मोबाइल नंबर डालें"), resetSeat(event.target, seatId);
+        if(!/^\\d{{10}}$/.test(mobile)) {{
+            alert("❌ 10 अंक मोबाइल नंबर डालें!");
+            resetSeat(btn, seatId);
+            return;
+        }}
 
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{
-                sid: sid, seat: seatId, name: name.trim(), mobile: mobile,
-                from: fs, to: ts, date: d
+                sid: window.currentSid,
+                seat: seatId,
+                name: name.trim(),
+                mobile: mobile,
+                from: window.fs,
+                to: window.ts,
+                date: window.currentDate
             }})
         }})
         .then(r => r.json())
         .then(r => {{
             if(r.ok) {{
-                event.target.innerHTML = '✅';
-                alert('🎉 सीट ' + seatId + ' बुक हो गई | ₹' + r.fare);
-                setTimeout(() => location.reload(), 1500);
+                btn.innerHTML = "✅";
+                btn.className = "btn btn-success seat";
+                alert("🎉 सीट " + seatId + " बुक हो गई! 💰 ₹" + r.fare);
+                setTimeout(() => location.reload(), 1000);
             }} else {{
-                alert('❌ ' + r.error);
-                resetSeat(event.target, seatId);
+                alert("❌ त्रुटि: " + r.error);
+                resetSeat(btn, seatId);
             }}
         }})
-        .catch(() => {{
-            alert('❌ नेटवर्क त्रुटि');
-            resetSeat(event.target, seatId);
+        .catch(err => {{
+            console.error("Network error:", err);
+            alert("❌ नेटवर्क त्रुटि!");
+            resetSeat(btn, seatId);
         }});
     }}
 
     function resetSeat(btn, seatId) {{
         btn.disabled = false;
         btn.innerHTML = seatId;
-        btn.className = 'btn btn-success seat';
+        btn.className = "btn btn-success seat";
     }}
-    </script>'''
+
+    // Socket events - Live updates
+    socket.on("connect", () => console.log("✅ Socket Connected"));
+    socket.on("seat_update", (data) => {{
+        console.log("📢 Live update:", data);
+        if(window.currentSid == data.sid && window.currentDate == data.date) {{
+            const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
+            if(seatBtn && !seatBtn.disabled) {{
+                seatBtn.className = "btn btn-danger seat";
+                seatBtn.disabled = true;
+                seatBtn.innerHTML = "X";
+                const countEl = document.getElementById("availableCount");
+                if(countEl) {{
+                    countEl.textContent = parseInt(countEl.textContent) - 1;
+                }}
+            }}
+        }}
+    }});
+    </script>
+    '''
+
+    html = f'''
+    <div class="text-center mb-4">
+        <h4>🚌 {fs} → {ts} | 📅 {d}</h4>
+        <p class="lead">Available Seats: <span id="availableCount">{40 - len(booked_seats)}</span>/40</p>
+        <div class="bus-row mt-3">{seat_buttons}</div>
+    </div>
+    {script}
+    '''
 
     return render_template_string(BASE_HTML, content=html)
 
