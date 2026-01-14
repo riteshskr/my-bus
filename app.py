@@ -469,7 +469,13 @@ def driver(sid):
 @safe_db
 def book():
     data = request.get_json()
-    # ... existing validation code ...
+
+    # ✅ VALIDATION - ये जोड़ें!
+    if not data or not all(k in data for k in ['sid', 'seat', 'name', 'mobile', 'date']):
+        return jsonify({"ok": False, "error": "❌ सभी fields भरें"}), 400
+
+    if len(str(data['mobile'])) != 10 or not str(data['mobile']).isdigit():
+        return jsonify({"ok": False, "error": "❌ 10 अंकों का मोबाइल"}), 400
 
     conn, cur = get_db()
     try:
@@ -479,27 +485,30 @@ def book():
             WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
         """, (data["sid"], data["seat"], data["date"]))
         if cur.fetchone():
-            return jsonify({"ok": False, "error": "❌ Seat already booked"}), 409
+            return jsonify({"ok": False, "error": "❌ Seat पहले से बुक है"}), 409
 
-        # ✅ IMMEDIATE BROADCAST सभी clients को
-        socket_data = {
+        # ✅ Socket emit - STRING बनाएँ
+        socketio.emit("seat_update", {
             "sid": int(data["sid"]),
-            "seat": int(data["seat"]),
+            "seat": str(data["seat"]),  # ← STRING important!
             "date": data["date"]
-        }
-        socketio.emit("seat_update", socket_data, broadcast=True)  # ← broadcast=True add करें
+        }, broadcast=True)
 
-        # Database save (NOW socket emit के बाद)
+        # Database save
         fare = random.randint(250, 450)
         cur.execute("""
             INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, 
-                mobile, from_station, to_station, travel_date, fare)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                mobile, from_station, to_station, travel_date, fare, status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
         """, (data["sid"], data["seat"], data["name"], data["mobile"],
-              data.get("from", "बीकानेर"), data.get("to", "जयपुर"), data["date"], fare))
+              data.get("from", "बीकानेर"), data.get("to", "जयपुर"),
+              data["date"], fare))
         conn.commit()
 
-        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} | ₹{fare}"})
+        return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"ok": False, "error": f"❌ Booking failed"}), 500
     finally:
         close_db(conn)
 
