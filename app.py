@@ -12,7 +12,7 @@ import atexit
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 Compress(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ================= DATABASE =================
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -124,7 +124,7 @@ def init_db():
                 cur.execute("""
                     INSERT INTO route_stations (route_id, station_name, station_order)
                     VALUES (%s,%s,%s)
-                    ON CONFLICT (id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                 """, (rid, station, order))
 
             conn.commit()
@@ -488,11 +488,6 @@ def book():
             return jsonify({"ok": False, "error": "❌ Seat पहले से बुक है"}), 409
 
         # ✅ Socket emit - STRING बनाएँ
-        socketio.emit("seat_update", {
-            "sid": int(data["sid"]),
-            "seat": str(data["seat"]),  # ← STRING important!
-            "date": data["date"]
-        }, broadcast=True)
 
         # Database save
         fare = random.randint(250, 450)
@@ -505,6 +500,11 @@ def book():
               data["date"], fare))
         conn.commit()
 
+        socketio.emit("seat_update", {
+            "sid": int(data["sid"]),
+            "seat": str(data["seat"]),  # ← STRING important!
+            "date": data["date"]
+        }, broadcast=True)
         return jsonify({"ok": True, "msg": f"✅ Seat {data['seat']} बुक | ₹{fare}"})
     except Exception as e:
         conn.rollback()
