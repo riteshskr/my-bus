@@ -470,27 +470,145 @@ def book():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+
 @app.route("/driver/<int:sid>")
 def driver(sid):
-    return f'''
-    <!DOCTYPE html><html><body style="text-align:center;font-family:sans-serif;background:#f0f0f0;padding:50px">
-    <h2>🚗 Driver GPS - Bus {sid}</h2>
-    <button id="startBtn" class="btn btn-success" onclick="startGPS()" style="padding:15px 30px;font-size:18px;border:none;border-radius:10px">Start GPS</button>
-    <p id="status" style="font-size:20px;margin:20px;color:#333"></p>
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bus {sid} GPS</title>
+
+    <style>
+        body {{
+            background-color: #f0f0f0;
+            padding: 40px;
+            text-align: center;
+            font-family: sans-serif;
+            margin: 0;
+        }}
+        h2 {{
+            color: #333;
+        }}
+        .btn-gps {{
+            padding: 15px 30px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }}
+        .btn-stop {{
+            padding: 15px 30px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background-color: #dc3545;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            margin-left: 10px;
+        }}
+        #status {{
+            font-size: 18px;
+            margin-top: 25px;
+            color: #333;
+            font-family: monospace;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }}
+    </style>
+</head>
+
+<body>
+
+    <h2>🚗 Driver GPS – Bus {sid}</h2>
+
+    <button id="startBtn" class="btn-gps" onclick="startGPS()">🚀 GPS शुरू करें</button>
+    <button id="stopBtn" class="btn-stop" onclick="stopGPS()" disabled>🛑 GPS बंद करें</button>
+
+    <div id="status">GPS बंद है</div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    const socket = io({{transports:['websocket','polling']}});
-    let watchId;
-    function startGPS() {{
-        document.getElementById('startBtn').disabled=true;
-        document.getElementById('status').innerText='📡 GPS जोड़ रहा है...';
-        watchId=navigator.geolocation.watchPosition(pos=>{{
-            const data={{sid:{sid},lat:pos.coords.latitude,lng:pos.coords.longitude}};
-            socket.emit("driver_gps",data);
-            document.getElementById('status').innerHTML=`📍 ${data.lat.toFixed(6)}, ${data.lng.toFixed(6)}`;
-        }},err=>{{document.getElementById('status').innerText='❌ GPS Error: '+err.message;}},{{enableHighAccuracy:true}});
-    }}
-    </script></body></html>'''
+        const socket = io({{ transports: ["websocket", "polling"] }});
+        let watchId = null;
+
+        function startGPS() {{
+            const startBtn = document.getElementById("startBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const status = document.getElementById("status");
+
+            // ✅ GPS support check
+            if (!navigator.geolocation) {{
+                status.innerHTML = "❌ इस ब्राउज़र में GPS सपोर्ट नहीं है";
+                return;
+            }}
+
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            startBtn.innerHTML = "⏳ GPS चालू हो रहा है...";
+            status.innerHTML = "📡 GPS खोज रहे हैं...";
+
+            watchId = navigator.geolocation.watchPosition(
+                function (pos) {{
+                    const lat = pos.coords.latitude.toFixed(6);
+                    const lng = pos.coords.longitude.toFixed(6);
+
+                    const data = {{
+                        sid: {sid},
+                        lat: lat,
+                        lng: lng
+                    }};
+
+                    socket.emit("driver_gps", data);
+
+                    status.innerHTML = "✅ LIVE GPS<br>Latitude: " + lat + "<br>Longitude: " + lng;
+                    startBtn.innerHTML = "🚗 Live GPS चल रहा है";
+                }},
+                function (err) {{
+                    status.innerHTML = "❌ GPS Error: " + err.message;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    startBtn.innerHTML = "🔄 GPS फिर शुरू करें";
+                }},
+                {{
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 5000
+                }}
+            );
+        }}
+
+        function stopGPS() {{
+            const startBtn = document.getElementById("startBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const status = document.getElementById("status");
+
+            if (watchId !== null) {{
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }}
+
+            socket.emit("driver_gps_stop", {{ sid: {sid} }});
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            startBtn.innerHTML = "🚀 GPS शुरू करें";
+            status.innerHTML = "🛑 GPS बंद कर दिया गया";
+        }}
+    </script>
+
+</body>
+</html>
+"""
+
 
 
 if __name__ == "__main__":
