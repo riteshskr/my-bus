@@ -1,4 +1,3 @@
-python
 import os, random
 from datetime import date
 from functools import wraps
