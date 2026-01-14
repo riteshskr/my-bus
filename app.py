@@ -422,8 +422,9 @@ def seats(sid):
         <p class="lead">Available Seats: <span id="availableCount">{40 - len(booked_seats)}</span>/40</p>
         <div class="bus-row mt-3">{seat_buttons}</div>
     </div>
-    {script}
      '''
+    {script}
+
     return render_template_string(BASE_HTML, content=html)
 
 
