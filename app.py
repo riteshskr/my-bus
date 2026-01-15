@@ -192,22 +192,257 @@ def gps(data):
 
 # ================= HTML BASE =================
 BASE_HTML = """<!DOCTYPE html>
-<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bus Booking India</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>
-.seat{width:45px;height:45px;margin:3px;border-radius:5px;font-weight:bold;transition:all 0.3s;}
-.bus-row{display:flex;flex-wrap:wrap;justify-content:center;gap:5px}
-body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh}
-.card{border-radius:15px;box-shadow:0 10px 30px rgba(0,0,0,0.3)}
-</style>
-</head><body class="text-white">
-<div class="container py-5"><h2 class="text-center mb-4">🚌 Bus Booking + Live GPS</h2>
-{{content|safe}}<div class="text-center mt-4">
-<a href="/" class="btn btn-light btn-lg px-4 me-2">🏠 Home</a>
-<a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">🚗 Driver GPS</a></div></div>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-</body></html>"""
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚌 Bus Booking India - Live GPS + Real-time Seats</title>
+
+    <!-- Bootstrap 5.3 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Leaflet Maps CSS (Live GPS के लिए) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* Bus Booking Theme */
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .main-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 25px;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.2);
+            margin: 20px auto;
+            padding: 30px;
+        }
+
+        /* Route Cards */
+        .route-card {
+            transition: all 0.4s ease;
+            border: none;
+            border-radius: 20px;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        .route-card:hover {
+            transform: translateY(-10px) scale(1.02);
+            box-shadow: 0 30px 60px rgba(0,0,0,0.3) !important;
+        }
+
+        /* Bus Cards */
+        .bus-card {
+            border-radius: 20px;
+            border: none;
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+
+        .bus-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2) !important;
+        }
+
+        /* Seat Layout */
+        .seat {
+            width: 55px !important;
+            height: 55px !important;
+            margin: 4px;
+            font-weight: bold;
+            border-radius: 12px !important;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            border: 3px solid transparent;
+        }
+
+        .seat:hover:not(:disabled) {
+            transform: scale(1.1);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+        }
+
+        .bus-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Live GPS Map */
+        #map, .mini-map {
+            height: 400px;
+            width: 100%;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+
+        .live-bus {
+            animation: pulse 2s infinite;
+            width: 30px;
+            height: 30px;
+            background: #ff4444;
+            border-radius: 50%;
+            border: 4px solid #fff;
+            box-shadow: 0 0 20px #ff4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+        }
+
+        /* Booking Header */
+        .booking-header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            border-radius: 25px;
+            color: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+        }
+
+        /* Navigation Buttons */
+        .nav-buttons {
+            background: rgba(255,255,255,0.2);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 20px;
+            margin-top: 40px;
+        }
+
+        .btn-custom {
+            border-radius: 25px;
+            padding: 12px 30px;
+            font-weight: 600;
+            border: none;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-custom:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .seat { width: 45px !important; height: 45px !important; font-size: 12px; }
+            .main-container { margin: 10px; padding: 20px; }
+        }
+
+        /* Loading Animation */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container-fluid py-4">
+        <div class="main-container">
+            <!-- Header -->
+            <div class="text-center mb-5">
+                <h1 class="display-4 fw-bold mb-3">
+                    <i class="fas fa-bus-alt me-3"></i>
+                    Bus Booking India
+                </h1>
+                <p class="lead mb-0">
+                    <i class="fas fa-map-marker-alt me-2 text-success"></i>
+                    Live GPS Tracking + Real-time Seat Booking
+                </p>
+            </div>
+
+            <!-- Main Content -->
+            {{content|safe}}
+
+            <!-- Navigation -->
+            <div class="nav-buttons text-center">
+                <a href="/" class="btn btn-light btn-lg btn-custom me-3">
+                    <i class="fas fa-home me-2"></i>🏠 Home
+                </a>
+                <a href="/driver/1" class="btn btn-success btn-lg btn-custom" target="_blank">
+                    <i class="fas fa-map-marker-alt me-2"></i>📱 Driver GPS
+                </a>
+                <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">
+                    <i class="fas fa-route me-2"></i>🗺️ Live Track
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Socket.IO CDN (Real-time Updates) -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <!-- Leaflet Maps JS (GPS Tracking) -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Route Selection Flow -->
+    <script>
+        // Route card click handler
+        function selectRoute(routeId) {
+            window.location.href = `/buses/${routeId}`;
+        }
+
+        // Bus card click handler
+        function selectBus(busId) {
+            window.location.href = `/select/${busId}`;
+        }
+
+        // Smooth hover effects
+        document.addEventListener('DOMContentLoaded', function() {
+            document.querySelectorAll('.route-card, .bus-card').forEach(card => {
+                card.style.transition = 'all 0.4s ease';
+                card.addEventListener('mouseenter', () => {
+                    card.style.transform = 'translateY(-8px) scale(1.02)';
+                });
+                card.addEventListener('mouseleave', () => {
+                    card.style.transform = 'translateY(0) scale(1)';
+                });
+            });
+        });
+
+        // Socket connection status
+        if (typeof io !== 'undefined') {
+            const socket = io({
+                transports: ['websocket', 'polling'],
+                timeout: 10000
+            });
+
+            socket.on('connect', () => {
+                console.log('✅ Socket Connected:', socket.id);
+            });
+
+            socket.on('connect_error', (err) => {
+                console.log('❌ Socket Error:', err.message);
+            });
+        }
+    </script>
+</body>
+</html>"""
 
 
 # ================= ROUTES =================
@@ -216,67 +451,64 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 def home():
     conn, cur = get_db()
 
-    # सभी routes
+    # सभी Routes (बड़े cards)
     cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
     routes = cur.fetchall()
 
-    # ✅ LIVE BUS STATUS - schedules से current location
+    # Hero Section
+    hero_section = '''
+    <div class="text-center p-5 bg-gradient-primary text-white rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
+        <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
+        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
+        <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
+    </div>
+    '''
+
+    # 🔥 Route Selection Cards (बड़ा + Clear)
+    routes_section = '<div class="row g-4 mb-5">'
+    for r in routes:
+        routes_section += f'''
+        <div class="col-md-6 col-lg-4">
+            <div class="card h-100 bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:20px;cursor:pointer;">
+                <div class="card-body p-5 text-center" onclick="selectRoute({r['id']})">
+                    <h3 class="fw-bold mb-3">{r['route_name']}</h3>
+                    <div class="display-4 text-warning mb-4">🛣️ {r['distance_km']} km</div>
+                    <div class="h5 mb-3">⚡ Live GPS Tracking</div>
+                    <button class="btn btn-success btn-lg px-5">
+                        🚀 Buses देखें → Bus {r['id']}
+                    </button>
+                </div>
+            </div>
+        </div>'''
+    routes_section += '</div>'
+
+    # Live GPS Status (नीचे छोटा)
     cur.execute("""
         SELECT s.id, s.bus_name, r.route_name, 
                s.current_lat as lat, s.current_lng as lng
         FROM schedules s JOIN routes r ON s.route_id = r.id
-        ORDER BY s.id LIMIT 6
+        ORDER BY s.id LIMIT 4
     """)
     live_buses = cur.fetchall()
 
-    # Hero Section
-    hero_section = '''
-    <div class="text-center mb-6 p-5 bg-gradient-primary text-white rounded-4 shadow-lg mx-auto" style="max-width:700px;">
-        <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
-        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
-        <div class="d-flex flex-column flex-md-row gap-3 justify-content-center">
-            <a href="/live-tracking" class="btn btn-light btn-lg px-5">🗺️ Live Tracking</a>
-            <a href="/buses/1" class="btn btn-success btn-lg px-5">🎫 Book Seats</a>
-        </div>
-    </div>
-    '''
-
-    # Live Buses Section
-    live_html = '<h3 class="text-center mb-4">🟢 Live Buses</h3><div class="row g-4 mb-5">'
+    live_section = '<h3 class="text-center mb-4">🟢 Live Running Buses</h3><div class="row g-4">'
     for bus in live_buses:
-        status = "🟢 LIVE" if bus.get('lat') else "⚪ Ready"
+        status = "🟢 LIVE GPS" if bus.get('lat') else "⚪ Ready"
         coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
-        live_html += f'''
-        <div class="col-md-6 col-lg-4">
-            <a href="/live-bus/{bus['id']}" class="text-decoration-none">
-                <div class="card h-100 border-0 shadow hover-shadow">
-                    <div class="card-body text-center p-4">
-                        <h5 class="fw-bold">{bus['bus_name']}</h5>
-                        <div class="text-muted mb-2">{bus['route_name']}</div>
-                        <div class="h6 mb-1">{status}</div>
-                        <small class="text-success">📍 {coords}</small>
-                        <div class="mt-3">
-                            <span class="btn btn-sm btn-outline-success">Live Track →</span>
-                        </div>
-                    </div>
+        live_section += f'''
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow">
+                <div class="card-body text-center p-3">
+                    <h6 class="fw-bold">{bus['bus_name']}</h6>
+                    <small class="text-muted">{bus['route_name']}</small><br>
+                    <span class="badge {"bg-success" if bus.get("lat") else "bg-secondary"}">{status}</span>
+                    <div class="mt-2"><small>📍 {coords}</small></div>
                 </div>
-            </a>
-        </div>'''
-    live_html += '</div>'
-
-    # Routes Cards
-    routes_section = '<h3 class="text-center mb-4">📋 Available Routes</h3>'
-    for r in routes:
-        routes_section += f'''
-        <div class="card bg-info mb-4 mx-auto shadow-lg" style="max-width:550px;border-radius:20px;">
-            <div class="card-body p-4 text-center">
-                <h4 class="card-title mb-3 text-white fw-bold">{r["route_name"]}</h4>
-                <div class="display-6 text-warning mb-3">🛣️ {r["distance_km"]} km</div>
-                <a href="/buses/{r["id"]}" class="btn btn-success btn-lg px-5">Book Seats →</a>
             </div>
         </div>'''
+    live_section += '</div>'
 
-    content = hero_section + live_html + routes_section
+    content = hero_section + routes_section + live_section
     return render_template_string(BASE_HTML, content=content)
 
 
