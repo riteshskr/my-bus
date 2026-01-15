@@ -852,7 +852,7 @@ def seats(sid):
 
     html = f'''
        <!-- MAP -->
-        <div id="seat-map" class="rounded-4 mb-4" style="height:400px;"></div>
+        <div id="seat-map" class="rounded-4 mb-3" style="height:240px; max-width:900px; margin:auto;"></div>
 
         <!-- Seats -->
         <div class="bus-row" style="max-width:800px; margin:0 auto;">
