@@ -177,7 +177,7 @@ def gps(data):
             conn, cur = get_db()
             cur.execute("""
                    UPDATE schedules 
-                   SET current_lat=%s, current_lng=%s, last_updated=NOW()
+                   SET current_lat=%s, current_lng=%s
                    WHERE id=%s
                """, (lat, lng, sid))
             conn.commit()
@@ -223,10 +223,9 @@ def home():
     # ✅ LIVE BUS STATUS - schedules से current location
     cur.execute("""
         SELECT s.id, s.bus_name, r.route_name, 
-               s.current_lat as lat, s.current_lng as lng,
-               s.last_updated
+               s.current_lat as lat, s.current_lng as lng
         FROM schedules s JOIN routes r ON s.route_id = r.id
-        ORDER BY s.last_updated DESC NULLS LAST LIMIT 6
+        ORDER BY s.id LIMIT 6
     """)
     live_buses = cur.fetchall()
 
@@ -294,7 +293,7 @@ def buses(rid):
     # Live buses इस route के
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time,
-               s.current_lat, s.current_lng, s.last_updated
+               s.current_lat, s.current_lng
         FROM schedules s 
         WHERE s.route_id = %s 
         ORDER BY s.departure_time
@@ -784,7 +783,7 @@ def live_bus(sid):
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time,
                r.route_name, r.distance_km,
-               s.current_lat as lat, s.current_lng as lng, s.last_updated
+               s.current_lat as lat, s.current_lng as lng
         FROM schedules s JOIN routes r ON s.route_id = r.id 
         WHERE s.id = %s
     """, (sid,))
