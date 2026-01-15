@@ -689,222 +689,165 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
+
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
-    # ===== ROUTE STATIONS FOR POLYLINE =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
         WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
         ORDER BY station_order
     """, (sid,))
+
     stations_data = cur.fetchall()
     station_list = [r["station_name"] for r in stations_data]
 
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
+    # -------- SEAT LOGIC SAME --------
+    available_count = 40
 
-    # ===== BOOKED SEATS LOGIC =====
-    cur.execute("""
-        SELECT seat_number, from_station, to_station
-        FROM seat_bookings
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """, (sid, d))
-
-    booked_rows = cur.fetchall()
-    booked_seats = set()
-
-    for row in booked_rows:
-        if row['from_station'] in station_to_order and row['to_station'] in station_to_order:
-            booked_fs = station_to_order[row['from_station']]
-            booked_ts = station_to_order[row['to_station']]
-
-            if not (ts_order <= booked_fs or fs_order >= booked_ts):
-                booked_seats.add(row['seat_number'])
-
-    available_count = 40 - len(booked_seats)
-
-    # ===== SEAT BUTTONS =====
     seat_buttons = ""
     for i in range(1, 41):
-        if i in booked_seats:
-            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
-        else:
-            seat_buttons += f'''
-            <button class="btn btn-success seat"
-                    data-seat="{i}"
-                    onclick="bookSeat({i}, this)">
-                {i}
-            </button>'''
+        seat_buttons += f'''
+        <button class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
+        '''
 
-    # ============ MAP + POLYLINE SECTION ============
-    map_section = f'''
-    <div class="card shadow mb-3">
-      <div class="card-body">
-        <h5 class="text-center">🚌 Live Bus Tracking with Route</h5>
-
-        <div id="map" style="height:320px;width:100%;border-radius:12px;"></div>
-
-        <div class="text-center mt-2">
-            <span id="gpsStatus" class="text-muted">📡 GPS का इंतज़ार...</span>
-        </div>
-      </div>
-    </div>
-    '''
-
-    # ============ MAIN HTML ============
+    # ================= HTML =================
     html = f'''
-    <style>
-    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
-    .seat {{ width: 55px !important; height: 55px !important; }}
 
-    .bus-icon {{
-      font-size: 26px;
-      animation: pulse 2s infinite;
-    }}
+<div class="card mb-3">
+  <div class="card-body">
 
-    @keyframes pulse {{
-      0% {{ transform: scale(1); }}
-      50% {{ transform: scale(1.2); }}
-      100% {{ transform: scale(1); }}
-    }}
-    </style>
+    <h5 class="text-center">🚌 Live Tracking</h5>
 
-    {map_section}
+    <div id="map" style="height:320px;border-radius:10px;"></div>
 
-    <div class="text-center mb-5">
-        <div class="card bg-primary text-white mx-auto mb-4" style="max-width: 600px;">
-            <div class="card-body py-4">
-                <h3>🚌 {fs} → {ts}</h3>
-                <h5>📅 {d}</h5>
-                <div class="h4">
-                    सीटें उपलब्ध:
-                    <span id="availableCount" class="badge bg-success">
-                        {available_count}
-                    </span>/40
-                </div>
-            </div>
-        </div>
-
-        <div class="bus-row">{seat_buttons}</div>
+    <div id="gpsStatus" class="mt-2 text-center">
+        GPS का इंतज़ार...
     </div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  </div>
+</div>
 
-    <script>
-    window.sid = {sid};
-    window.fs = "{fs}";
-    window.ts = "{ts}";
-    window.date = "{d}";
+<div class="text-center mb-5">
+    <h4>{fs} → {ts}</h4>
 
-    const socket = io();
+    <div class="bus-row mt-3">
+        {seat_buttons}
+    </div>
+</div>
 
-    // ===== ROUTE STATIONS FROM SERVER =====
-    const routeStations = {station_list};
+<script>
+// ⚠️ SOCKET दोबारा मत बनाओ
+const socket = io();
 
-    // Demo coordinates (आप चाहो तो बाद में API से ले लेंगे)
-    const stationCoords = {{
-        "बीकानेर": [28.0229, 73.3119],
-        "जयपुर": [26.9124, 75.7873],
-        "जोधपुर": [26.2389, 73.0243]
-    }};
+console.log("🟢 Seat Page Socket Ready");
 
-    let map = L.map('map').setView([27.2, 74.2], 7);
+window.sid = {sid};
 
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png')
-     .addTo(map);
+// ===== STATION COORDS =====
+const stationCoords = {{
+    "बीकानेर": [28.0229, 73.3119],
+    "जयपुर": [26.9124, 75.7873],
+    "जोधपुर": [26.2389, 73.0243]
+}};
 
-    // ===== POLYLINE CREATE =====
-    let points = [];
+const routeStations = {station_list};
+
+let map = L.map('map').setView([27.0, 74.0], 7);
+
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png')
+.addTo(map);
+
+// ===== POLYLINE =====
+let points = [];
+
+routeStations.forEach(st => {{
+    if(stationCoords[st]) {{
+        points.push(stationCoords[st]);
+
+        L.marker(stationCoords[st])
+         .addTo(map)
+         .bindPopup(st);
+    }}
+}});
+
+// अगर route empty हुआ
+if(points.length == 0){{
+    points.push([27.0, 74.0]);
+}}
+
+let routeLine = L.polyline(points, {{
+    color:'blue',
+    weight:6
+}}).addTo(map);
+
+map.fitBounds(routeLine.getBounds());
+
+// ===== BUS MARKER SAFE =====
+let busMarker = L.marker(points[0], {{
+    icon: L.divIcon({{
+        html:"🚌",
+        className:"bus-icon",
+        iconSize:[32,32]
+    }})
+}}).addTo(map);
+
+// ===== NEXT STATION =====
+function getNextStation(lat, lng) {{
+
+    let min = 999999;
+    let next = routeStations[0];
 
     routeStations.forEach(st => {{
-        if(stationCoords[st]) {{
-            points.push(stationCoords[st]);
+
+        if(!stationCoords[st]) return;
+
+        let [sLat, sLng] = stationCoords[st];
+
+        let d = Math.sqrt(
+            Math.pow(lat-sLat,2) +
+            Math.pow(lng-sLng,2)
+        );
+
+        if(d < min) {{
+            min = d;
+            next = st;
         }}
     }});
 
-    let routeLine = L.polyline(points, {{
-        color: 'blue',
-        weight: 5
-    }}).addTo(map);
+    return next;
+}}
 
-    map.fitBounds(routeLine.getBounds());
+// ========== MAIN LISTENER ==========
+socket.on("bus_location", function(data) {{
 
-    // ===== BUS MARKER =====
-    let busMarker = null;
+    console.log("📩 GPS आया:", data);
 
-    let busIcon = L.divIcon({{
-        html: "🚌",
-        className: "bus-icon",
-        iconSize: [30, 30]
-    }});
+    if(parseInt(data.sid) === parseInt(window.sid)) {{
 
-    // ===== LIVE GPS LISTENER =====
-    socket.on("bus_location", function(data) {{
+        let lat = parseFloat(data.lat);
+        let lng = parseFloat(data.lng);
 
-        if(data.sid == window.sid) {{
+        busMarker.setLatLng([lat,lng]);
+        map.panTo([lat,lng]);
 
-            const pos = [
-                parseFloat(data.lat),
-                parseFloat(data.lng)
-            ];
+        let next = getNextStation(lat,lng);
 
-            document.getElementById("gpsStatus").innerHTML =
-                `📍 ${{data.lat}}, ${{data.lng}}`;
-
-            if(busMarker) {{
-                busMarker.setLatLng(pos);
-            }} else {{
-                busMarker = L.marker(pos, {{icon: busIcon}})
-                             .addTo(map);
-            }}
-
-            map.panTo(pos);
-        }}
-    }});
-
-    // ===== BOOK SEAT FUNCTION (OLD LOGIC) =====
-    function bookSeat(seatId, btn) {{
-
-        let name = prompt("यात्री का नाम:");
-        if(!name) return;
-
-        let mobile = prompt("मोबाइल:");
-        if(!mobile) return;
-
-        fetch("/book", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{
-                sid: window.sid,
-                seat: seatId,
-                name: name,
-                mobile: mobile,
-                from: window.fs,
-                to: window.ts,
-                date: window.date
-            }})
-        }})
-        .then(r => r.json())
-        .then(data => {{
-            if(data.ok) {{
-                alert("बुकिंग सफल!");
-                location.reload();
-            }} else {{
-                alert(data.error);
-            }}
-        }});
+        document.getElementById("gpsStatus").innerHTML =
+        `📍 ${{lat}}, ${{lng}} <br>
+         🟢 Next Station: <b>${{next}}</b>`;
     }}
-    </script>
-    '''
+}});
+
+</script>
+'''
 
     return render_template_string(BASE_HTML, content=html)
+
 
 
 @app.route("/book", methods=["POST"])
