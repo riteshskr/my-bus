@@ -75,6 +75,9 @@ def init_db():
                 route_id INT REFERENCES routes(id), 
                 bus_name VARCHAR(100),
                 departure_time TIME, 
+                current_lat DOUBLE PRECISION,
+                current_lng DOUBLE PRECISION,
+                
                 total_seats INT DEFAULT 40
             )""")
 
