@@ -211,90 +211,69 @@ body{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh
 @safe_db
 def home():
     conn, cur = get_db()
+
+    # सभी routes
     cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
     routes = cur.fetchall()
 
-    # Live Tracking Hero Section
+    # ✅ LIVE BUS STATUS - schedules से current location
+    cur.execute("""
+        SELECT s.id, s.bus_name, r.route_name, 
+               s.current_lat as lat, s.current_lng as lng,
+               s.last_updated
+        FROM schedules s JOIN routes r ON s.route_id = r.id
+        ORDER BY s.last_updated DESC NULLS LAST LIMIT 6
+    """)
+    live_buses = cur.fetchall()
+
+    # Hero Section
     hero_section = '''
     <div class="text-center mb-6 p-5 bg-gradient-primary text-white rounded-4 shadow-lg mx-auto" style="max-width:700px;">
         <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
-        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking + Route Maps</p>
+        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
         <div class="d-flex flex-column flex-md-row gap-3 justify-content-center">
-            <a href="/live-tracking" class="btn btn-light btn-lg px-5">
-                🗺️ Live Bus Tracking
-            </a>
-            <a href="/buses/1" class="btn btn-success btn-lg px-5">
-                🎫 Book Seats Now
-            </a>
-        </div>
-        <div class="mt-4 pt-4 border-top border-white border-opacity-25">
-            <small>📱 Phone से GPS: /driver/1 | 💻 Laptop से Live Map देखें</small>
+            <a href="/live-tracking" class="btn btn-light btn-lg px-5">🗺️ Live Tracking</a>
+            <a href="/buses/1" class="btn btn-success btn-lg px-5">🎫 Book Seats</a>
         </div>
     </div>
     '''
 
+    # Live Buses Section
+    live_html = '<h3 class="text-center mb-4">🟢 Live Buses</h3><div class="row g-4 mb-5">'
+    for bus in live_buses:
+        status = "🟢 LIVE" if bus.get('lat') else "⚪ Ready"
+        coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
+        live_html += f'''
+        <div class="col-md-6 col-lg-4">
+            <a href="/live-bus/{bus['id']}" class="text-decoration-none">
+                <div class="card h-100 border-0 shadow hover-shadow">
+                    <div class="card-body text-center p-4">
+                        <h5 class="fw-bold">{bus['bus_name']}</h5>
+                        <div class="text-muted mb-2">{bus['route_name']}</div>
+                        <div class="h6 mb-1">{status}</div>
+                        <small class="text-success">📍 {coords}</small>
+                        <div class="mt-3">
+                            <span class="btn btn-sm btn-outline-success">Live Track →</span>
+                        </div>
+                    </div>
+                </div>
+            </a>
+        </div>'''
+    live_html += '</div>'
+
     # Routes Cards
-    routes_section = '<div class="text-center mb-5"><h3 class="mb-4">📋 Available Routes</h3></div>'
+    routes_section = '<h3 class="text-center mb-4">📋 Available Routes</h3>'
     for r in routes:
         routes_section += f'''
         <div class="card bg-info mb-4 mx-auto shadow-lg" style="max-width:550px;border-radius:20px;">
             <div class="card-body p-4 text-center">
                 <h4 class="card-title mb-3 text-white fw-bold">{r["route_name"]}</h4>
                 <div class="display-6 text-warning mb-3">🛣️ {r["distance_km"]} km</div>
-                <a href="/buses/{r["id"]}" class="btn btn-success btn-lg px-5">
-                    Book Seats →
-                </a>
+                <a href="/buses/{r["id"]}" class="btn btn-success btn-lg px-5">Book Seats →</a>
             </div>
         </div>'''
 
-    # Features Section
-    features_section = '''
-    <div class="row g-4 mb-6">
-        <div class="col-md-4 text-center">
-            <div class="icon-box p-4 rounded-4 bg-success bg-opacity-10">
-                <div class="h1 text-success mb-3">📍</div>
-                <h5>Live GPS Tracking</h5>
-                <p class="text-muted">Phone से real-time bus location track करें</p>
-            </div>
-        </div>
-        <div class="col-md-4 text-center">
-            <div class="icon-box p-4 rounded-4 bg-warning bg-opacity-10">
-                <div class="h1 text-warning mb-3">🎫</div>
-                <h5>Instant Seat Booking</h5>
-                <p class="text-muted">दूसरे tab में live seat updates दिखते हैं</p>
-            </div>
-        </div>
-        <div class="col-md-4 text-center">
-            <div class="icon-box p-4 rounded-4 bg-info bg-opacity-10">
-                <div class="h1 text-info mb-3">🗺️</div>
-                <h5>Route Maps</h5>
-                <p class="text-muted">Leaflet maps + Route polylines + Live position</p>
-            </div>
-        </div>
-    </div>
-    '''
-
-    # Quick Actions
-    quick_actions = '''
-    <div class="text-center">
-        <h4 class="mb-4">🚀 Quick Actions</h4>
-        <div class="d-flex flex-wrap gap-3 justify-content-center">
-            <a href="/live-tracking" class="btn btn-primary btn-lg px-4">
-                🗺️ Live Tracking
-            </a>
-            <a href="/driver/1" class="btn btn-success btn-lg px-4" target="_blank">
-                📱 Driver GPS (Phone)
-            </a>
-            <a href="/buses/1" class="btn btn-warning btn-lg px-4 text-dark">
-                🎫 बीकानेर → जयपुर
-            </a>
-        </div>
-    </div>
-    '''
-
-    # Complete content
-    content = hero_section + routes_section + features_section + quick_actions
-
+    content = hero_section + live_html + routes_section
     return render_template_string(BASE_HTML, content=content)
 
 
@@ -302,21 +281,65 @@ def home():
 @safe_db
 def buses(rid):
     conn, cur = get_db()
-    cur.execute("SELECT id, bus_name, departure_time FROM schedules WHERE route_id=%s ORDER BY departure_time", (rid,))
+
+    # Route name
+    cur.execute("SELECT route_name FROM routes WHERE id=%s", (rid,))
+    route = cur.fetchone()
+    route_name = route['route_name'] if route else "Unknown Route"
+
+    # Live buses इस route के
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time,
+               s.current_lat, s.current_lng, s.last_updated
+        FROM schedules s 
+        WHERE s.route_id = %s 
+        ORDER BY s.departure_time
+    """, (rid,))
     buses_data = cur.fetchall()
 
-    html = '<div class="alert alert-info text-center">No Buses for this route</div>'
-    if buses_data:
-        html = '<div class="text-center mb-4"><h4>🚌 Available Buses</h4></div>'
+    html = f'''
+    <div class="text-center mb-5">
+        <h3 class="display-5 fw-bold">🚌 {route_name}</h3>
+        <p class="lead text-muted">Live GPS + Seat Booking</p>
+    </div>
+    '''
+
+    if not buses_data:
+        html += '<div class="alert alert-info text-center">No Buses Available</div>'
+    else:
         for bus in buses_data:
+            status = "🟢 LIVE" if bus.get('current_lat') else "⚪ Ready"
+            coords = f'{float(bus["current_lat"]):.4f}, {float(bus["current_lng"]):.4f}' if bus.get(
+                'current_lat') else ''
+
             html += f'''
-            <div class="card bg-success mb-3 mx-auto" style="max-width:500px">
-                <div class="card-body">
-                    <h6>{bus["bus_name"]}</h6>
-                    <p><strong>Time:</strong> {bus["departure_time"]}</p>
-                    <a href="/select/{bus["id"]}" class="btn btn-warning w-100 text-dark">Book Seats</a>
+            <div class="card bg-gradient-success text-white mb-4 mx-auto shadow-lg" style="max-width:550px;border-radius:20px;">
+                <div class="card-body p-4">
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div>
+                            <h5 class="fw-bold mb-1">{bus["bus_name"]}</h5>
+                            <p class="mb-1"><strong>⏰ Departure:</strong> {bus["departure_time"]}</p>
+                        </div>
+                        <span class="badge bg-light text-dark fs-6 px-3 py-2">{status}</span>
+                    </div>
+
+                    {coords and f'''
+                    <div class="alert alert-warning alert-dismissible fade show" role="alert" style="font-size:0.9rem;">
+                        📍 LIVE GPS: <strong>{coords}</strong>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert"></button>
+                    </div>''' or ""}
+
+                    <div class="d-grid gap-2 d-md-flex justify-content-md-between">
+                        <a href="/live-bus/{bus['id']}" class="btn btn-outline-light flex-fill me-md-2">
+                            📍 Live Track
+                        </a>
+                        <a href="/select/{bus['id']}" class="btn btn-light flex-fill text-dark">
+                            🎫 Book Seats
+                        </a>
+                    </div>
                 </div>
             </div>'''
+
     return render_template_string(BASE_HTML, content=html)
 
 
@@ -750,53 +773,60 @@ def driver(sid):
 """
 
 
-@app.route("/live-tracking")
+@app.route("/live-bus/<int:sid>")
 @safe_db
-def live_tracking():
+def live_bus(sid):
     conn, cur = get_db()
-
-    # All buses with routes
     cur.execute("""
-            SELECT s.id, s.bus_name, r.route_name, 
-                   s.current_lat as lat, s.current_lng as lng,
-                   r.id as route_id
-            FROM schedules s 
-            JOIN routes r ON s.route_id = r.id
-            WHERE s.current_lat IS NOT NULL
-        """)
-    buses = cur.fetchall()
+        SELECT s.id, s.bus_name, s.departure_time,
+               r.route_name, r.distance_km,
+               s.current_lat as lat, s.current_lng as lng, s.last_updated
+        FROM schedules s JOIN routes r ON s.route_id = r.id 
+        WHERE s.id = %s
+    """, (sid,))
+    bus = cur.fetchone()
 
-    # Route coordinates for polylines
-    route_coords = {}
-    for bus in buses:
-        cur.execute("""
-            SELECT ARRAY[lat, lng] as coord FROM route_stations 
-            WHERE route_id=%s AND lat IS NOT NULL ORDER BY station_order
-        """, (bus['route_id'],))
-        coords = [r['coord'] for r in cur.fetchall()]
-        route_coords[bus['id']] = coords
+    if not bus:
+        return "Bus not found", 404
+
+    status = "🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..."
+    coords = f"{float(bus['lat']):.5f}, {float(bus['lng']):.5f}" if bus.get('lat') else "N/A"
 
     content = f'''
     <style>
-    #map{{height:80vh;width:100%;border-radius:20px;box-shadow:0 25px 50px rgba(0,0,0,0.3);}}
-    .live-bus{{width:20px;height:20px;background:#FF4444;border-radius:50%;box-shadow:0 0 30px #FF4444;
-               animation:pulse 1s infinite;transform:rotate(0deg);}}
-    @keyframes pulse{{0%,100%{{transform:scale(1) rotate(var(--rotation,0deg));}}50%{{transform:scale(1.3);}}}}
-    .route-path{{stroke:#00AAFF;weight:8;opacity:0.8}}
-    .bus-trail{{stroke:#FF4444;weight:5;opacity:0.9}}
-    .sidebar{{background:rgba(255,255,255,0.98);backdrop-filter:blur(20px);}}
+    #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
+    .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
+    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}
+    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);}}
     </style>
+
+    <div class="text-center mb-5">
+        <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
+        <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
+        <div class="h6 text-success mb-3">{status}</div>
+    </div>
 
     <div class="row g-4">
         <div class="col-lg-8">
-            <div id="map" class="rounded-3"></div>
+            <div id="map" class="rounded-4"></div>
         </div>
         <div class="col-lg-4">
-            <div class="sidebar p-4 rounded-3 sticky-top" style="top:20px;height:80vh;overflow:auto;">
-                <h4>🚌 Live Buses ({len(buses)})</h4>
-                <div id="bus-list" class="mb-4"></div>
-                <div id="live-stats" class="p-3 bg-light rounded">
-                    <div class="text-muted">Phone से <b>/driver/1</b> GPS चालू करें</div>
+            <div id="live-stats" class="stats-card p-4 rounded-4 shadow-lg h-100">
+                <h5 class="text-center mb-4">
+                    {coords if coords != "N/A" else "📱 Phone से GPS चालू करें"}
+                </h5>
+                <div id="current-location" class="h4 text-primary mb-3">
+                    {coords if coords != "N/A" else "Waiting..."}
+                </div>
+                <div class="mb-3">
+                    <a href="/driver/{sid}" target="_blank" class="btn btn-success w-100 mb-2">
+                        📱 Driver GPS (Phone)
+                    </a>
+                    <a href="/" class="btn btn-outline-secondary w-100">🏠 Back to Home</a>
+                </div>
+                <hr>
+                <div id="connection-status" class="small text-muted">
+                    Socket connecting...
                 </div>
             </div>
         </div>
@@ -806,91 +836,40 @@ def live_tracking():
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    const buses = {str(buses)};
-    const routes = {str(route_coords)};
-    const socket = io({{transports:["websocket"]}});
-
-    // 🗺️ Leaflet Map
-    const map = L.map('map').setView([27.2, 74.2], 8);
+    const sid = {sid};
+    const map = L.map('map').setView([27.2, 74.2], 10);
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
         attribution: '© OpenStreetMap | Bus Live Tracking'
     }}).addTo(map);
 
-    let markers = {{}}, paths = {{}}, trails = {{}};
+    let marker = null;
+    const socket = io({{transports:["websocket","polling"]}});
 
-    // 🛤️ Route Polylines (Blue dashed)
-    Object.entries(routes).forEach(([busId, coords]) => {{
-        if(coords.length > 1) {{
-            L.polyline(coords.map(c=>[c[0],c[1]]), {{
-                color: '#00AAFF', weight: 8, opacity: 0.7, dashArray: '15 10'
-            }}).addTo(map).bindPopup(`Route: Bus ${{busId}}`);
-        }}
-    }});
-
-    // 📋 Bus List
-    document.getElementById('bus-list').innerHTML = buses.map(b=>
-        `<div class="card mb-3 border-0 shadow-sm">
-            <div class="card-body p-3">
-                <div class="d-flex align-items-center">
-                    <div class="live-bus me-3" style="min-width:24px"></div>
-                    <div>
-                        <div class="fw-bold small">${{b.bus_name}}</div>
-                        <div class="text-muted" style="font-size:11px">${{b.route_name}}</div>
-                    </div>
-                </div>
-            </div>
-        </div>`
-    ).join('');
-
-    // 📍 LIVE GPS Handler
-    socket.on('bus_location', data => {{
-        const sid = data.sid;
-        const pos = [parseFloat(data.lat), parseFloat(data.lng)];
-
-        // Update marker
-        if(markers[sid]) {{
-            markers[sid].setLatLng(pos);
-            markers[sid]._icon.style.transform = `rotate(${{(data.heading||0)}}deg)`;
-        }} else {{
-            markers[sid] = L.marker(pos, {{
-                icon: L.divIcon({{
-                    html: `<div class="live-bus" style="--rotation:0deg"></div>`,
-                    iconSize: [28,28], className: 'bus-marker', iconAnchor: [14,14]
-                }})
-            }}).addTo(map).bindPopup(`
-                <b>🚌 Live Bus ${{sid}}</b><br>
-                📍 ${{data.lat.toFixed(6)}}, ${{data.lng.toFixed(6)}}<br>
-                🚀 ${{data.speed||0}} km/h<br>
-                <small>Real-time GPS</small>`);
-        }}
-
-        // Trail path
-        if(!trails[sid]) trails[sid] = [];
-        trails[sid].push(pos);
-        if(trails[sid].length > 10) trails[sid].shift();
-
-        if(paths[sid]) map.removeLayer(paths[sid]);
-        paths[sid] = L.polyline(trails[sid], {{
-            color: '#FF4444', weight: 5, opacity: 0.9
-        }}).addTo(map);
-
-        map.panTo(pos, {{duration: 1.2}});
-
-        // Live panel
-        const bus = buses.find(b=>b.id==sid);
-        document.getElementById('live-stats').innerHTML = `
-            <div class="alert alert-success p-3">
-                <div class="fw-bold mb-1">📍 Live Update</div>
-                <div class="small">${{bus?.bus_name || 'Bus '+sid}}</div>
-                <div class="small mb-1">📍 ${{data.lat.toFixed(5)}}, ${{data.lng.toFixed(5)}}</div>
-                <div class="small">🚀 ${{data.speed||0}} km/h</div>
-            </div>`;
-    }});
+    {'marker = L.marker([{lat},{lng}]).addTo(map).bindPopup("🚌 Live Location"); map.setView([{lat},{lng}], 13);'.format(lat=bus.get('lat', 27.2), lng=bus.get('lng', 74.2)) if bus.get('lat') else ''}
 
     socket.on('connect', () => {{
-        console.log('✅ LIVE TRACKING READY');
-        document.getElementById('live-stats').innerHTML = 
-            '<div class="alert alert-info p-3"><b>✅ Socket Connected</b><br><small>/driver/1 से GPS शुरू करें</small></div>';
+        document.getElementById('connection-status').innerHTML = '✅ Socket Connected';
+    }});
+
+    socket.on('bus_location', data => {{
+        if(data.sid == sid) {{
+            const pos = [parseFloat(data.lat), parseFloat(data.lng)];
+            document.getElementById('current-location').innerHTML = 
+                `📍 ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}`;
+
+            if(marker) marker.setLatLng(pos);
+            else {{
+                marker = L.marker(pos, {{
+                    icon: L.divIcon({{
+                        html: '<div class="live-bus"></div>',
+                        iconSize: [40,40], className: 'bus-marker'
+                    }})
+                }}).addTo(map);
+            }}
+            map.panTo(pos, {{duration: 1.5}});
+
+            document.getElementById('live-stats').scrollIntoView({{behavior: 'smooth'}});
+        }}
     }});
     </script>
     '''
