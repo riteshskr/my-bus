@@ -1058,11 +1058,15 @@ def driver(sid):
 @safe_db
 def live_bus(sid):
     conn, cur = get_db()
+
+    # ---- Bus + Route Info ----
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time,
                r.route_name, r.distance_km,
-               s.current_lat as lat, s.current_lng as lng
-        FROM schedules s JOIN routes r ON s.route_id = r.id 
+               s.current_lat as lat, s.current_lng as lng,
+               s.route_id
+        FROM schedules s 
+        JOIN routes r ON s.route_id = r.id 
         WHERE s.id = %s
     """, (sid,))
     bus = cur.fetchone()
@@ -1070,88 +1074,108 @@ def live_bus(sid):
     if not bus:
         return "Bus not found", 404
 
-    lat = float(bus.get('lat', 27.2))
-    lng = float(bus.get('lng', 74.2))
+    lat = float(bus.get('lat') or 27.2)
+    lng = float(bus.get('lng') or 74.2)
     has_gps = bus.get('lat') is not None
+
+    # ---- STATIONS WITH LAT LNG ----
+    cur.execute("""
+        SELECT station_name, lat, lng
+        FROM route_stations
+        WHERE route_id = %s
+        ORDER BY station_order
+    """, (bus["route_id"],))
+
+    stations = cur.fetchall()
 
     content = f'''
     <style>
     #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
-    .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
+    .live-bus{{
+        animation:pulse 2s infinite;
+        width:30px;height:30px;
+        background:#ff4444;
+        border-radius:50%;
+        border:3px solid #fff;
+        box-shadow:0 0 20px #ff4444;
+    }}
     @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
-    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);}}
     </style>
 
-    <div class="text-center mb-5">
-        <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
-        <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
-        <div class="h6 {"text-success" if has_gps else "text-warning"} mb-3">
-            {"🟢 LIVE GPS" if has_gps else "📡 Waiting for GPS..."}
+    <div class="text-center mb-4">
+        <h2>🚌 {bus['bus_name']}</h2>
+        <h5>{bus['route_name']} ({bus['distance_km']} km)</h5>
+        <div class="h6 {'text-success' if has_gps else 'text-warning'}">
+            {'🟢 LIVE GPS' if has_gps else '📡 Waiting for GPS...'}
         </div>
     </div>
 
-    <div class="row g-4">
-        <div class="col-lg-8">
-            <div id="map" class="rounded-4"></div>
-        </div>
-        <div class="col-lg-4">
-            <div id="live-stats" class="stats-card p-4 rounded-4 shadow-lg h-100">
-                <h5 class="text-center mb-4">
-                    {"📱 Phone से /driver/{sid} GPS चालू करें" if not has_gps else f"📍 {lat:.5f}, {lng:.5f}"}
-                </h5>
-                <div id="current-location" class="h4 {"text-primary" if has_gps else "text-muted"} mb-3">
-                    {"Waiting..." if not has_gps else f"📍 {lat:.5f}, {lng:.5f}"}
-                </div>
-                <div class="mb-3">
-                    <a href="/driver/{sid}" target="_blank" class="btn btn-success w-100 mb-2">
-                        📱 Driver GPS (Phone)
-                    </a>
-                    <a href="/" class="btn btn-outline-secondary w-100">🏠 Back to Home</a>
-                </div>
-                <hr>
-                <div id="connection-status" class="small text-muted">
-                    Socket connecting...
-                </div>
-            </div>
-        </div>
-    </div>
+    <div id="map"></div>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
     <script>
     const sid = {sid};
+
+    // ===== MAP INIT =====
     const map = L.map('map').setView([{lat}, {lng}], {13 if has_gps else 10});
+
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap | Bus Live Tracking'
+        attribution: '© OpenStreetMap'
     }}).addTo(map);
 
-    {"let marker = L.marker([{lat}, {lng}]).addTo(map).bindPopup('🚌 Live Location');" if has_gps else ""}
+    // ===== POLYLINE FROM DB STATIONS =====
+    let points = [];
 
-    const socket = io({{transports:["websocket","polling"]}});
+    {% for st in stations %}
+        {% if st.lat and st.lng %}
+            points.push([{{st.lat}}, {{st.lng}}]);
 
-    socket.on('connect', () => {{
-        document.getElementById('connection-status').innerHTML = '✅ Socket Connected | GPS Updates Live!';
+            // station marker
+            L.marker([{{st.lat}}, {{st.lng}}])
+              .addTo(map)
+              .bindPopup("📍 {{st.station_name}}");
+        {% endif %}
+    {% endfor %}
+
+    if(points.length > 1){{
+        const routeLine = L.polyline(points, {{
+            color: 'green',
+            weight: 7,
+            opacity: 0.9
+        }}).addTo(map);
+
+        map.fitBounds(routeLine.getBounds());
+    }}
+
+    // ===== LIVE BUS MARKER =====
+    let marker = L.marker([{lat}, {lng}], {{
+        icon: L.divIcon({{
+            html: '<div class="live-bus"></div>',
+            iconSize: [30,30],
+            className: ''
+        }})
+    }}).addTo(map);
+
+    // ===== SOCKET =====
+    const socket = io({{
+        transports:["websocket","polling"]
     }});
 
     socket.on('bus_location', data => {{
         if(data.sid == sid) {{
-            const pos = [parseFloat(data.lat), parseFloat(data.lng)];
-            document.getElementById('current-location').innerHTML = 
-                `📍 ${{data.lat.toFixed(5)}}, ${{data.lng.toFixed(5)}}`;
 
-            {"document.getElementById('live-stats').scrollIntoView({{behavior: \\\"smooth\\\"}});"}
+            const pos = [
+                parseFloat(data.lat),
+                parseFloat(data.lng)
+            ];
 
-            if(marker) marker.setLatLng(pos);
-            else {{
-                marker = L.marker(pos, {{
-                    icon: L.divIcon({{
-                        html: '<div class="live-bus"></div>',
-                        iconSize: [40,40], className: 'bus-marker'
-                    }})
-                }}).addTo(map);
-            }}
-            map.panTo(pos, {{duration: 1.5}});
+            marker.setLatLng(pos);
+
+            // smooth follow
+            map.panTo(pos, {{animate:true}});
         }}
     }});
     </script>
