@@ -789,21 +789,24 @@ def live_bus(sid):
     if not bus:
         return "Bus not found", 404
 
-    status = "🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..."
-    coords = f"{float(bus['lat']):.5f}, {float(bus['lng']):.5f}" if bus.get('lat') else "N/A"
+    lat = float(bus.get('lat', 27.2))
+    lng = float(bus.get('lng', 74.2))
+    has_gps = bus.get('lat') is not None
 
     content = f'''
     <style>
     #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
     .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
-    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}
+    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
     .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);}}
     </style>
 
     <div class="text-center mb-5">
         <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
         <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
-        <div class="h6 text-success mb-3">{status}</div>
+        <div class="h6 {"text-success" if has_gps else "text-warning"} mb-3">
+            {"🟢 LIVE GPS" if has_gps else "📡 Waiting for GPS..."}
+        </div>
     </div>
 
     <div class="row g-4">
@@ -813,10 +816,10 @@ def live_bus(sid):
         <div class="col-lg-4">
             <div id="live-stats" class="stats-card p-4 rounded-4 shadow-lg h-100">
                 <h5 class="text-center mb-4">
-                    {coords if coords != "N/A" else "📱 Phone से GPS चालू करें"}
+                    {"📱 Phone से /driver/{sid} GPS चालू करें" if not has_gps else f"📍 {lat:.5f}, {lng:.5f}"}
                 </h5>
-                <div id="current-location" class="h4 text-primary mb-3">
-                    {coords if coords != "N/A" else "Waiting..."}
+                <div id="current-location" class="h4 {"text-primary" if has_gps else "text-muted"} mb-3">
+                    {"Waiting..." if not has_gps else f"📍 {lat:.5f}, {lng:.5f}"}
                 </div>
                 <div class="mb-3">
                     <a href="/driver/{sid}" target="_blank" class="btn btn-success w-100 mb-2">
@@ -837,25 +840,26 @@ def live_bus(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
     const sid = {sid};
-    const map = L.map('map').setView([27.2, 74.2], 10);
+    const map = L.map('map').setView([{lat}, {lng}], {13 if has_gps else 10});
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
         attribution: '© OpenStreetMap | Bus Live Tracking'
     }}).addTo(map);
 
-    let marker = null;
+    {"let marker = L.marker([{lat}, {lng}]).addTo(map).bindPopup('🚌 Live Location');" if has_gps else ""}
+
     const socket = io({{transports:["websocket","polling"]}});
 
-    {'marker = L.marker([{lat},{lng}]).addTo(map).bindPopup("🚌 Live Location"); map.setView([{lat},{lng}], 13);'.format(lat=bus.get('lat', 27.2), lng=bus.get('lng', 74.2)) if bus.get('lat') else ''}
-
     socket.on('connect', () => {{
-        document.getElementById('connection-status').innerHTML = '✅ Socket Connected';
+        document.getElementById('connection-status').innerHTML = '✅ Socket Connected | GPS Updates Live!';
     }});
 
     socket.on('bus_location', data => {{
         if(data.sid == sid) {{
             const pos = [parseFloat(data.lat), parseFloat(data.lng)];
             document.getElementById('current-location').innerHTML = 
-                `📍 ${data.lat.toFixed(5)}, ${data.lng.toFixed(5)}`;
+                `📍 ${{data.lat.toFixed(5)}}, ${{data.lng.toFixed(5)}}`;
+
+            {"document.getElementById('live-stats').scrollIntoView({{behavior: \\\"smooth\\\"}});"}
 
             if(marker) marker.setLatLng(pos);
             else {{
@@ -867,8 +871,6 @@ def live_bus(sid):
                 }}).addTo(map);
             }}
             map.panTo(pos, {{duration: 1.5}});
-
-            document.getElementById('live-stats').scrollIntoView({{behavior: 'smooth'}});
         }}
     }});
     </script>
