@@ -7,6 +7,7 @@ from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 import atexit
+import json
 
 # ================= APP =================
 app = Flask(__name__)
