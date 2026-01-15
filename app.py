@@ -706,6 +706,7 @@ def seats(sid):
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
+    stations_json = [{"name": r["station_name"], "lat": r["lat"], "lng": r["lng"]} for r in stations_data]
 
     # Booked seats calculation
     cur.execute("""
@@ -834,6 +835,14 @@ def seats(sid):
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
         attribution:'© OpenStreetMap'
     }}).addTo(map);
+    // Draw polyline
+    const routeLine = L.polyline(latlngs, {{color:'blue', weight:4, opacity:0.7}}).addTo(map);
+    map.fitBounds(routeLine.getBounds());
+
+    // Station markers
+    stations.forEach(s => {{
+        L.marker([s.lat, s.lng]).addTo(map).bindPopup(s.name);
+    }});
 
     let busMarker = L.marker([{lat},{lng}], {{
         icon:L.divIcon({{html:'<div class="live-bus"></div>', className:'bus-marker', iconSize:[30,30]}})
