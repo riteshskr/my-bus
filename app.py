@@ -62,27 +62,7 @@ def init_db():
     with app.app_context():
         conn, cur = get_db()
         try:
-            cur.execute("""
-                        ALTER TABLE schedules 
-                        ADD COLUMN IF NOT EXISTS current_lat DECIMAL(10,8),
-                        ADD COLUMN IF NOT EXISTS current_lng DECIMAL(11,8),
-                        ADD COLUMN IF NOT EXISTS last_updated TIMESTAMP
-                        """)
-            cur.execute("""
-                            UPDATE schedules SET 
-                                current_lat = CASE id
-                                    WHEN 1 THEN 27.4849  -- Bikaner
-                                    WHEN 2 THEN 28.0190  
-                                    WHEN 3 THEN 27.0238  -- Jaipur
-                                    WHEN 4 THEN 27.0238
-                                END,
-                                current_lng = CASE id 
-                                    WHEN 1 THEN 73.0467
-                                    WHEN 2 THEN 73.0467
-                                    WHEN 3 THEN 75.8454
-                                    WHEN 4 THEN 75.8454
-                                END
-                            """)
+            
             cur.execute("""
             CREATE TABLE IF NOT EXISTS routes (
                 id SERIAL PRIMARY KEY, 
