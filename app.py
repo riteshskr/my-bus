@@ -234,39 +234,95 @@ def select(sid):
     row = cur.fetchone()
     route_id = row["route_id"] if row else 1
 
-    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (route_id,))
-    stations = [r["station_name"] for r in cur.fetchall()]
+    # 🔥 नई table - सभी stations + distance mapping
+    cur.execute("""
+        SELECT rs.station_name, rs.station_order, r.distance_km
+        FROM route_stations rs 
+        JOIN routes r ON rs.route_id = r.id 
+        WHERE rs.route_id=%s 
+        ORDER BY rs.station_order
+    """, (route_id,))
+    stations_data = cur.fetchall()
+    stations = [{"name": r["station_name"], "order": r["station_order"], "total_dist": r["distance_km"]}
+                for r in stations_data]
 
-    opts = "".join(f"<option>{s}</option>" for s in stations)
+    opts = "".join(f'<option value="{s["name"]}">{s["name"]}</option>' for s in stations)
     today = date.today().isoformat()
 
     if request.method == "POST":
         fs = request.form["from"]
         ts = request.form["to"]
         d = request.form["date"]
-        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+
+        # 🔥 STATION DISTANCE से FARE calculate
+        fs_order = next(s["order"] for s in stations if s["name"] == fs)
+        ts_order = next(s["order"] for s in stations if s["name"] == ts)
+        total_dist = stations[-1]["total_dist"]  # Full route distance
+
+        # प्रति KM ₹1.2 + base ₹50
+        travel_dist = (ts_order - fs_order) / (stations[-1]["order"] - stations[0]["order"]) * total_dist
+        fare = int(travel_dist * 1.2 + 50)
+
+        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}&fare={fare}")
 
     form = f'''
     <div class="card mx-auto" style="max-width:500px">
         <div class="card-body">
-            <h5 class="card-title text-center">🎫 Journey Details</h5>
+            <h5 class="card-title text-center">🎫 यात्रा विवरण चुनें</h5>
+
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label">From:</label>
-                    <select name="from" class="form-select" required>{opts}</select>
+                    <label class="form-label">🌍 From:</label>
+                    <select name="from" id="fromStation" class="form-select" required onchange="calcFare()">{opts}</select>
                 </div>
+
                 <div class="mb-3">
-                    <label class="form-label">To:</label>
-                    <select name="to" class="form-select" required>{opts}</select>
+                    <label class="form-label">🎯 To:</label>
+                    <select name="to" id="toStation" class="form-select" required onchange="calcFare()">{opts}</select>
                 </div>
+
                 <div class="mb-3">
-                    <label class="form-label">Date:</label>
+                    <label class="form-label">💰 अनुमानित किराया:</label>
+                    <input type="text" id="fareDisplay" class="form-control" readonly 
+                           style="background:#e8f5e8; font-weight:bold; font-size:1.2em;" 
+                           placeholder="यहाँ किराया दिखेगा...">
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">📅 Date:</label>
                     <input type="date" name="date" class="form-control" value="{today}" min="{today}" required>
                 </div>
-                <button class="btn btn-success w-100">View Available Seats</button>
+
+                <button class="btn btn-success w-100">🎫 उपलब्ध सीटें देखें</button>
             </form>
         </div>
-    </div>'''
+    </div>
+
+    <script>
+    stations = {json.dumps(stations)};
+    totalDist = stations[stations.length-1].total_dist;
+
+    function calcFare() {{
+        const fromSel = document.getElementById('fromStation');
+        const toSel = document.getElementById('toStation');
+        const fareDisplay = document.getElementById('fareDisplay');
+
+        if(fromSel.value && toSel.value && fromSel.value != toSel.value) {{
+            const fromOrder = stations.find(s => s.name == fromSel.value).order;
+            const toOrder = stations.find(s => s.name == toSel.value).order;
+
+            const travelDist = (toOrder - fromOrder) / (stations[stations.length-1].order - stations[0].order) * totalDist;
+            const fare = Math.round(travelDist * 1.2 + 50);
+
+            fareDisplay.value = `₹${fare}`;
+            fareDisplay.style.background = '#d4edda';
+        }} else {{
+            fareDisplay.value = '';
+            fareDisplay.style.background = '#e8f5e8';
+        }}
+    }}
+    </script>
+    '''
     return render_template_string(BASE_HTML, content=form)
 
 
