@@ -695,7 +695,7 @@ def seats(sid):
 
     conn, cur = get_db()
 
-    # Stations mapping
+    # ===== ROUTE STATIONS FOR POLYLINE =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -703,187 +703,205 @@ def seats(sid):
         ORDER BY station_order
     """, (sid,))
     stations_data = cur.fetchall()
+    station_list = [r["station_name"] for r in stations_data]
+
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
-    # Booked seats calculation
+    # ===== BOOKED SEATS LOGIC =====
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
     """, (sid, d))
+
     booked_rows = cur.fetchall()
     booked_seats = set()
+
     for row in booked_rows:
         if row['from_station'] in station_to_order and row['to_station'] in station_to_order:
             booked_fs = station_to_order[row['from_station']]
             booked_ts = station_to_order[row['to_station']]
+
             if not (ts_order <= booked_fs or fs_order >= booked_ts):
                 booked_seats.add(row['seat_number'])
 
-    # 🔥 FIXED SEAT BUTTONS - हर button में onclick direct!
-    seat_buttons = ""
     available_count = 40 - len(booked_seats)
 
+    # ===== SEAT BUTTONS =====
+    seat_buttons = ""
     for i in range(1, 41):
         if i in booked_seats:
             seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'''
-            <button class="btn btn-success seat" 
-                    data-seat="{i}" 
-                    onclick="bookSeat({i}, this)"
-                    style="cursor:pointer; width:50px; height:50px; margin:2px;">
+            <button class="btn btn-success seat"
+                    data-seat="{i}"
+                    onclick="bookSeat({i}, this)">
                 {i}
             </button>'''
 
-    # ✅ PERFECT WORKING SCRIPT - Socket + Socket.IO CDN दोनों!
-    script = f'''
+    # ============ MAP + POLYLINE SECTION ============
+    map_section = f'''
+    <div class="card shadow mb-3">
+      <div class="card-body">
+        <h5 class="text-center">🚌 Live Bus Tracking with Route</h5>
+
+        <div id="map" style="height:320px;width:100%;border-radius:12px;"></div>
+
+        <div class="text-center mt-2">
+            <span id="gpsStatus" class="text-muted">📡 GPS का इंतज़ार...</span>
+        </div>
+      </div>
+    </div>
+    '''
+
+    # ============ MAIN HTML ============
+    html = f'''
+    <style>
+    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
+    .seat {{ width: 55px !important; height: 55px !important; }}
+
+    .bus-icon {{
+      font-size: 26px;
+      animation: pulse 2s infinite;
+    }}
+
+    @keyframes pulse {{
+      0% {{ transform: scale(1); }}
+      50% {{ transform: scale(1.2); }}
+      100% {{ transform: scale(1); }}
+    }}
+    </style>
+
+    {map_section}
+
+    <div class="text-center mb-5">
+        <div class="card bg-primary text-white mx-auto mb-4" style="max-width: 600px;">
+            <div class="card-body py-4">
+                <h3>🚌 {fs} → {ts}</h3>
+                <h5>📅 {d}</h5>
+                <div class="h4">
+                    सीटें उपलब्ध:
+                    <span id="availableCount" class="badge bg-success">
+                        {available_count}
+                    </span>/40
+                </div>
+            </div>
+        </div>
+
+        <div class="bus-row">{seat_buttons}</div>
+    </div>
+
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <script>
-    // Global config
     window.sid = {sid};
-    window.fs = "{fs.replace("'", "\\'")}";
-    window.ts = "{ts.replace("'", "\\'")}";
+    window.fs = "{fs}";
+    window.ts = "{ts}";
     window.date = "{d}";
 
-    // Socket connection
-    const socket = io({{
-        transports: ["websocket", "polling"],
-        reconnection: true,
-        timeout: 20000,
-        reconnectionAttempts: 5
+    const socket = io();
+
+    // ===== ROUTE STATIONS FROM SERVER =====
+    const routeStations = {station_list};
+
+    // Demo coordinates (आप चाहो तो बाद में API से ले लेंगे)
+    const stationCoords = {{
+        "बीकानेर": [28.0229, 73.3119],
+        "जयपुर": [26.9124, 75.7873],
+        "जोधपुर": [26.2389, 73.0243]
+    }};
+
+    let map = L.map('map').setView([27.2, 74.2], 7);
+
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png')
+     .addTo(map);
+
+    // ===== POLYLINE CREATE =====
+    let points = [];
+
+    routeStations.forEach(st => {{
+        if(stationCoords[st]) {{
+            points.push(stationCoords[st]);
+        }}
     }});
 
-    console.log("🚀 Seat page loaded - Socket connected");
+    let routeLine = L.polyline(points, {{
+        color: 'blue',
+        weight: 5
+    }}).addTo(map);
 
-    // ⭐ MAIN BOOKING FUNCTION - हर onclick यहीं आएगा
+    map.fitBounds(routeLine.getBounds());
+
+    // ===== BUS MARKER =====
+    let busMarker = null;
+
+    let busIcon = L.divIcon({{
+        html: "🚌",
+        className: "bus-icon",
+        iconSize: [30, 30]
+    }});
+
+    // ===== LIVE GPS LISTENER =====
+    socket.on("bus_location", function(data) {{
+
+        if(data.sid == window.sid) {{
+
+            const pos = [
+                parseFloat(data.lat),
+                parseFloat(data.lng)
+            ];
+
+            document.getElementById("gpsStatus").innerHTML =
+                `📍 ${{data.lat}}, ${{data.lng}}`;
+
+            if(busMarker) {{
+                busMarker.setLatLng(pos);
+            }} else {{
+                busMarker = L.marker(pos, {{icon: busIcon}})
+                             .addTo(map);
+            }}
+
+            map.panTo(pos);
+        }}
+    }});
+
+    // ===== BOOK SEAT FUNCTION (OLD LOGIC) =====
     function bookSeat(seatId, btn) {{
-        console.log("🚌 Booking seat:", seatId);
 
-        // Visual feedback
-        btn.disabled = true;
-        btn.innerHTML = "⏳";
-        btn.className = "btn btn-warning seat";
+        let name = prompt("यात्री का नाम:");
+        if(!name) return;
 
-        // Name input
-        let name = prompt("👤 यात्री का नाम:");
-        if(!name || !name.trim()) {{
-            resetSeat(btn, seatId);
-            return;
-        }}
+        let mobile = prompt("मोबाइल:");
+        if(!mobile) return;
 
-        // Mobile validation
-        let mobile = prompt("📱 मोबाइल (9876543210):");
-        if(!mobile || !/^[6-9][0-9]{{9}}$/.test(mobile)) {{
-            alert("❌ 10 अंक मोबाइल (6-9 से start)!\\nउदाहरण: 9876543210");
-            resetSeat(btn, seatId);
-            return;
-        }}
-
-        // Server booking
         fetch("/book", {{
             method: "POST",
-            headers: {{"Content-Type": "application/json"}},
+            headers: {{ "Content-Type": "application/json" }},
             body: JSON.stringify({{
                 sid: window.sid,
                 seat: seatId,
-                name: name.trim(),
+                name: name,
                 mobile: mobile,
                 from: window.fs,
                 to: window.ts,
                 date: window.date
             }})
         }})
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {{
-            console.log("📋 Booking response:", data);
             if(data.ok) {{
-                btn.innerHTML = "✅";
-                btn.className = "btn btn-success seat";
-
-                // Live broadcast
-                socket.emit("seat_update", {{
-                    sid: window.sid,
-                    seat: seatId,
-                    date: window.date
-                }});
-
-                alert(`🎉 बुकिंग सफल!\\nनाम: ${{name.trim()}}\\nसीट: ${{seatId}}\\nकिराया: ₹${{data.fare}}`);
-                setTimeout(() => location.reload(), 2000);
+                alert("बुकिंग सफल!");
+                location.reload();
             }} else {{
-                alert("❌ बुकिंग असफल: " + data.error);
-                resetSeat(btn, seatId);
+                alert(data.error);
             }}
-        }})
-        .catch(error => {{
-            console.error("❌ Network error:", error);
-            alert("❌ सर्वर एरर! फिर कोशिश करें।");
-            resetSeat(btn, seatId);
         }});
     }}
-
-    function resetSeat(btn, seatId) {{
-        btn.disabled = false;
-        btn.innerHTML = seatId;
-        btn.className = "btn btn-success seat";
-        btn.style.cursor = "pointer";
-    }}
-
-    // ⭐ LIVE UPDATES - दूसरे tab में instant red
-    socket.on("seat_update", function(data) {{
-        console.log("📡 Live update received:", data);
-        if(window.sid == data.sid && window.date == data.date) {{
-            const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
-            if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML != "✅") {{
-                seatBtn.className = "btn btn-danger seat";
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = "X";
-
-                // Count update
-                const count = document.getElementById("availableCount");
-                if(count) {{
-                    count.textContent = parseInt(count.textContent) - 1;
-                }}
-            }}
-        }}
-    }});
-
-    // Connection status
-    socket.on("connect", () => console.log("✅ Socket connected:", socket.id));
-    socket.on("disconnect", () => console.log("❌ Socket disconnected"));
     </script>
-    '''
-
-    html = f'''
-    <style>
-    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
-    .seat {{ width: 55px !important; height: 55px !important; font-weight: bold; border-radius: 8px !important; }}
-    .bus-row > div {{ flex: 0 0 auto; }}
-    </style>
-
-    <div class="text-center mb-5">
-        <div class="card bg-gradient-primary text-white mx-auto mb-4" style="max-width: 600px;">
-            <div class="card-body py-4">
-                <h3 class="mb-2">🚌 {fs} → {ts}</h3>
-                <h5 class="mb-3">📅 {d}</h5>
-                <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
-            </div>
-        </div>
-
-        <div class="bus-row" style="max-width: 800px; margin: 0 auto;">
-            {seat_buttons}
-        </div>
-
-        <div class="mt-4">
-            <small class="text-muted">
-                💚 हरी = उपलब्ध | 🔴 लाल = बुक | ⏳ बुक हो रही | ✅ बुक हो गई
-            </small>
-        </div>
-    </div>
-
-    {script}
     '''
 
     return render_template_string(BASE_HTML, content=html)
