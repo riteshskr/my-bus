@@ -844,7 +844,7 @@ def seats(sid):
             const lat=parseFloat(data.lat);
             const lng=parseFloat(data.lng);
             busMarker.setLatLng([lat,lng]);
-            map.setView([lat,lng],13,{animate:true});
+            map.setView([lat,lng],13, {{animate:true}});
         }}
     }});
     </script>
