@@ -697,11 +697,13 @@ def seats(sid):
 
     # Stations mapping
     cur.execute("""
-        SELECT station_name, station_order
-        FROM route_stations
-        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
-        ORDER BY station_order
-    """, (sid,))
+       SELECT station_name, lat, lng, station_order
+    FROM route_stations
+    WHERE route_id = (
+        SELECT route_id FROM schedules WHERE id=%s
+    )
+    ORDER BY station_order
+""", (sid,))
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
     fs_order = station_to_order.get(fs, 1)
