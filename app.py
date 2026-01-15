@@ -278,6 +278,8 @@ def seats(sid):
     d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
+
+    # Stations mapping
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -289,6 +291,7 @@ def seats(sid):
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
+    # Booked seats calculation
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
@@ -303,59 +306,67 @@ def seats(sid):
             if not (ts_order <= booked_fs or fs_order >= booked_ts):
                 booked_seats.add(row['seat_number'])
 
-    # ✅ SEAT BUTTONS - data-seat attribute के साथ
+    # 🔥 FIXED SEAT BUTTONS - हर button में onclick direct!
     seat_buttons = ""
+    available_count = 40 - len(booked_seats)
+
     for i in range(1, 41):
         if i in booked_seats:
             seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
-            seat_buttons += f'<button class="btn btn-success seat" data-seat="{i}">{i}</button>'
+            seat_buttons += f'''
+            <button class="btn btn-success seat" 
+                    data-seat="{i}" 
+                    onclick="bookSeat({i}, this)"
+                    style="cursor:pointer; width:50px; height:50px; margin:2px;">
+                {i}
+            </button>'''
 
-    # ✅ COMPLETE WORKING SCRIPT - कोई error नहीं!
+    # ✅ PERFECT WORKING SCRIPT - Socket + Socket.IO CDN दोनों!
     script = f'''
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    // NO console.log - silent loading
+    // Global config
     window.sid = {sid};
-    window.fs = "{fs}";
-    window.ts = "{ts}";
+    window.fs = "{fs.replace("'", "\\'")}";
+    window.ts = "{ts.replace("'", "\\'")}";
     window.date = "{d}";
 
-    // ✅ QUIET Socket connection (no messages)
+    // Socket connection
     const socket = io({{
         transports: ["websocket", "polling"],
         reconnection: true,
-        timeout: 10000
+        timeout: 20000,
+        reconnectionAttempts: 5
     }});
 
-    // ⭐ CLICK HANDLER - सीधा काम करेगा
-    document.addEventListener("click", function(e) {{
-        if(e.target.classList.contains("seat") && 
-           e.target.getAttribute("data-seat") && 
-           !e.target.disabled) {{
-            const seatId = parseInt(e.target.getAttribute("data-seat"));
-            bookSeat(seatId, e.target);
-        }}
-    }});
+    console.log("🚀 Seat page loaded - Socket connected");
 
-    // ⭐ BOOKING FUNCTION
+    // ⭐ MAIN BOOKING FUNCTION - हर onclick यहीं आएगा
     function bookSeat(seatId, btn) {{
+        console.log("🚌 Booking seat:", seatId);
+
+        // Visual feedback
         btn.disabled = true;
         btn.innerHTML = "⏳";
         btn.className = "btn btn-warning seat";
 
-        let name = prompt("👤 नाम डालें:");
+        // Name input
+        let name = prompt("👤 यात्री का नाम:");
         if(!name || !name.trim()) {{
             resetSeat(btn, seatId);
             return;
         }}
 
-        let mobile = prompt("📱 मोबाइल (10 अंक):");
-        if(!/^[0-9]{{10}}$/.test(mobile)) {{
-            alert("❌ 10 अंक मोबाइल डालें!");
+        // Mobile validation
+        let mobile = prompt("📱 मोबाइल (9876543210):");
+        if(!mobile || !/^[6-9][0-9]{{9}}$/.test(mobile)) {{
+            alert("❌ 10 अंक मोबाइल (6-9 से start)!\\nउदाहरण: 9876543210");
             resetSeat(btn, seatId);
             return;
         }}
 
+        // Server booking
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
@@ -369,25 +380,30 @@ def seats(sid):
                 date: window.date
             }})
         }})
-        .then(r => r.json())
-        .then(r => {{
-            if(r.ok) {{
+        .then(response => response.json())
+        .then(data => {{
+            console.log("📋 Booking response:", data);
+            if(data.ok) {{
                 btn.innerHTML = "✅";
                 btn.className = "btn btn-success seat";
-                // ✅ LIVE UPDATE सभी clients को
+
+                // Live broadcast
                 socket.emit("seat_update", {{
                     sid: window.sid,
                     seat: seatId,
                     date: window.date
                 }});
-                setTimeout(() => location.reload(), 1000);
+
+                alert(`🎉 बुकिंग सफल!\\nनाम: ${{name.trim()}}\\nसीट: ${{seatId}}\\nकिराया: ₹${{data.fare}}`);
+                setTimeout(() => location.reload(), 2000);
             }} else {{
-                alert("❌ " + r.error);
+                alert("❌ बुकिंग असफल: " + data.error);
                 resetSeat(btn, seatId);
             }}
         }})
-        .catch(() => {{
-            alert("❌ Network Error");
+        .catch(error => {{
+            console.error("❌ Network error:", error);
+            alert("❌ सर्वर एरर! फिर कोशिश करें।");
             resetSeat(btn, seatId);
         }});
     }}
@@ -396,16 +412,20 @@ def seats(sid):
         btn.disabled = false;
         btn.innerHTML = seatId;
         btn.className = "btn btn-success seat";
+        btn.style.cursor = "pointer";
     }}
 
-    // ✅ LIVE UPDATE HANDLER - दूसरे tab में भी update
+    // ⭐ LIVE UPDATES - दूसरे tab में instant red
     socket.on("seat_update", function(data) {{
+        console.log("📡 Live update received:", data);
         if(window.sid == data.sid && window.date == data.date) {{
             const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
             if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML != "✅") {{
                 seatBtn.className = "btn btn-danger seat";
                 seatBtn.disabled = true;
                 seatBtn.innerHTML = "X";
+
+                // Count update
                 const count = document.getElementById("availableCount");
                 if(count) {{
                     count.textContent = parseInt(count.textContent) - 1;
@@ -413,18 +433,43 @@ def seats(sid):
             }}
         }}
     }});
+
+    // Connection status
+    socket.on("connect", () => console.log("✅ Socket connected:", socket.id));
+    socket.on("disconnect", () => console.log("❌ Socket disconnected"));
     </script>
     '''
 
     html = f'''
-    <div class="text-center mb-4">
-        <h4>🚌 {fs} → {ts} | 📅 {d}</h4>
-        <p class="lead">Available Seats: <span id="availableCount">{40 - len(booked_seats)}</span>/40</p>
-        <div class="bus-row mt-3">{seat_buttons}</div>
+    <style>
+    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
+    .seat {{ width: 55px !important; height: 55px !important; font-weight: bold; border-radius: 8px !important; }}
+    .bus-row > div {{ flex: 0 0 auto; }}
+    </style>
+
+    <div class="text-center mb-5">
+        <div class="card bg-gradient-primary text-white mx-auto mb-4" style="max-width: 600px;">
+            <div class="card-body py-4">
+                <h3 class="mb-2">🚌 {fs} → {ts}</h3>
+                <h5 class="mb-3">📅 {d}</h5>
+                <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
+            </div>
+        </div>
+
+        <div class="bus-row" style="max-width: 800px; margin: 0 auto;">
+            {seat_buttons}
+        </div>
+
+        <div class="mt-4">
+            <small class="text-muted">
+                💚 हरी = उपलब्ध | 🔴 लाल = बुक | ⏳ बुक हो रही | ✅ बुक हो गई
+            </small>
+        </div>
     </div>
-    
+
     {script}
     '''
+
     return render_template_string(BASE_HTML, content=html)
 
 
