@@ -517,63 +517,127 @@ def home():
 def buses(rid):
     conn, cur = get_db()
 
-    # Route name
-    cur.execute("SELECT route_name FROM routes WHERE id=%s", (rid,))
-    route = cur.fetchone()
-    route_name = route['route_name'] if route else "Unknown Route"
-
-    # Live buses इस route के
+    # Route name + stations
     cur.execute("""
-        SELECT s.id, s.bus_name, s.departure_time,
-               s.current_lat, s.current_lng
+        SELECT r.route_name, r.distance_km, 
+               string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+        FROM routes r 
+        LEFT JOIN route_stations rs ON r.id = rs.route_id 
+        WHERE r.id = %s 
+        GROUP BY r.id, r.route_name, r.distance_km
+    """, (rid,))
+    route = cur.fetchone()
+
+    if not route:
+        return "❌ Route नहीं मिला", 404
+
+    # सभी schedules with LIVE GPS status
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
+               s.current_lat, s.current_lng,
+               COALESCE(bk.count, 0) as booked_count
         FROM schedules s 
+        LEFT JOIN (
+            SELECT schedule_id, COUNT(*) as count 
+            FROM seat_bookings 
+            WHERE travel_date = CURRENT_DATE AND status='confirmed'
+            GROUP BY schedule_id
+        ) bk ON s.id = bk.schedule_id
         WHERE s.route_id = %s 
         ORDER BY s.departure_time
     """, (rid,))
     buses_data = cur.fetchall()
 
+    # Header
     html = f'''
-    <div class="text-center mb-5">
-        <h3 class="display-5 fw-bold">🚌 {route_name}</h3>
-        <p class="lead text-muted">Live GPS + Seat Booking</p>
+    <div class="text-center mb-5 booking-header">
+        <h2 class="display-4 fw-bold mb-3">
+            🚌 <span class="text-warning">{route['route_name']}</span>
+        </h2>
+        <div class="h4 mb-4 text-white-50">
+            📍 {route['stations']} | 🛣️ {route['distance_km']} km
+        </div>
+        <p class="lead mb-0">⏰ सभी बसों का समय + Live GPS ट्रैकिंग</p>
     </div>
     '''
 
     if not buses_data:
-        html += '<div class="alert alert-info text-center">No Buses Available</div>'
+        html += '<div class="alert alert-warning text-center"><h4>⚠️ आज इस रूट पर कोई बस नहीं</h4></div>'
     else:
+        html += '<h3 class="text-center mb-5">🚌 आज उपलब्ध बसें</h3>'
+
+        # Schedule cards - बड़ा + attractive design
         for bus in buses_data:
-            status = "🟢 LIVE" if bus.get('current_lat') else "⚪ Ready"
-            coords = f'{float(bus["current_lat"]):.4f}, {float(bus["current_lng"]):.4f}' if bus.get(
-                'current_lat') else ''
+            dep_time = bus['departure_time'].strftime('%H:%M')
+            gps_status = "🟢 LIVE GPS" if bus.get('current_lat') else "⚪ Ready"
+            gps_coords = f"{bus['current_lat']:.4f}, {bus['current_lng']:.4f}" if bus.get('current_lat') else ""
+            seats_left = bus['total_seats'] - bus['booked_count']
 
             html += f'''
-            <div class="card bg-gradient-success text-white mb-4 mx-auto shadow-lg" style="max-width:550px;border-radius:20px;">
-                <div class="card-body p-4">
-                    <div class="d-flex justify-content-between align-items-start mb-3">
-                        <div>
-                            <h5 class="fw-bold mb-1">{bus["bus_name"]}</h5>
-                            <p class="mb-1"><strong>⏰ Departure:</strong> {bus["departure_time"]}</p>
+            <div class="row mb-5">
+                <div class="col-lg-8 mx-auto">
+                    <div class="card bus-card h-100 shadow-lg border-0" style="border-radius:25px;">
+                        <div class="card-body p-5 text-center position-relative overflow-hidden">
+                            <!-- GPS Badge -->
+                            <div class="position-absolute top-0 end-0 m-3">
+                                <span class="badge fs-6 px-3 py-2 {"bg-success text-white" if bus.get('current_lat') else "bg-secondary"}">
+                                    {gps_status}
+                                </span>
+                            </div>
+
+                            <!-- Bus Info -->
+                            <div class="mb-4">
+                                <h3 class="fw-bold mb-3 display-6">{bus['bus_name']}</h3>
+                                <div class="h2 text-primary mb-4">
+                                    <i class="fas fa-clock me-2"></i>{dep_time}
+                                </div>
+                                <div class="row text-center">
+                                    <div class="col-md-4">
+                                        <div class="h5 mb-1 text-success">🎫</div>
+                                        <div>सीटें बाकी</div>
+                                        <div class="h4 fw-bold text-success">{seats_left}</div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="h5 mb-1 text-info">💺</div>
+                                        <div>कुल</div>
+                                        <div class="h4 fw-bold text-info">{bus['total_seats']}</div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="h5 mb-1 text-warning">📱</div>
+                                        <div>GPS</div>
+                                        <div class="h6 {"text-success fw-bold" if bus.get('current_lat') else "text-muted"}">
+                                            {gps_status}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {gps_coords and f'''
+                            <div class="alert alert-warning mt-4">
+                                📍 LIVE लोकेशन: <strong>{gps_coords}</strong>
+                            </div>''' or ""}
+
+                            <!-- Action Buttons -->
+                            <div class="d-grid gap-3 d-md-flex mt-4">
+                                <a href="/live-bus/{bus['id']}" class="btn btn-primary btn-lg flex-fill btn-custom">
+                                    <i class="fas fa-map-marker-alt me-2"></i>Live GPS
+                                </a>
+                                <a href="/select/{bus['id']}" class="btn btn-success btn-lg flex-fill btn-custom">
+                                    <i class="fas fa-chair me-2"></i>सीट बुक करें
+                                </a>
+                            </div>
                         </div>
-                        <span class="badge bg-light text-dark fs-6 px-3 py-2">{status}</span>
-                    </div>
-
-                    {coords and f'''
-                    <div class="alert alert-warning alert-dismissible fade show" role="alert" style="font-size:0.9rem;">
-                        📍 LIVE GPS: <strong>{coords}</strong>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert"></button>
-                    </div>''' or ""}
-
-                    <div class="d-grid gap-2 d-md-flex justify-content-md-between">
-                        <a href="/live-bus/{bus['id']}" class="btn btn-outline-light flex-fill me-md-2">
-                            📍 Live Track
-                        </a>
-                        <a href="/select/{bus['id']}" class="btn btn-light flex-fill text-dark">
-                            🎫 Book Seats
-                        </a>
                     </div>
                 </div>
             </div>'''
+
+    # Back button
+    html += '''
+    <div class="text-center mt-5">
+        <a href="/" class="btn btn-outline-light btn-lg btn-custom">
+            <i class="fas fa-arrow-left me-2"></i>← सभी Routes देखें
+        </a>
+    </div>'''
 
     return render_template_string(BASE_HTML, content=html)
 
