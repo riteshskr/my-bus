@@ -333,6 +333,7 @@ def seats(sid):
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
+    fare = request.args.get("fare", "0")  # 🔥 पहले define करें
 
     conn, cur = get_db()
 
@@ -509,6 +510,7 @@ def seats(sid):
             <div class="card-body py-4">
                 <h3 class="mb-2">🚌 {fs} → {ts}</h3>
                 <h5 class="mb-3">📅 {d}</h5>
+                <h5 class="mb-3"><strong>💰 किराया: ₹{fare}</strong></h5>
                 <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
             </div>
         </div>
