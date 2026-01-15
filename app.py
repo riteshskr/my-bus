@@ -7,7 +7,6 @@ from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 import atexit
-import json
 
 # ================= APP =================
 app = Flask(__name__)
@@ -235,95 +234,39 @@ def select(sid):
     row = cur.fetchone()
     route_id = row["route_id"] if row else 1
 
-    # 🔥 नई table - सभी stations + distance mapping
-    cur.execute("""
-        SELECT rs.station_name, rs.station_order, r.distance_km
-        FROM route_stations rs 
-        JOIN routes r ON rs.route_id = r.id 
-        WHERE rs.route_id=%s 
-        ORDER BY rs.station_order
-    """, (route_id,))
-    stations_data = cur.fetchall()
-    stations = [{"name": r["station_name"], "order": r["station_order"], "total_dist": r["distance_km"]}
-                for r in stations_data]
+    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (route_id,))
+    stations = [r["station_name"] for r in cur.fetchall()]
 
-    opts = "".join(f'<option value="{s["name"]}">{s["name"]}</option>' for s in stations)
+    opts = "".join(f"<option>{s}</option>" for s in stations)
     today = date.today().isoformat()
 
     if request.method == "POST":
         fs = request.form["from"]
         ts = request.form["to"]
         d = request.form["date"]
-
-        # 🔥 STATION DISTANCE से FARE calculate
-        fs_order = next(s["order"] for s in stations if s["name"] == fs)
-        ts_order = next(s["order"] for s in stations if s["name"] == ts)
-        total_dist = stations[-1]["total_dist"]  # Full route distance
-
-        # प्रति KM ₹1.2 + base ₹50
-        travel_dist = (ts_order - fs_order) / (stations[-1]["order"] - stations[0]["order"]) * total_dist
-        fare = int(travel_dist * 1.2 + 50)
-
-        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}&fare={fare}")
+        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
     form = f'''
     <div class="card mx-auto" style="max-width:500px">
         <div class="card-body">
-            <h5 class="card-title text-center">🎫 यात्रा विवरण चुनें</h5>
-
+            <h5 class="card-title text-center">🎫 Journey Details</h5>
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label">🌍 From:</label>
-                    <select name="from" id="fromStation" class="form-select" required onchange="calcFare()">{opts}</select>
+                    <label class="form-label">From:</label>
+                    <select name="from" class="form-select" required>{opts}</select>
                 </div>
-
                 <div class="mb-3">
-                    <label class="form-label">🎯 To:</label>
-                    <select name="to" id="toStation" class="form-select" required onchange="calcFare()">{opts}</select>
+                    <label class="form-label">To:</label>
+                    <select name="to" class="form-select" required>{opts}</select>
                 </div>
-
                 <div class="mb-3">
-                    <label class="form-label">💰 अनुमानित किराया:</label>
-                    <input type="text" id="fareDisplay" class="form-control" readonly 
-                           style="background:#e8f5e8; font-weight:bold; font-size:1.2em;" 
-                           placeholder="यहाँ किराया दिखेगा...">
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label">📅 Date:</label>
+                    <label class="form-label">Date:</label>
                     <input type="date" name="date" class="form-control" value="{today}" min="{today}" required>
                 </div>
-
-                <button class="btn btn-success w-100">🎫 उपलब्ध सीटें देखें</button>
+                <button class="btn btn-success w-100">View Available Seats</button>
             </form>
         </div>
-    </div>
-
-    <script>
-    stations = {json.dumps(stations)};
-    totalDist = stations[stations.length-1].total_dist;
-
-    function calcFare() {{
-        const fromSel = document.getElementById('fromStation');
-        const toSel = document.getElementById('toStation');
-        const fareDisplay = document.getElementById('fareDisplay');
-
-        if(fromSel.value && toSel.value && fromSel.value != toSel.value) {{
-            const fromOrder = stations.find(s => s.name == fromSel.value).order;
-            const toOrder = stations.find(s => s.name == toSel.value).order;
-
-            const travelDist = (toOrder - fromOrder) / (stations[stations.length-1].order - stations[0].order) * totalDist;
-            const fare = Math.round(travelDist * 1.2 + 50);
-
-            fareDisplay.value = `₹${fare}`;
-            fareDisplay.style.background = '#d4edda';
-        }} else {{
-            fareDisplay.value = '';
-            fareDisplay.style.background = '#e8f5e8';
-        }}
-    }}
-    </script>
-    '''
+    </div>'''
     return render_template_string(BASE_HTML, content=form)
 
 
@@ -333,7 +276,6 @@ def seats(sid):
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
-    fare = request.args.get("fare", "250")  # ✅ Default fare
 
     conn, cur = get_db()
 
@@ -364,7 +306,7 @@ def seats(sid):
             if not (ts_order <= booked_fs or fs_order >= booked_ts):
                 booked_seats.add(row['seat_number'])
 
-    # Seat buttons
+    # 🔥 FIXED SEAT BUTTONS - हर button में onclick direct!
     seat_buttons = ""
     available_count = 40 - len(booked_seats)
 
@@ -380,17 +322,17 @@ def seats(sid):
                 {i}
             </button>'''
 
-    # ✅ COMPLETE SCRIPT - सभी variables पहले define
+    # ✅ PERFECT WORKING SCRIPT - Socket + Socket.IO CDN दोनों!
     script = f'''
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    // Global config - सब पहले define करें
+    // Global config
     window.sid = {sid};
     window.fs = "{fs.replace("'", "\\'")}";
     window.ts = "{ts.replace("'", "\\'")}";
     window.date = "{d}";
-    window.fare = {fare};  // ✅ ये error fix करता है
 
+    // Socket connection
     const socket = io({{
         transports: ["websocket", "polling"],
         reconnection: true,
@@ -398,18 +340,25 @@ def seats(sid):
         reconnectionAttempts: 5
     }});
 
+    console.log("🚀 Seat page loaded - Socket connected");
+
+    // ⭐ MAIN BOOKING FUNCTION - हर onclick यहीं आएगा
     function bookSeat(seatId, btn) {{
         console.log("🚌 Booking seat:", seatId);
+
+        // Visual feedback
         btn.disabled = true;
         btn.innerHTML = "⏳";
         btn.className = "btn btn-warning seat";
 
+        // Name input
         let name = prompt("👤 यात्री का नाम:");
         if(!name || !name.trim()) {{
             resetSeat(btn, seatId);
             return;
         }}
 
+        // Mobile validation
         let mobile = prompt("📱 मोबाइल (9876543210):");
         if(!mobile || !/^[6-9][0-9]{{9}}$/.test(mobile)) {{
             alert("❌ 10 अंक मोबाइल (6-9 से start)!\\nउदाहरण: 9876543210");
@@ -417,6 +366,7 @@ def seats(sid):
             return;
         }}
 
+        // Server booking
         fetch("/book", {{
             method: "POST",
             headers: {{"Content-Type": "application/json"}},
@@ -427,15 +377,23 @@ def seats(sid):
                 mobile: mobile,
                 from: window.fs,
                 to: window.ts,
-                date: window.date,
-                fare: window.fare  // ✅ अब defined है
+                date: window.date
             }})
         }})
         .then(response => response.json())
         .then(data => {{
+            console.log("📋 Booking response:", data);
             if(data.ok) {{
                 btn.innerHTML = "✅";
-                socket.emit("seat_update", {{sid: window.sid, seat: seatId, date: window.date}});
+                btn.className = "btn btn-success seat";
+
+                // Live broadcast
+                socket.emit("seat_update", {{
+                    sid: window.sid,
+                    seat: seatId,
+                    date: window.date
+                }});
+
                 alert(`🎉 बुकिंग सफल!\\nनाम: ${{name.trim()}}\\nसीट: ${{seatId}}\\nकिराया: ₹${{data.fare}}`);
                 setTimeout(() => location.reload(), 2000);
             }} else {{
@@ -444,6 +402,7 @@ def seats(sid):
             }}
         }})
         .catch(error => {{
+            console.error("❌ Network error:", error);
             alert("❌ सर्वर एरर! फिर कोशिश करें।");
             resetSeat(btn, seatId);
         }});
@@ -456,20 +415,27 @@ def seats(sid):
         btn.style.cursor = "pointer";
     }}
 
+    // ⭐ LIVE UPDATES - दूसरे tab में instant red
     socket.on("seat_update", function(data) {{
+        console.log("📡 Live update received:", data);
         if(window.sid == data.sid && window.date == data.date) {{
             const seatBtn = document.querySelector(`[data-seat="${{data.seat}}"]`);
             if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML != "✅") {{
                 seatBtn.className = "btn btn-danger seat";
                 seatBtn.disabled = true;
                 seatBtn.innerHTML = "X";
+
+                // Count update
                 const count = document.getElementById("availableCount");
-                if(count) count.textContent = parseInt(count.textContent) - 1;
+                if(count) {{
+                    count.textContent = parseInt(count.textContent) - 1;
+                }}
             }}
         }}
     }});
 
-    socket.on("connect", () => console.log("✅ Socket connected"));
+    // Connection status
+    socket.on("connect", () => console.log("✅ Socket connected:", socket.id));
     socket.on("disconnect", () => console.log("❌ Socket disconnected"));
     </script>
     '''
@@ -478,14 +444,14 @@ def seats(sid):
     <style>
     .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
     .seat {{ width: 55px !important; height: 55px !important; font-weight: bold; border-radius: 8px !important; }}
+    .bus-row > div {{ flex: 0 0 auto; }}
     </style>
 
     <div class="text-center mb-5">
-        <div class="card bg-primary text-white mx-auto mb-4" style="max-width: 600px;">
+        <div class="card bg-gradient-primary text-white mx-auto mb-4" style="max-width: 600px;">
             <div class="card-body py-4">
                 <h3 class="mb-2">🚌 {fs} → {ts}</h3>
                 <h5 class="mb-3">📅 {d}</h5>
-                <h5 class="mb-3"><strong>💰 किराया: ₹{fare}</strong></h5>
                 <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
             </div>
         </div>
@@ -500,11 +466,11 @@ def seats(sid):
             </small>
         </div>
     </div>
+
     {script}
     '''
 
     return render_template_string(BASE_HTML, content=html)
-
 
 
 @app.route("/book", methods=["POST"])
