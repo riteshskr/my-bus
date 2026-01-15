@@ -851,16 +851,7 @@ def seats(sid):
     '''
 
     html = f'''
-    <div class="text-center mb-5">
-        <div class="card bg-gradient-primary text-white mx-auto mb-4" style="max-width:600px;">
-            <div class="card-body py-4">
-                <h3 class="mb-2">🚌 {fs} → {ts}</h3>
-                <h5 class="mb-3">📅 {d}</h5>
-                <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
-            </div>
-        </div>
-
-        <!-- MAP -->
+       <!-- MAP -->
         <div id="seat-map" class="rounded-4 mb-4" style="height:400px;"></div>
 
         <!-- Seats -->
