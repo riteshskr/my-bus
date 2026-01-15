@@ -62,7 +62,7 @@ def init_db():
     with app.app_context():
         conn, cur = get_db()
         try:
-            
+
             cur.execute("""
             CREATE TABLE IF NOT EXISTS routes (
                 id SERIAL PRIMARY KEY, 
@@ -78,7 +78,7 @@ def init_db():
                 departure_time TIME, 
                 current_lat DOUBLE PRECISION,
                 current_lng DOUBLE PRECISION,
-                
+
                 total_seats INT DEFAULT 40
             )""")
 
@@ -697,18 +697,15 @@ def seats(sid):
 
     # Stations mapping
     cur.execute("""
-       SELECT station_name, lat, lng, station_order
-    FROM route_stations
-    WHERE route_id = (
-        SELECT route_id FROM schedules WHERE id=%s
-    )
-    ORDER BY station_order
-""", (sid,))
+        SELECT station_name, station_order
+        FROM route_stations
+        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
+        ORDER BY station_order
+    """, (sid,))
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
-    stations_json = [{"name": r["station_name"], "lat": r["lat"], "lng": r["lng"]} for r in stations_data]
 
     # Booked seats calculation
     cur.execute("""
@@ -837,14 +834,6 @@ def seats(sid):
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
         attribution:'© OpenStreetMap'
     }}).addTo(map);
-    // Draw polyline
-    const routeLine = L.polyline(latlngs, {{color:'blue', weight:4, opacity:0.7}}).addTo(map);
-    map.fitBounds(routeLine.getBounds());
-
-    // Station markers
-    stations.forEach(s => {{
-        L.marker([s.lat, s.lng]).addTo(map).bindPopup(s.name);
-    }});
 
     let busMarker = L.marker([{lat},{lng}], {{
         icon:L.divIcon({{html:'<div class="live-bus"></div>', className:'bus-marker', iconSize:[30,30]}})
@@ -892,7 +881,6 @@ def seats(sid):
     return render_template_string(BASE_HTML, content=html)
 
 
-
 @app.route("/book", methods=["POST"])
 @safe_db
 def book():
@@ -934,7 +922,6 @@ def book():
             conn.rollback()
         print(f"❌ Booking error: {e}")
         return jsonify({"ok": False, "error": str(e)}), 500
-
 
 
 @app.route("/driver/<int:sid>")
