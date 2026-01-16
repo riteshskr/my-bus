@@ -712,7 +712,7 @@ def seats(sid):
 
     conn, cur = get_db()
 
-    # Stations mapping
+    # ===== Station Orders =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -721,27 +721,31 @@ def seats(sid):
     """, (sid,))
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
+
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
-    # Booked seats calculation
+    # ===== Booked Seats Logic =====
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
     """, (sid, d))
+
     booked_rows = cur.fetchall()
     booked_seats = set()
-    for row in booked_rows:
-        if row['from_station'] in station_to_order and row['to_station'] in station_to_order:
-            booked_fs = station_to_order[row['from_station']]
-            booked_ts = station_to_order[row['to_station']]
-            if not (ts_order <= booked_fs or fs_order >= booked_ts):
-                booked_seats.add(row['seat_number'])
 
-    # Seat buttons
+    for row in booked_rows:
+        booked_fs = station_to_order.get(row['from_station'], 0)
+        booked_ts = station_to_order.get(row['to_station'], 0)
+
+        if not (ts_order <= booked_fs or fs_order >= booked_ts):
+            booked_seats.add(row['seat_number'])
+
+    # ===== Seat Buttons =====
     seat_buttons = ""
     available_count = 40 - len(booked_seats)
+
     for i in range(1, 41):
         if i in booked_seats:
             seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
@@ -749,153 +753,130 @@ def seats(sid):
             seat_buttons += f'''
             <button class="btn btn-success seat" 
                     data-seat="{i}" 
-                    onclick="bookSeat({i}, this)"
-                    style="cursor:pointer; width:50px; height:50px; margin:2px;">
+                    onclick="bookSeat({i}, this)">
                 {i}
             </button>'''
 
-    # Get current bus location (if any)
-    cur.execute("SELECT current_lat, current_lng FROM schedules WHERE id=%s", (sid,))
-    bus_loc = cur.fetchone()
-    lat = float(bus_loc['current_lat'] or 27.2)
-    lng = float(bus_loc['current_lng'] or 75.0)
+    # ===== BUS CURRENT LOCATION =====
+    cur.execute("""
+        SELECT s.current_lat, s.current_lng, s.route_id
+        FROM schedules s WHERE id=%s
+    """, (sid,))
+    bus = cur.fetchone()
 
-    # Script for seat booking + map + live location
-    script = f'''
+    lat = float(bus['current_lat'] or 27.2)
+    lng = float(bus['current_lng'] or 75.0)
+
+    # ===== ROUTE STATIONS FOR POLYLINE =====
+    cur.execute("""
+        SELECT lat, lng, station_name
+        FROM route_stations
+        WHERE route_id=%s
+        ORDER BY station_order
+    """, (bus['route_id'],))
+
+    stations = cur.fetchall()
+
+    import json
+    stations_json = json.dumps(stations)
+
+    # ================= HTML =================
+    html = f'''
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <style>
-    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
-    .seat {{ width: 55px !important; height: 55px !important; font-weight: bold; border-radius: 8px !important; }}
-    .bus-row > div {{ flex: 0 0 auto; }}
-    .live-bus{{width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 15px #ff4444;animation:pulse 2s infinite;}}
-    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.3);}}}}
+    #seat-map{{height:400px;border-radius:20px;margin-bottom:20px;}}
+    .live-bus{{
+        width:30px;height:30px;
+        background:#ff4444;
+        border-radius:50%;
+        border:3px solid white;
+        animation:pulse 2s infinite;
+    }}
+    @keyframes pulse{{
+        0%,100%{{transform:scale(1);}}
+        50%{{transform:scale(1.3);}}
+    }}
     </style>
 
+    <div class="text-center mb-4">
+        <h3>🚌 {fs} → {ts}</h3>
+        <h5>📅 {d}</h5>
+        <div>Available Seats:
+            <span id="availableCount" class="badge bg-success">
+                {available_count}
+            </span>/40
+        </div>
+    </div>
+
+    <!-- ===== SAME LIVE BUS MAP ===== -->
+    <div id="seat-map"></div>
+
+    <div class="bus-row text-center">
+        {seat_buttons}
+    </div>
+
     <script>
-    // Global config
-    window.sid = {sid};
-    window.fs = "{fs.replace("'", "\\'")}";
-    window.ts = "{ts.replace("'", "\\'")}";
-    window.date = "{d}";
+    const sid = {sid};
 
-    const socket = io({{
-        transports: ["websocket", "polling"],
-        reconnection: true,
-        timeout: 20000,
-        reconnectionAttempts: 5
-    }});
+    const map = L.map('seat-map').setView([{lat}, {lng}], 10);
 
-    function bookSeat(seatId, btn){{
-        btn.disabled = true;
-        btn.innerHTML = "⏳";
-        btn.className = "btn btn-warning seat";
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
-        let name = prompt("👤 यात्री का नाम:");
-        if(!name || !name.trim()){{
-            resetSeat(btn, seatId); return;
-        }}
-        let mobile = prompt("📱 मोबाइल (9876543210):");
-        if(!mobile || !/^[6-9][0-9]{{9}}$/.test(mobile)){{
-            alert("❌ 10 अंक मोबाइल (6-9 से start)"); resetSeat(btn, seatId); return;
-        }}
+    // ===== ROUTE POLYLINE (LIVE-BUS जैसा) =====
+    const stations = {stations_json};
 
-        fetch("/book", {{
-            method:"POST",
-            headers:{{"Content-Type":"application/json"}},
-            body:JSON.stringify({{
-                sid:window.sid, seat:seatId, name:name.trim(),
-                mobile:mobile, from:window.fs, to:window.ts, date:window.date
-            }})
-        }})
-        .then(r=>r.json())
-        .then(data=>{{
-            if(data.ok){{
-                btn.innerHTML="✅";
-                btn.className="btn btn-success seat";
-                socket.emit("seat_update", {{sid:window.sid, seat:seatId, date:window.date}});
-                alert(`🎉 बुकिंग सफल! नाम: ${{name.trim()}} सीट: ${{seatId}} किराया: ₹${{data.fare}}`);
-                setTimeout(()=>location.reload(),2000);
-            }} else {{
-                alert("❌ बुकिंग असफल: "+data.error); resetSeat(btn, seatId);
-            }}
-        }})
-        .catch(e=>{{alert("❌ सर्वर एरर!"); resetSeat(btn, seatId);}});
-    }}
+    let routePoints = [];
 
-    function resetSeat(btn, seatId){{
-        btn.disabled=false;
-        btn.innerHTML=seatId;
-        btn.className="btn btn-success seat";
-        btn.style.cursor="pointer";
-    }}
+    stations.forEach(st => {{
+        const lat = parseFloat(st.lat);
+        const lng = parseFloat(st.lng);
 
-    // LIVE seat update
-    socket.on("seat_update", function(data){{
-        if(window.sid==data.sid && window.date==data.date){{
-            const seatBtn=document.querySelector(`[data-seat="${{data.seat}}"]`);
-            if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML!="✅"){{
-                seatBtn.className="btn btn-danger seat";
-                seatBtn.disabled=true;
-                seatBtn.innerHTML="X";
-                const count=document.getElementById("availableCount");
-                if(count) count.textContent=parseInt(count.textContent)-1;
-            }}
+        if(!isNaN(lat) && !isNaN(lng)){{
+            routePoints.push([lat,lng]);
+
+            L.marker([lat,lng])
+                .addTo(map)
+                .bindPopup("📍 " + st.station_name);
         }}
     }});
 
-    // ===== Leaflet Map =====
-    const map = L.map('seat-map').setView([{lat}, {lng}], 13);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution:'© OpenStreetMap'
-    }}).addTo(map);
+    if(routePoints.length > 1){{
+        const poly = L.polyline(routePoints, {{
+            color:'blue',
+            weight:7
+        }}).addTo(map);
 
+        map.fitBounds(poly.getBounds());
+    }}
+
+    // ===== BUS MARKER =====
     let busMarker = L.marker([{lat},{lng}], {{
-        icon:L.divIcon({{html:'<div class="live-bus"></div>', className:'bus-marker', iconSize:[30,30]}})
+        icon:L.divIcon({{
+            html:'<div class="live-bus"></div>',
+            className:''
+        }})
     }}).addTo(map);
 
-    socket.on("bus_location", function(data){{
-        if(data.sid==window.sid){{
-            const lat=parseFloat(data.lat);
-            const lng=parseFloat(data.lng);
+    // ===== SOCKET LIVE UPDATE =====
+    const socket = io({{transports:['websocket','polling']}});
+
+    socket.on("bus_location", data => {{
+        if(data.sid == sid){{
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+
             busMarker.setLatLng([lat,lng]);
-            map.setView([lat,lng],13, {{animate:true}});
+            map.panTo([lat,lng]);
         }}
     }});
     </script>
     '''
 
-    html = f'''
-    <div class="text-center mb-5">
-        <div class="card bg-gradient-primary text-white mx-auto mb-4" style="max-width:600px;">
-            <div class="card-body py-4">
-                <h3 class="mb-2">🚌 {fs} → {ts}</h3>
-                <h5 class="mb-3">📅 {d}</h5>
-                <div class="h4">सीटें उपलब्ध: <span id="availableCount" class="badge bg-success fs-3">{available_count}</span>/40</div>
-            </div>
-        </div>
-
-        <!-- MAP -->
-        <div id="seat-map" class="rounded-4 mb-4" style="height:400px;"></div>
-
-        <!-- Seats -->
-        <div class="bus-row" style="max-width:800px; margin:0 auto;">
-            {seat_buttons}
-        </div>
-
-        <div class="mt-4">
-            <small class="text-muted">
-                💚 हरी = उपलब्ध | 🔴 लाल = बुक | ⏳ बुक हो रही | ✅ बुक हो गई
-            </small>
-        </div>
-    </div>
-
-    {script}
-    '''
-
     return render_template_string(BASE_HTML, content=html)
+
 
 
 @app.route("/book", methods=["POST"])
