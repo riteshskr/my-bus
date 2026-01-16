@@ -1121,7 +1121,7 @@ def live_bus(sid):
     }}).addTo(map);
 
     // ===== ROUTE POLYLINE =====
-    const stations = {stations_json};  // ✅ direct JSON
+    const stations = {stations_json};
     let routePoints = [];
 
     stations.forEach(st => {{
@@ -1129,6 +1129,7 @@ def live_bus(sid):
         const lng = parseFloat(st.lng);
         if(!isNaN(lat) && !isNaN(lng)){{
             routePoints.push([lat,lng]);
+            // Station markers
             L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
         }}
     }});
@@ -1136,16 +1137,16 @@ def live_bus(sid):
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'blue',
-            weight: 7,
-            opacity: 0.8
+            color: 'red',   // thick red polyline
+            weight: 8,
+            opacity: 0.9
         }}).addTo(map);
         map.fitBounds(routeLine.getBounds());
     }}
 
     // ===== BUS ICON =====
     const busIcon = L.divIcon({{
-        html: '<i class="fa fa-bus" style="font-size:28px;color:red;"></i>',
+        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
         className: 'bus-icon',
         iconSize: [30,30]
     }});
