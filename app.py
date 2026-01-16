@@ -853,7 +853,7 @@ fetch("/book", {
         mobile:mobile,
         from:window.fs,
         to:window.ts,
-
+         date: today,
         payment_id: payment_id,
         order_id: order_id,
         fare: fare
@@ -918,43 +918,75 @@ socket.on("seat_update", d=>{
 @safe_db
 def book():
     data = request.get_json()
-    if not all(k in data for k in ['sid', 'seat', 'name', 'mobile', 'date']):
+
+    print("BOOK DATA =", data)   # DEBUG
+
+    required = ['sid','seat','name','mobile','date']
+    if not all(k in data for k in required):
         return jsonify({"ok": False, "error": "सभी fields जरूरी"}), 400
 
-    if not str(data['mobile']).isdigit() or len(data['mobile']) != 10:
+    # MOBILE VALIDATION
+    mobile = str(data['mobile'])
+    if not mobile.isdigit() or len(mobile) != 10:
         return jsonify({"ok": False, "error": "10 अंक मोबाइल"}), 400
 
     conn, cur = get_db()
+
     try:
-        cur.execute("SELECT id FROM seat_bookings WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s",
-                    (data['sid'], data['seat'], data['date']))
+        sid  = int(data['sid'])
+        seat = int(data['seat'])
+
+        # DUPLICATE CHECK
+        cur.execute("""
+            SELECT id FROM seat_bookings 
+            WHERE schedule_id=%s 
+              AND seat_number=%s 
+              AND travel_date=%s
+        """, (sid, seat, data['date']))
+
         if cur.fetchone():
             return jsonify({"ok": False, "error": "सीट पहले से बुक है"}), 409
 
         fare = random.randint(250, 450)
+
         cur.execute("""
-            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
-            from_station, to_station, travel_date, fare, status)
+            INSERT INTO seat_bookings 
+            (schedule_id, seat_number, passenger_name, mobile, 
+             from_station, to_station, travel_date, fare, status)
+
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
-        """, (data['sid'], data['seat'], data['name'], data['mobile'],
-              data['from'], data['to'], data['date'], fare))
+        """, (
+            sid,
+            seat,
+            data['name'],
+            mobile,
+            data.get('from',''),
+            data.get('to',''),
+            data['date'],
+            fare
+        ))
+
         conn.commit()
 
-        # ✅ 100% WORKING LIVE UPDATE
+        # LIVE UPDATE
         socketio.emit("seat_update", {
-            "sid": data['sid'],
-            "seat": data['seat'],
+            "sid": sid,
+            "seat": seat,
             "date": data['date']
         })
 
-        print(f"✅ BROADCAST: Seat {data['seat']} booked for bus {data['sid']}")
+        print(f"✅ Seat {seat} BOOKED in Bus {sid}")
+
         return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"❌ Booking error: {e}")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        conn.rollback()
+        print("BOOK ERROR =", e)
+
+        return jsonify({
+            "ok": False,
+            "error": "Booking failed: " + str(e)
+        }), 500
 
 
 @app.route("/driver/<int:sid>")
