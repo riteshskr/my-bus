@@ -7,7 +7,12 @@ from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 import atexit
+import razorpay
 
+razor_client = razorpay.Client(auth=(
+    os.getenv("RAZORPAY_KEY_ID"),
+    os.getenv("RAZORPAY_KEY_SECRET")
+))
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -62,7 +67,18 @@ def init_db():
     with app.app_context():
         conn, cur = get_db()
         try:
-
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id SERIAL PRIMARY KEY,
+                schedule_id INT,
+                seat_number INT,
+                order_id VARCHAR(100),
+                payment_id VARCHAR(100),
+                amount INT,
+                status VARCHAR(20),
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+            """)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS routes (
                 id SERIAL PRIMARY KEY, 
@@ -689,187 +705,232 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
-    # Stations mapping
+    # ----- Schedule -----
     cur.execute("""
-        SELECT station_name, station_order
-        FROM route_stations
-        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
-        ORDER BY station_order
+        SELECT s.*, r.route_name
+        FROM schedules s
+        JOIN routes r ON s.route_id = r.id
+        WHERE s.id=%s
     """, (sid,))
-    stations_data = cur.fetchall()
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
+    sch = cur.fetchone()
 
-    # Booked seats calculation
+    # ----- Booked seats -----
+    cur.execute("SELECT seat_number FROM seat_bookings WHERE schedule_id=%s", (sid,))
+    booked = [r['seat_number'] for r in cur.fetchall()]
+
+    # ----- Stations -----
     cur.execute("""
-        SELECT seat_number, from_station, to_station
-        FROM seat_bookings
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """, (sid, d))
-    booked_rows = cur.fetchall()
-    booked_seats = set()
-    for row in booked_rows:
-        if row['from_station'] in station_to_order and row['to_station'] in station_to_order:
-            booked_fs = station_to_order[row['from_station']]
-            booked_ts = station_to_order[row['to_station']]
-            if not (ts_order <= booked_fs or fs_order >= booked_ts):
-                booked_seats.add(row['seat_number'])
+        SELECT * FROM route_stations
+        WHERE route_id=%s
+        ORDER BY station_order
+    """, (sch['route_id'],))
+    stations = cur.fetchall()
 
-    # Seat buttons
-    seat_buttons = ""
-    available_count = 40 - len(booked_seats)
-    for i in range(1, 41):
-        if i in booked_seats:
-            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
-        else:
-            seat_buttons += f'''
-            <button class="btn btn-success seat" 
-                    data-seat="{i}" 
-                    onclick="bookSeat({i}, this)"
-                    style="cursor:pointer; width:50px; height:50px; margin:2px;">
-                {i}
-            </button>'''
+    # ===== HTML START =====
+    content = '''
 
-    # Get current bus location (if any)
-    cur.execute("SELECT current_lat, current_lng FROM schedules WHERE id=%s", (sid,))
-    bus_loc = cur.fetchone()
-    lat = float(bus_loc['current_lat'] or 27.2)
-    lng = float(bus_loc['current_lng'] or 75.0)
+<h3 class="mb-3">🪑 सीट चुनें - ''' + sch['bus_name'] + '''</h3>
 
-    # Script for seat booking + map + live location
-    script = f'''
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<div class="row">
+<div class="col-md-4">
 
-    <style>
-    .bus-row {{ display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }}
-    .seat {{ width: 55px !important; height: 55px !important; font-weight: bold; border-radius: 8px !important; }}
-    .bus-row > div {{ flex: 0 0 auto; }}
-    .live-bus{{width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 15px #ff4444;animation:pulse 2s infinite;}}
-    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.3);}}}}
-    </style>
+<label>From</label>
+<select id="from" class="form-control mb-2">
+'''
 
-    <script>
-    // Global config
-    window.sid = {sid};
-    window.fs = "{fs.replace("'", "\\'")}";
-    window.ts = "{ts.replace("'", "\\'")}";
-    window.date = "{d}";
+    for s in stations:
+        content += f"<option value='{s['station_order']}'>{s['station_name']}</option>"
 
-    const socket = io({{
-        transports: ["websocket", "polling"],
-        reconnection: true,
-        timeout: 20000,
-        reconnectionAttempts: 5
-    }});
+    content += '''
 
-    function bookSeat(seatId, btn){{
-        btn.disabled = true;
-        btn.innerHTML = "⏳";
-        btn.className = "btn btn-warning seat";
+</select>
 
-        let name = prompt("👤 यात्री का नाम:");
-        if(!name || !name.trim()){{
-            resetSeat(btn, seatId); return;
-        }}
-        let mobile = prompt("📱 मोबाइल (9876543210):");
-        if(!mobile || !/^[6-9][0-9]{{9}}$/.test(mobile)){{
-            alert("❌ 10 अंक मोबाइल (6-9 से start)"); resetSeat(btn, seatId); return;
-        }}
+<label>To</label>
+<select id="to" class="form-control mb-2">
+'''
 
-        fetch("/book", {{
-            method:"POST",
-            headers:{{"Content-Type":"application/json"}},
-            body:JSON.stringify({{
-                sid:window.sid, seat:seatId, name:name.trim(),
-                mobile:mobile, from:window.fs, to:window.ts, date:window.date
-            }})
-        }})
-        .then(r=>r.json())
-        .then(data=>{{
-            if(data.ok){{
-                btn.innerHTML="✅";
-                btn.className="btn btn-success seat";
-                socket.emit("seat_update", {{sid:window.sid, seat:seatId, date:window.date}});
-                alert(`🎉 बुकिंग सफल! नाम: ${{name.trim()}} सीट: ${{seatId}} किराया: ₹${{data.fare}}`);
-                setTimeout(()=>location.reload(),2000);
-            }} else {{
-                alert("❌ बुकिंग असफल: "+data.error); resetSeat(btn, seatId);
-            }}
-        }})
-        .catch(e=>{{alert("❌ सर्वर एरर!"); resetSeat(btn, seatId);}});
-    }}
+    for s in stations:
+        content += f"<option value='{s['station_order']}'>{s['station_name']}</option>"
 
-    function resetSeat(btn, seatId){{
-        btn.disabled=false;
-        btn.innerHTML=seatId;
-        btn.className="btn btn-success seat";
-        btn.style.cursor="pointer";
-    }}
+    content += '''
 
-    // LIVE seat update
-    socket.on("seat_update", function(data){{
-        if(window.sid==data.sid && window.date==data.date){{
-            const seatBtn=document.querySelector(`[data-seat="${{data.seat}}"]`);
-            if(seatBtn && !seatBtn.disabled && seatBtn.innerHTML!="✅"){{
-                seatBtn.className="btn btn-danger seat";
-                seatBtn.disabled=true;
-                seatBtn.innerHTML="X";
-                const count=document.getElementById("availableCount");
-                if(count) count.textContent=parseInt(count.textContent)-1;
-            }}
-        }}
-    }});
+</select>
+</div>
+</div>
 
-    // ===== Leaflet Map =====
-    const map = L.map('seat-map').setView([{lat}, {lng}], 13);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution:'© OpenStreetMap'
-    }}).addTo(map);
+<div class="bus-layout mt-3" id="seatBox"></div>
 
-    let busMarker = L.marker([{lat},{lng}], {{
-        icon:L.divIcon({{html:'<div class="live-bus"></div>', className:'bus-marker', iconSize:[30,30]}})
-    }}).addTo(map);
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 
-    socket.on("bus_location", function(data){{
-        if(data.sid==window.sid){{
-            const lat=parseFloat(data.lat);
-            const lng=parseFloat(data.lng);
-            busMarker.setLatLng([lat,lng]);
-            map.setView([lat,lng],13, {{animate:true}});
-        }}
-    }});
-    </script>
-    '''
+<script>
 
-    html = f'''
-       <!-- MAP -->
-        <div id="seat-map" class="rounded-4 mb-3" style="height:240px; max-width:900px; margin:auto;"></div>
+const booked = ''' + str(booked) + ''';
+window.sid = ''' + str(sid) + ''';
 
-        <!-- Seats -->
-        <div class="bus-row" style="max-width:800px; margin:0 auto;">
-            {seat_buttons}
-        </div>
+function render(){
 
-        <div class="mt-4">
-            <small class="text-muted">
-                💚 हरी = उपलब्ध | 🔴 लाल = बुक | ⏳ बुक हो रही | ✅ बुक हो गई
-            </small>
-        </div>
-    </div>
+ let html="";
 
-    {script}
-    '''
+ for(let i=1;i<=40;i++){
 
-    return render_template_string(BASE_HTML, content=html)
+   let cls = booked.includes(i) ? "seat booked" : "seat";
+
+   html += `
+    <div class="${cls}" onclick="selectSeat(${i},this)">
+        ${i}
+    </div>`;
+ }
+
+ document.getElementById("seatBox").innerHTML = html;
+}
+
+render();
+
+// ===== SELECT SEAT =====
+
+function selectSeat(seat, el){
+
+ if(el.classList.contains("booked")){
+    alert("Already booked");
+    return;
+ }
+
+ bookSeat(seat, el);
+}
+
+// ===== PAYMENT START =====
+
+function bookSeat(seatId, btn){
+
+ let name = prompt("👤 यात्री का नाम:");
+ if(!name) return;
+
+ let mobile = prompt("📱 मोबाइल:");
+ if(!mobile) return;
+
+ let fs = document.getElementById("from").value;
+ let ts = document.getElementById("to").value;
+
+ window.fs = fs;
+ window.ts = ts;
+
+ const fare = Math.floor(Math.random()*200)+300;
+
+ fetch("/create-payment", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+        sid: window.sid,
+        seat: seatId,
+        fare: fare
+    })
+ })
+ .then(r=>r.json())
+ .then(pay => {
+
+    var options = {
+        "key": pay.key,
+        "amount": pay.amount,
+        "currency": "INR",
+        "name": "Bus Booking",
+        "description": "Seat "+seatId,
+
+        "order_id": pay.order_id,
+
+        handler: function (response){
+
+            finalizeBooking(
+                seatId, name, mobile,
+                response.razorpay_payment_id,
+                pay.order_id,
+                fare
+            );
+        }
+    };
+
+    var rzp1 = new Razorpay(options);
+    rzp1.open();
+
+ });
+}
+
+// ===== AFTER PAYMENT =====
+
+function finalizeBooking(seatId, name, mobile, payment_id, order_id, fare){
+
+fetch("/book", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+        sid:window.sid,
+        seat:seatId,
+        name:name,
+        mobile:mobile,
+        from:window.fs,
+        to:window.ts,
+
+        payment_id: payment_id,
+        order_id: order_id,
+        fare: fare
+    })
+})
+.then(r=>r.json())
+.then(data=>{
+    if(data.ok){
+        alert("✅ Payment + Booking SUCCESS");
+        location.reload();
+    } else {
+        alert("❌ Failed: "+data.error);
+    }
+});
+
+}
+
+// ===== SOCKET =====
+
+const socket = io();
+
+socket.on("seat_update", d=>{
+    if(d.sid==window.sid){
+        booked.push(d.seat);
+        render();
+    }
+});
+
+</script>
+
+<style>
+
+.bus-layout{
+ display:grid;
+ grid-template-columns:repeat(4,1fr);
+ gap:10px;
+ max-width:300px;
+}
+
+.seat{
+ padding:10px;
+ background:#28a745;
+ color:white;
+ text-align:center;
+ cursor:pointer;
+ border-radius:6px;
+}
+
+.booked{
+ background:#dc3545!important;
+ cursor:not-allowed;
+}
+
+</style>
+
+'''
+
+    return render_template_string(BASE_HTML, content=content)
 
 
 @app.route("/book", methods=["POST"])
@@ -1173,7 +1234,33 @@ def live_bus(sid):
 
     return render_template_string(BASE_HTML, content=content)
 
+@app.route("/create-payment", methods=["POST"])
+@safe_db
+def create_payment():
+    data = request.get_json()
 
+    amount = int(data['fare']) * 100   # rupees → paise
+
+    order = razor_client.order.create({
+        "amount": amount,
+        "currency": "INR",
+        "payment_capture": 1
+    })
+
+    conn, cur = get_db()
+    cur.execute("""
+        INSERT INTO payments
+        (schedule_id, seat_number, order_id, amount, status)
+        VALUES (%s,%s,%s,%s,'created')
+    """, (data['sid'], data['seat'], order['id'], amount))
+
+    conn.commit()
+
+    return jsonify({
+        "order_id": order['id'],
+        "key": os.getenv("RAZORPAY_KEY_ID"),
+        "amount": amount
+    })
 
 
 if __name__ == "__main__":
