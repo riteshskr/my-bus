@@ -787,7 +787,7 @@ def seats(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <style>
-    #seat-map{{height:400px;border-radius:20px;margin-bottom:20px;}}
+    #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
     .live-bus{{
         width:30px;height:30px;
         background:#ff4444;
