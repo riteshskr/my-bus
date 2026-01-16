@@ -1057,6 +1057,7 @@ def driver(sid):
 @app.route("/live-bus/<int:sid>")
 @safe_db
 def live_bus(sid):
+    import json
     conn, cur = get_db()
 
     # ===== Fetch Bus + Route info from DB =====
@@ -1072,8 +1073,8 @@ def live_bus(sid):
     if not bus:
         return "Bus not found", 404
 
-    lat = float(bus.get('lat', 27.2))
-    lng = float(bus.get('lng', 74.2))
+    lat = float(bus.get('lat') or 27.2)
+    lng = float(bus.get('lng') or 74.2)
 
     # ===== Fetch Route Stations =====
     cur.execute("""
@@ -1087,67 +1088,74 @@ def live_bus(sid):
 
     # ===== HTML + JS =====
     content = f'''
-    <div class="text-center">
+    <div class="text-center mb-4">
         <h2>🚌 {bus['bus_name']}</h2>
         <h4>{bus['route_name']} ({bus['distance_km']} km)</h4>
         <div>{ "🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..." }</div>
     </div>
-    <div id="map"></div>
+
+    <!-- Map -->
+    <div id="map" style="height: 400px; width: 100%; border-radius: 20px;"></div>
+
+    <!-- Leaflet + Socket.IO -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-    // ===== Leaflet Map =====
-    const map = L.map('map').setView([{lat}, {lng}], {13 if bus.get('lat') else 10});
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap'
-    }}).addTo(map);
-
-    // ===== Stations & Polyline =====
-    const stations = {stations_json};
-    let routePoints = [];
-
-    stations.forEach(st => {{
-        const lat = parseFloat(st.lat);
-        const lng = parseFloat(st.lng);
-        if(!isNaN(lat) && !isNaN(lng)){{
-            routePoints.push([lat,lng]);
-            L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
-        }}
-    }});
-
-    let routeLine = null;
-    if(routePoints.length > 1){{
-        routeLine = L.polyline(routePoints, {{
-            color: 'blue',
-            weight: 6,
-            opacity: 0.8
+        // ===== Map Initialize =====
+        const map = L.map('map').setView([{lat}, {lng}], 13);
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors'
         }}).addTo(map);
-        map.fitBounds(routePoints);
-    }}
 
-    // ===== Bus Icon =====
-    const busIcon = L.divIcon({{
-        html: '<i class="fa fa-bus"></i>',
-        className: 'bus-icon',
-        iconSize: [30,30]
-    }});
-    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
+        // ===== Route Stations & Polyline =====
+        const stations = {stations_json};
+        let routePoints = [];
 
-    // ===== SocketIO Live Update =====
-    const socket = io({{transports:["websocket","polling"]}});
-    const sid = {sid};
+        stations.forEach(st => {{
+            const lat = parseFloat(st.lat);
+            const lng = parseFloat(st.lng);
+            if (!isNaN(lat) && !isNaN(lng)) {{
+                routePoints.push([lat, lng]);
+                L.marker([lat, lng]).addTo(map)
+                 .bindPopup("📍 " + st.station_name);
+            }}
+        }});
 
-    socket.on('connect', () => {{
-        console.log('✅ Socket Connected');
-    }});
-
-    socket.on('bus_location', data => {{
-        if(data.sid == sid){{
-            const lat = parseFloat(data.lat);
-            const lng = parseFloat(data.lng);
-            busMarker.setLatLng([lat,lng]);
-            map.panTo([lat,lng], {{animate:true}});
+        let routeLine = null;
+        if (routePoints.length > 1) {{
+            routeLine = L.polyline(routePoints, {{
+                color: 'blue',
+                weight: 6,
+                opacity: 0.8
+            }}).addTo(map);
+            map.fitBounds(routeLine.getBounds());
         }}
-    }});
+
+        // ===== Bus Marker =====
+        const busIcon = L.divIcon({{
+            html: '<i class="fa fa-bus" style="font-size:24px;color:red;"></i>',
+            className: 'bus-marker',
+            iconSize: [30, 30]
+        }});
+        let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{ icon: busIcon }}).addTo(map);
+
+        // ===== Socket.IO Live GPS Update =====
+        const sid = {sid};
+        const socket = io({{ transports: ["websocket", "polling"] }});
+
+        socket.on('connect', () => {{
+            console.log("✅ Socket Connected for bus", sid);
+        }});
+
+        socket.on('bus_location', data => {{
+            if (data.sid == sid) {{
+                const lat = parseFloat(data.lat);
+                const lng = parseFloat(data.lng);
+                busMarker.setLatLng([lat, lng]);
+                map.panTo([lat, lng], {{ animate: true }});
+            }}
+        }});
     </script>
     '''
 
