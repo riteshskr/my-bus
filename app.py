@@ -1,3 +1,4 @@
+import setuptools
 import os, random
 from datetime import date
 from functools import wraps
