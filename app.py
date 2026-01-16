@@ -1137,7 +1137,7 @@ def live_bus(sid):
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'red',   // thick red polyline
+            color: 'Blue',   // thick red polyline
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
