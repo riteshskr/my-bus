@@ -843,7 +843,7 @@ def seats(sid):
         }}
     }});
 
-    if(routePoints.length > 1){{
+    if(routePoints.length >=2){{
         const poly = L.polyline(routePoints, {{
             color:'blue',
             weight:7
