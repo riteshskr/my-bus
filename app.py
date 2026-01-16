@@ -833,26 +833,6 @@ function bookSeat(seatId, btn){
  .then(r=>r.json())
  .then(pay => {
 
-    var options = {
-        "key": pay.key,
-        "amount": pay.amount,
-        "currency": "INR",
-        "name": "Bus Booking",
-        "description": "Seat "+seatId,
-
-        "order_id": pay.order_id,
-
-        handler: function (response){
-
-            finalizeBooking(
-                seatId, name, mobile,
-                response.razorpay_payment_id,
-                pay.order_id,
-                fare
-            );
-        }
-    };
-
     var rzp1 = new Razorpay(options);
     rzp1.open();
 
