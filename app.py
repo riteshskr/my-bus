@@ -1059,12 +1059,11 @@ def driver(sid):
 def live_bus(sid):
     conn, cur = get_db()
 
-    # ---- Bus + Route Info ----
+    # Bus + Route info
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time,
-               r.route_name, r.distance_km,
-               s.current_lat as lat, s.current_lng as lng,
-               s.route_id
+               r.id as route_id, r.route_name, r.distance_km,
+               s.current_lat as lat, s.current_lng as lng
         FROM schedules s 
         JOIN routes r ON s.route_id = r.id 
         WHERE s.id = %s
@@ -1074,114 +1073,105 @@ def live_bus(sid):
     if not bus:
         return "Bus not found", 404
 
-    lat = float(bus.get('lat') or 27.2)
-    lng = float(bus.get('lng') or 74.2)
-    has_gps = bus.get('lat') is not None
+    lat = float(bus.get('lat', 27.2))
+    lng = float(bus.get('lng', 74.2))
 
-    # ---- STATIONS WITH LAT LNG ----
+    # ================= Route Stations for Polyline =================
     cur.execute("""
-        SELECT station_name, lat, lng
+        SELECT lat, lng, station_name
         FROM route_stations
-        WHERE route_id = %s
+        WHERE route_id=%s
         ORDER BY station_order
-    """, (bus["route_id"],))
-
+    """, (bus['route_id'],))
     stations = cur.fetchall()
 
     content = f'''
     <style>
     #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
-    .live-bus{{
-        animation:pulse 2s infinite;
-        width:30px;height:30px;
-        background:#ff4444;
-        border-radius:50%;
-        border:3px solid #fff;
-        box-shadow:0 0 20px #ff4444;
-    }}
+
+
+    .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
     @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
+
+    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;}}
     </style>
 
-    <div class="text-center mb-4">
-        <h2>🚌 {bus['bus_name']}</h2>
-        <h5>{bus['route_name']} ({bus['distance_km']} km)</h5>
-        <div class="h6 {'text-success' if has_gps else 'text-warning'}">
-            {'🟢 LIVE GPS' if has_gps else '📡 Waiting for GPS...'}
+    <div class="text-center mb-5">
+        <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
+        <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
+        <div class="h6 {'text-success' if bus.get('lat') else 'text-warning'} mb-3">
+            {"🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..."}
         </div>
     </div>
 
-    <div id="map"></div>
+    <div class="row g-4">
+        <div class="col-lg-12">
+            <div id="map" class="rounded-4"></div>
+        </div>
+    </div>
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-    const sid = {sid};
-
-    // ===== MAP INIT =====
-    const map = L.map('map').setView([{lat}, {lng}], {13 if has_gps else 10});
-
+    const map = L.map('map').setView([{lat}, {lng}], {13 if bus.get('lat') else 10});
     L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
         attribution: '© OpenStreetMap'
     }}).addTo(map);
 
-    // ===== POLYLINE FROM DB STATIONS =====
-    let points = [];
+    // ===== ROUTE POLYLINE =====
+    const stations = JSON.parse('{{ stations | tojson | safe }}');
+    let routePoints = [];
 
-    {% for st in stations %}
-        {% if st.lat and st.lng %}
-            points.push([{{st.lat}}, {{st.lng}}]);
+    stations.forEach(st => {{
+        const lat = parseFloat(st.lat);
+        const lng = parseFloat(st.lng);
+        if(!isNaN(lat) && !isNaN(lng)){{
+            routePoints.push([lat,lng]);
+            L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
+        }}
+    }});
 
-            // station marker
-            L.marker([{{st.lat}}, {{st.lng}}])
-              .addTo(map)
-              .bindPopup("📍 {{st.station_name}}");
-        {% endif %}
-    {% endfor %}
-
-    if(points.length > 1){{
-        const routeLine = L.polyline(points, {{
-            color: 'green',
+    let routeLine = null;
+    if(routePoints.length > 1){{
+        routeLine = L.polyline(routePoints, {{
+            color: 'blue',
             weight: 7,
-            opacity: 0.9
+            opacity: 0.8
         }}).addTo(map);
-
-        map.fitBounds(routeLine.getBounds());
+        map.fitBounds(routePoints);
     }}
 
-    // ===== LIVE BUS MARKER =====
-    let marker = L.marker([{lat}, {lng}], {{
-        icon: L.divIcon({{
-            html: '<div class="live-bus"></div>',
-            iconSize: [30,30],
-            className: ''
-        }})
-    }}).addTo(map);
+    // ===== BUS ICON =====
+    const busIcon = L.divIcon({{
+        html: '<i class="fa fa-bus" style="font-size:28px;color:red;"></i>',
+        className: 'bus-icon',
+        iconSize: [30,30]
+    }});
+    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
-    // ===== SOCKET =====
-    const socket = io({{
-        transports:["websocket","polling"]
+    // ===== SOCKET LIVE UPDATE =====
+    const sid = {sid};
+    const socket = io({{transports:["websocket","polling"]}});
+
+    socket.on('connect', () => {{
+        console.log('✅ Socket Connected');
     }});
 
     socket.on('bus_location', data => {{
-        if(data.sid == sid) {{
-
-            const pos = [
-                parseFloat(data.lat),
-                parseFloat(data.lng)
-            ];
-
-            marker.setLatLng(pos);
-
-            // smooth follow
-            map.panTo(pos, {{animate:true}});
+        if(data.sid == sid){{
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat,lng]);
+            if(routeLine) map.panTo([lat,lng], {{animate:true}});
         }}
     }});
     </script>
     '''
 
-    return render_template_string(BASE_HTML, content=content)
+    return render_template_string(BASE_HTML, content=content, stations=stations)
+
 
 
 if __name__ == "__main__":
