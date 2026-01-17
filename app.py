@@ -862,11 +862,7 @@ if(routePoints.length >= 2){{
 }}
 
 // ===== BUS ICON =====
-let busIcon = L.divIcon({
-    className:'bus-icon',
-    iconSize:[100,100],
-    iconAnchor:[50,50]
-});
+let busIcon = L.divIcon({{className:'bus-icon'}});
 let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
 
 // ===== SOCKET =====
