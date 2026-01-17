@@ -1266,7 +1266,7 @@ def live_bus(sid):
     const busIcon = L.divIcon({{
         html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
         className: 'bus-icon',
-        iconSize: [30,30]
+        iconSize: [60,60]
     }});
     let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
