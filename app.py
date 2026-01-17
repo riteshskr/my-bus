@@ -712,8 +712,6 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    from datetime import date
-    import json
 
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
@@ -728,6 +726,7 @@ def seats(sid):
         WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
         ORDER BY station_order
     """, (sid,))
+
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
 
@@ -738,83 +737,106 @@ def seats(sid):
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+        WHERE schedule_id=%s
+        AND travel_date=%s
+        AND status='confirmed'
     """, (sid, d))
 
     booked_rows = cur.fetchall()
     booked_seats = set()
+
     for row in booked_rows:
         booked_fs = station_to_order.get(row['from_station'], 0)
         booked_ts = station_to_order.get(row['to_station'], 0)
+
         if not (ts_order <= booked_fs or fs_order >= booked_ts):
             booked_seats.add(row['seat_number'])
 
     # ===== Seat Buttons =====
     seat_buttons = ""
     available_count = 40 - len(booked_seats)
+
     for i in range(1, 41):
         if i in booked_seats:
-            seat_buttons += f'<button class="btn btn-danger m-1" disabled>X</button>'
+            seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'''
-            <button class="btn btn-success m-1 seat" onclick="bookSeat({i}, this)">{i}</button>
-            '''
+            <button class="btn btn-success seat"
+                    onclick="bookSeat({i}, this)">
+                {i}
+            </button>'''
 
-    # ===== Bus Location =====
-    cur.execute("""
-        SELECT current_lat, current_lng, route_id
-        FROM schedules WHERE id=%s
-    """, (sid,))
+    # ===== BUS LOCATION =====
+    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
     bus = cur.fetchone()
+
     lat = float(bus['current_lat'] or 27.2)
     lng = float(bus['current_lng'] or 75.0)
 
-    # ===== Route Stations =====
+    # ===== ROUTE STATIONS =====
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
         WHERE route_id=%s
         ORDER BY station_order
     """, (bus['route_id'],))
+
     stations = cur.fetchall()
+
+    import json
     stations_json = json.dumps(stations)
 
     # ================= HTML =================
-    html = f"""
+    html = f'''
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 
+<style>
+#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
+.live-bus{{
+    width:30px;height:30px;
+    background:#ff4444;
+    border-radius:50%;
+    border:3px solid white;
+}}
+</style>
+
 <div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available:
-  <span class="badge bg-success">{available_count}</span>
+<h3>🚌 {fs} → {ts}</h3>
+<h5>📅 {d}</h5>
+Available:
+<span class="badge bg-success">{available_count}</span>
 </div>
 
-<div id="map" style="height:260px"></div>
+<div id="seat-map"></div>
 
-<div class="text-center mt-3">
+<div class="text-center">
 {seat_buttons}
 </div>
 
 <script>
 const sid = {sid};
-const map = L.map('map').setView([{lat}, {lng}], 10);
+
+// ===== MAP =====
+const map = L.map('seat-map').setView([{lat}, {lng}], 10);
+
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
-// Polyline route
 const stations = {stations_json};
 let routePoints = [];
+
 stations.forEach(st => {{
     let la = parseFloat(st.lat);
     let ln = parseFloat(st.lng);
     if(!isNaN(la) && !isNaN(ln)){{
         routePoints.push([la,ln]);
-        L.marker([la,ln]).addTo(map).bindPopup(st.station_name);
+        L.marker([la,ln]).addTo(map)
+         .bindPopup(st.station_name);
     }}
 }});
+
 if(routePoints.length>=2){{
     let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
     map.fitBounds(poly.getBounds());
@@ -822,11 +844,13 @@ if(routePoints.length>=2){{
 
 let busMarker = L.marker([{lat},{lng}]).addTo(map);
 
-// ===== Socket for real-time seat update =====
+// ===== SOCKET =====
 const socket = io();
-socket.on("seat_update", d=>{
+
+socket.on("seat_update", function(d){{
     if(d.sid==sid){{
-        const btn = document.querySelectorAll(".seat")[d.seat-1];
+        const btns = document.querySelectorAll(".seat");
+        const btn = btns[d.seat-1];
         if(btn){{
             btn.classList.remove("btn-success");
             btn.classList.add("btn-danger");
@@ -834,76 +858,83 @@ socket.on("seat_update", d=>{
             btn.disabled=true;
         }}
     }}
-} );
+}});
 
-// ===== Seat Booking =====
+socket.on("bus_location", function(d){{
+   if(d.sid==sid){{
+      busMarker.setLatLng([d.lat,d.lng]);
+   }}
+}});
+
+// ================= BOOKING LOGIC =================
 async function bookSeat(seat, btn){{
     let name = prompt("Passenger Name");
     if(!name) return;
-    let mobile = prompt("Mobile Number");
+
+    let mobile = prompt("Mobile");
     if(!mobile) return;
 
-    let USER_TYPE = "user";  // user/conductor/counter
+    let USER_TYPE = "user";      // user / conductor / counter
     let USER_ID = 1;
     let COUNTER_ID = null;
 
     let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: USER_TYPE=="user" ? "online" : "cash",
-        booked_by_type: USER_TYPE,
-        booked_by_id: USER_ID,
-        counter_id: COUNTER_ID
+      sid: sid,
+      seat: seat,
+      name: name,
+      mobile: mobile,
+      date: "{d}",
+      from: "{fs}",
+      to: "{ts}",
+      payment_mode: USER_TYPE=="user" ? "online" : "cash",
+      booked_by_type: USER_TYPE,
+      booked_by_id: USER_ID,
+      counter_id: COUNTER_ID
     }};
 
-    try {{
-        let res = await fetch("/book", {{
-            method:"POST",
-            headers:{{"Content-Type":"application/json"}},
-            body: JSON.stringify(payload)
-        }});
-        let data = await res.json();
-        console.log("Booking Response:", data);
+    let res = await fetch("/book", {{
+      method:"POST",
+      headers:{{"Content-Type":"application/json"}},
+      body: JSON.stringify(payload)
+    }});
 
-        if(data.need_payment){{
-            startRazorpay(data.fare, seat, btn);
-        }}
-        else if(data.ok){{
-            btn.classList.remove("btn-success");
-            btn.classList.add("btn-danger");
-            btn.innerText="X";
-            btn.disabled=true;
-            alert("✅ Seat Booked Successfully!");
-        }} else {{
-            alert("❌ Error: " + (data.error || "Unknown Error"));
-        }}
-    }} catch(e){{
-        alert("❌ Network / Server Error: " + e.message);
-        console.error(e);
+    let data = await res.json();
+
+    if(data.need_payment){{
+        startRazorpay(data.fare, seat, btn);
+    }}
+    else if(data.ok){{
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-danger");
+        btn.innerText="X";
+        btn.disabled=true;
+        alert("Seat Booked (CASH/Success) ✅");
+    }}
+    else{{
+        alert(data.error);
     }}
 }}
 
-// ===== Razorpay Handler =====
+// ===== RAZORPAY =====
 function startRazorpay(fare, seat, btn){{
-    fetch("/create-payment",{{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify({{fare:fare, sid:sid, seat:seat}})
+    fetch("/create-payment", {{
+     method:"POST",
+     headers:{{"Content-Type":"application/json"}},
+     body: JSON.stringify({{
+        fare: fare,
+        sid: sid,
+        seat: seat
+     }})
     }})
     .then(r=>r.json())
-    .then(order=>{
-        var options = {{
+    .then(order=>{{
+         var options = {{
             key: order.key,
             amount: order.amount,
             currency: "INR",
             order_id: order.order_id,
-            handler: function(response){{
-                fetch("/verify-payment",{{
+            handler: function (response){{
+                fetch("/verify-payment", {{
                     method:"POST",
                     headers:{{"Content-Type":"application/json"}},
                     body: JSON.stringify({{
@@ -915,22 +946,23 @@ function startRazorpay(fare, seat, btn){{
                     }})
                 }})
                 .then(r=>r.json())
-                .then(d=>{
+                .then(d=>{{
                     btn.classList.remove("btn-success");
                     btn.classList.add("btn-danger");
                     btn.innerText="X";
                     btn.disabled=true;
-                    alert("✅ Payment Successful! Seat Booked");
-                }})
+                    alert("Payment Success ✅");
+                }});
             }}
-        }};
-        new Razorpay(options).open();
+         }};
+         new Razorpay(options).open();
     }});
 }}
 </script>
-"""
+'''
 
     return render_template_string(BASE_HTML, content=html)
+
 
 
 
