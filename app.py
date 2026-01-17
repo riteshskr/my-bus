@@ -727,7 +727,6 @@ def seats(sid):
     """, (sid,))
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
@@ -754,13 +753,13 @@ def seats(sid):
         else:
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
 
-    # ===== BUS LOCATION =====
+    # ===== Bus Location =====
     cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
     bus = cur.fetchone()
     lat = float(bus['current_lat'] or 27.2)
     lng = float(bus['current_lng'] or 75.0)
 
-    # ===== ROUTE STATIONS =====
+    # ===== Route Stations =====
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
@@ -783,7 +782,8 @@ def seats(sid):
 .seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
 .btn-success{{background-color:#28a745 !important;}}
 .btn-danger{{background-color:#dc3545 !important;}}
-.live-bus{{width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid white;}}
+.live-bus{{width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid white;animation:pulse 2s infinite;}}
+@keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.3);}}}}
 </style>
 
 <div class="text-center mb-3">
@@ -802,6 +802,16 @@ const sid = {sid};
 const map = L.map('seat-map').setView([{lat}, {lng}], 10);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
+// ===== BUS ICON =====
+const busIcon = L.divIcon({{
+    html:'<div class="live-bus"></div>',
+    className:'',
+    iconSize:[30,30]
+}});
+
+let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
+
+// ===== ROUTE POLYLINE =====
 const stations = {stations_json};
 let routePoints = [];
 stations.forEach(st => {{
@@ -816,15 +826,17 @@ if(routePoints.length>=2){{
     let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
     map.fitBounds(poly.getBounds());
 }}
-let busMarker = L.marker([{lat},{lng}]).addTo(map);
 
 // ===== SOCKET.IO =====
 const socket = io();
 socket.on("bus_location", d => {{
-   if(d.sid == sid) busMarker.setLatLng([d.lat,d.lng]);
+    if(d.sid == sid) {{
+        busMarker.setLatLng([d.lat,d.lng]);
+        map.panTo([d.lat,d.lng]);
+    }}
 }});
 socket.on("seat_update", d => {{
-   if(d.sid == sid) markSeatBooked(d.seat);
+    if(d.sid == sid) markSeatBooked(d.seat);
 }});
 
 // ===== Helper =====
@@ -841,8 +853,11 @@ function markSeatBooked(seat){{
 
 // ===== BOOK SEAT =====
 async function bookSeat(seat, btn){{
-    let name = prompt("Passenger Name"); if(!name) return;
-    let mobile = prompt("Mobile Number"); if(!mobile) return;
+    let name = prompt("Passenger Name"); if(!name || !name.trim()) return alert("Name required");
+    let mobile = prompt("Mobile Number"); if(!mobile || !mobile.trim()) return alert("Mobile required");
+
+    let USER_TYPE = "user";  // user/conductor/counter
+    let USER_ID = 1;         // logged in user id
 
     let payload = {{
         sid: sid,
@@ -852,8 +867,17 @@ async function bookSeat(seat, btn){{
         date: "{d}",
         from: "{fs}",
         to: "{ts}",
-        payment_mode: "online"
+        payment_mode: "online",
+        booked_by_type: USER_TYPE,
+        booked_by_id: USER_ID
     }};
+
+    // Validate payload
+    for(let key in payload){{
+        if(payload[key] === null || payload[key] === ""){{
+            return alert(`Missing field: ${key}`);
+        }}
+    }}
 
     let res = await fetch("/book", {{
         method:"POST",
@@ -878,13 +902,13 @@ function startRazorpay(fare, seat, btn){{
         method:"POST",
         headers:{{"Content-Type":"application/json"}},
         body: JSON.stringify({{fare:fare,sid:sid,seat:seat}})
-    }}).then(r => r.json()).then(order => {{
+    }}).then(r=>r.json()).then(order=>{{
         var options = {{
             key: order.key,
             amount: order.amount,
             currency: "INR",
             order_id: order.order_id,
-            handler: function(response) {{
+            handler: function(response){{
                 fetch("/verify-payment", {{
                     method:"POST",
                     headers:{{"Content-Type":"application/json"}},
@@ -895,7 +919,7 @@ function startRazorpay(fare, seat, btn){{
                         sid: sid,
                         seat: seat
                     }})
-                }}).then(r => r.json()).then(d => {{
+                }}).then(r=>r.json()).then(d=>{{
                     markSeatBooked(seat);
                     alert("Payment Success ✅");
                 }});
@@ -906,9 +930,7 @@ function startRazorpay(fare, seat, btn){{
 }}
 </script>
 """
-
     return render_template_string(BASE_HTML, content=html)
-
 
 
 
