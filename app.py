@@ -809,8 +809,8 @@ def seats(sid):
 .btn-danger{{background:#dc3545 !important;}}
 
 .bus-icon{{
-    width:70px;
-    height:70px;
+    width:100px;
+    height:100px;
     background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
     background-size:cover;
 }}
