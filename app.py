@@ -940,65 +940,92 @@ function startRazorpay(fare, seat, btn){{
 def book():
     data = request.get_json()
 
-    required = ['sid','seat','name','mobile','date',
-                'from','to','payment_mode',
-                'booked_by_type','booked_by_id']
+    # ===== Required fields =====
+    required = [
+        'sid','seat','name','mobile','date',
+        'from','to','payment_mode',
+        'booked_by_type','booked_by_id'
+    ]
+
     for field in required:
-        if field not in data or not data[field]:
+        if field not in data or str(data[field]).strip() == "":
             return jsonify({"ok": False, "error": f"Missing field: {field}"})
-    if not all(k in data for k in required):
-        return jsonify({"ok":False,"error":"Missing fields"}),400
 
     conn, cur = get_db()
 
     try:
-        # Check if seat already booked
+        # ===== Check if seat already booked =====
         cur.execute("""
             SELECT id FROM seat_bookings
-            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
-        """,(data['sid'],data['seat'],data['date']))
+            WHERE schedule_id=%s 
+            AND seat_number=%s 
+            AND travel_date=%s
+            AND status='confirmed'
+        """,(data['sid'], data['seat'], data['date']))
 
         if cur.fetchone():
-            return jsonify({"ok":False,"error":"Seat already booked"}),409
+            return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        # Random fare (example)
+        # ===== Temporary Fare =====
         fare = random.randint(250,450)
 
-        # Cash → confirmed, Online → pending
-        status = "confirmed" if data['payment_mode']=="cash" else "pending"
+        # 👉 RAZORPAY IGNORE → ALWAYS CASH
+        status = "confirmed"
+        payment_mode = "cash"
 
+        # ===== INSERT BOOKING =====
         cur.execute("""
         INSERT INTO seat_bookings
-        (schedule_id,seat_number,passenger_name,mobile,
-         from_station,to_station,travel_date,fare,status,
-         payment_mode,booked_by_type,booked_by_id,counter_id)
+        (
+            schedule_id,
+            seat_number,
+            passenger_name,
+            mobile,
+            from_station,
+            to_station,
+            travel_date,
+            fare,
+            status,
+            payment_mode,
+            booked_by_type,
+            booked_by_id,
+            counter_id
+        )
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """,(
-            data['sid'],data['seat'],data['name'],data['mobile'],
-            data['from'],data['to'],data['date'],fare,status,
-            data['payment_mode'],
+            data['sid'],
+            data['seat'],
+            data['name'],
+            data['mobile'],
+            data['from'],
+            data['to'],
+            data['date'],
+            fare,
+            status,
+            payment_mode,
             data['booked_by_type'],
             data['booked_by_id'],
-            data.get('counter_id')
+            data.get('counter_id')   # optional
         ))
 
         conn.commit()
 
-        # Emit real-time seat update via socket
-        socketio.emit("seat_update",{
-            "sid":data['sid'],
-            "seat":data['seat']
+        # ===== LIVE UPDATE =====
+        socketio.emit("seat_update", {
+            "sid": data['sid'],
+            "seat": data['seat']
         })
 
-        # Return proper response
-        if data['payment_mode']=="cash":
-            return jsonify({"ok":True,"fare":fare})
-        else:
-            return jsonify({"ok":True,"fare":fare,"need_payment":True})
+        return jsonify({
+            "ok": True,
+            "fare": fare,
+            "message": "Seat booked successfully (CASH MODE)"
+        })
 
     except Exception as e:
         conn.rollback()
-        return jsonify({"ok":False,"error":str(e)})
+        return jsonify({"ok": False, "error": str(e)})
+
 
 
 @app.route("/driver/<int:sid>")
@@ -1260,31 +1287,10 @@ def live_bus(sid):
     return render_template_string(BASE_HTML, content=content)
 
 @app.route("/create-payment", methods=["POST"])
-@safe_db
 def create_payment():
-    data = request.get_json()
-
-    amount = int(data['fare']) * 100   # rupees → paise
-
-    order = razor_client.order.create({
-        "amount": amount,
-        "currency": "INR",
-        "payment_capture": 1
-    })
-
-    conn, cur = get_db()
-    cur.execute("""
-        INSERT INTO payments
-        (schedule_id, seat_number, order_id, amount, status)
-        VALUES (%s,%s,%s,%s,'created')
-    """, (data['sid'], data['seat'], order['id'], amount))
-
-    conn.commit()
-
     return jsonify({
-        "order_id": order['id'],
-        "key": os.getenv("RAZORPAY_KEY_ID"),
-        "amount": amount
+        "ok": False,
+        "error": "Payment gateway not configured"
     })
 
 @app.route("/verify-payment", methods=["POST"])
