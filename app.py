@@ -101,17 +101,23 @@ def init_db():
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS seat_bookings (
-                id SERIAL PRIMARY KEY, 
-                schedule_id INT REFERENCES schedules(id), 
-                seat_number INT,
-                passenger_name VARCHAR(100), 
-                mobile VARCHAR(15), 
-                from_station VARCHAR(50),
-                to_station VARCHAR(50), 
-                travel_date DATE, 
-                status VARCHAR(20) DEFAULT 'confirmed',
-                fare INT, 
-                created_at TIMESTAMP DEFAULT NOW()
+               id SERIAL PRIMARY KEY,
+    schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
+    seat_number INT,
+    passenger_name VARCHAR(100),
+    mobile VARCHAR(15),
+    from_station VARCHAR(50),
+    to_station VARCHAR(50),
+    travel_date DATE,
+    status VARCHAR(20) DEFAULT 'confirmed',
+    fare INT,
+    payment_mode VARCHAR(10) DEFAULT 'cash',
+    booked_by_type VARCHAR(10) DEFAULT 'user',
+    booked_by_id INT,
+    counter_id INT,
+    order_id VARCHAR(100),
+    payment_id VARCHAR(100),
+    created_at TIMESTAMP DEFAULT NOW()
             )""")
 
             cur.execute("""
@@ -706,6 +712,7 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
+
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d = request.args.get("d", date.today().isoformat())
@@ -719,17 +726,20 @@ def seats(sid):
         WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
         ORDER BY station_order
     """, (sid,))
+
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
 
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
-    # ===== Booked Seats Logic =====
+    # ===== Booked Seats =====
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
-        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+        WHERE schedule_id=%s
+        AND travel_date=%s
+        AND status='confirmed'
     """, (sid, d))
 
     booked_rows = cur.fetchall()
@@ -751,23 +761,19 @@ def seats(sid):
             seat_buttons += f'<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'''
-            <button class="btn btn-success seat" 
-                    data-seat="{i}" 
+            <button class="btn btn-success seat"
                     onclick="bookSeat({i}, this)">
                 {i}
             </button>'''
 
-    # ===== BUS CURRENT LOCATION =====
-    cur.execute("""
-        SELECT s.current_lat, s.current_lng, s.route_id
-        FROM schedules s WHERE id=%s
-    """, (sid,))
+    # ===== BUS LOCATION =====
+    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
     bus = cur.fetchone()
 
     lat = float(bus['current_lat'] or 27.2)
     lng = float(bus['current_lng'] or 75.0)
 
-    # ===== ROUTE STATIONS FOR POLYLINE =====
+    # ===== ROUTE STATIONS =====
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
@@ -782,98 +788,197 @@ def seats(sid):
 
     # ================= HTML =================
     html = f'''
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-    <style>
-    #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-    .live-bus{{
-        width:30px;height:30px;
-        background:#ff4444;
-        border-radius:50%;
-        border:3px solid white;
-        animation:pulse 2s infinite;
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+
+<style>
+#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
+.live-bus{{
+    width:30px;height:30px;
+    background:#ff4444;
+    border-radius:50%;
+    border:3px solid white;
+}}
+</style>
+
+<div class="text-center mb-3">
+<h3>🚌 {fs} → {ts}</h3>
+<h5>📅 {d}</h5>
+Available:
+<span class="badge bg-success">{available_count}</span>
+</div>
+
+<div id="seat-map"></div>
+
+<div class="text-center">
+{seat_buttons}
+</div>
+
+
+<script>
+const sid = {sid};
+
+// ===== MAP =====
+const map = L.map('seat-map').setView([{lat}, {lng}], 10);
+
+L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+
+const stations = {stations_json};
+
+let routePoints = [];
+
+stations.forEach(st => {{
+    let la = parseFloat(st.lat);
+    let ln = parseFloat(st.lng);
+
+    if(!isNaN(la) && !isNaN(ln)){{
+        routePoints.push([la,ln]);
+
+        L.marker([la,ln]).addTo(map)
+         .bindPopup(st.station_name);
     }}
-    @keyframes pulse{{
-        0%,100%{{transform:scale(1);}}
-        50%{{transform:scale(1.3);}}
-    }}
-    </style>
+}});
 
-    <div class="text-center mb-4">
-        <h3>🚌 {fs} → {ts}</h3>
-        <h5>📅 {d}</h5>
-        <div>Available Seats:
-            <span id="availableCount" class="badge bg-success">
-                {available_count}
-            </span>/40
-        </div>
-    </div>
+if(routePoints.length>=2){{
+    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
+    map.fitBounds(poly.getBounds());
+}}
 
-    <!-- ===== SAME LIVE BUS MAP ===== -->
-    <div id="seat-map"></div>
+let busMarker = L.marker([{lat},{lng}]).addTo(map);
 
-    <div class="bus-row text-center">
-        {seat_buttons}
-    </div>
+// ===== SOCKET =====
+const socket = io();
 
-    <script>
-    const sid = {sid};
+socket.on("bus_location", d=>{{
+   if(d.sid==sid){{
+      busMarker.setLatLng([d.lat,d.lng]);
+   }}
+}});
 
-    const map = L.map('seat-map').setView([{lat}, {lng}], 10);
 
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+// ================= BOOKING LOGIC =================
 
-    // ===== ROUTE POLYLINE (LIVE-BUS जैसा) =====
-    const stations = {stations_json};
+async function bookSeat(seat, btn){{
 
-    let routePoints = [];
+let name = prompt("Passenger Name");
+if(!name) return;
 
-    stations.forEach(st => {{
-        const lat = parseFloat(st.lat);
-        const lng = parseFloat(st.lng);
+let mobile = prompt("Mobile");
+if(!mobile) return;
 
-        if(!isNaN(lat) && !isNaN(lng)){{
-            routePoints.push([lat,lng]);
 
-            L.marker([lat,lng])
-                .addTo(map)
-                .bindPopup("📍 " + st.station_name);
-        }}
-    }});
+// ===== TEMP USER LOGIC =====
+let USER_TYPE = "user";      // user / conductor / counter
+let USER_ID = 1;
+let COUNTER_ID = null;
 
-    if(routePoints.length >=2){{
-        const poly = L.polyline(routePoints, {{
-            color:'blue',
-            weight:7
-        }}).addTo(map);
 
-        map.fitBounds(poly.getBounds());
-    }}
+let payload = {{
+  sid: sid,
+  seat: seat,
+  name: name,
+  mobile: mobile,
+  date: "{d}",
 
-    // ===== BUS MARKER =====
-    let busMarker = L.marker([{lat},{lng}], {{
-        icon:L.divIcon({{
-            html:'<div class="live-bus"></div>',
-            className:''
+  from: "{fs}",
+  to: "{ts}",
+
+  payment_mode: USER_TYPE=="user" ? "online" : "cash",
+
+  booked_by_type: USER_TYPE,
+  booked_by_id: USER_ID,
+  counter_id: COUNTER_ID
+}};
+
+let res = await fetch("/book",{{
+  method:"POST",
+  headers:{{"Content-Type":"application/json"}},
+  body: JSON.stringify(payload)
+}});
+
+let data = await res.json();
+
+if(data.need_payment){{
+    startRazorpay(data.fare, seat, btn);
+}}
+else if(data.ok){{
+    btn.classList.remove("btn-success");
+    btn.classList.add("btn-danger");
+    btn.innerText="X";
+    btn.disabled=true;
+
+    alert("Seat Booked (CASH) ✅");
+}}
+else{{
+    alert(data.error);
+}}
+
+}}
+
+
+// ===== RAZORPAY =====
+
+function startRazorpay(fare, seat, btn){{
+
+fetch("/create-payment",{{
+ method:"POST",
+ headers:{{"Content-Type":"application/json"}},
+ body: JSON.stringify({{
+    fare: fare,
+    sid: sid,
+    seat: seat
+ }})
+}})
+.then(r=>r.json())
+.then(order=>{{
+
+ var options = {{
+
+    key: order.key,
+    amount: order.amount,
+    currency: "INR",
+
+    order_id: order.order_id,
+
+    handler: function (response){{
+
+        fetch("/verify-payment",{{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body: JSON.stringify({{
+                order_id: response.razorpay_order_id,
+                payment_id: response.razorpay_payment_id,
+                signature: response.razorpay_signature,
+
+                sid: sid,
+                seat: seat
+            }})
         }})
-    }}).addTo(map);
+        .then(r=>r.json())
+        .then(d=>{{
 
-    // ===== SOCKET LIVE UPDATE =====
-    const socket = io({{transports:['websocket','polling']}});
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.innerText="X";
+            btn.disabled=true;
 
-    socket.on("bus_location", data => {{
-        if(data.sid == sid){{
-            const lat = parseFloat(data.lat);
-            const lng = parseFloat(data.lng);
+            alert("Payment Success ✅");
 
-            busMarker.setLatLng([lat,lng]);
-            map.panTo([lat,lng]);
-        }}
-    }});
-    </script>
-    '''
+        }})
+    }}
+ }};
+
+ new Razorpay(options).open();
+
+}})
+
+}}
+
+</script>
+'''
 
     return render_template_string(BASE_HTML, content=html)
 
@@ -883,43 +988,64 @@ def seats(sid):
 @safe_db
 def book():
     data = request.get_json()
-    if not all(k in data for k in ['sid', 'seat', 'name', 'mobile', 'date']):
-        return jsonify({"ok": False, "error": "सभी fields जरूरी"}), 400
 
-    if not str(data['mobile']).isdigit() or len(data['mobile']) != 10:
-        return jsonify({"ok": False, "error": "10 अंक मोबाइल"}), 400
+    required = ['sid','seat','name','mobile','date',
+                'from','to','payment_mode',
+                'booked_by_type','booked_by_id']
+
+    if not all(k in data for k in required):
+        return jsonify({"ok":False,"error":"missing fields"}),400
 
     conn, cur = get_db()
-    try:
-        cur.execute("SELECT id FROM seat_bookings WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s",
-                    (data['sid'], data['seat'], data['date']))
-        if cur.fetchone():
-            return jsonify({"ok": False, "error": "सीट पहले से बुक है"}), 409
 
-        fare = random.randint(250, 450)
-        cur.execute("""
-            INSERT INTO seat_bookings (schedule_id, seat_number, passenger_name, mobile, 
-            from_station, to_station, travel_date, fare, status)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed')
-        """, (data['sid'], data['seat'], data['name'], data['mobile'],
-              data['from'], data['to'], data['date'], fare))
-        conn.commit()
+    # Seat check
+    cur.execute("""
+        SELECT id FROM seat_bookings
+        WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s
+    """,(data['sid'],data['seat'],data['date']))
 
-        # ✅ 100% WORKING LIVE UPDATE
-        socketio.emit("seat_update", {
-            "sid": data['sid'],
-            "seat": data['seat'],
-            "date": data['date']
+    if cur.fetchone():
+        return jsonify({"ok":False,"error":"Seat already booked"}),409
+
+    fare = random.randint(250,450)
+
+    status = "confirmed" if data['payment_mode']=="cash" else "pending"
+
+    cur.execute("""
+    INSERT INTO seat_bookings
+    (schedule_id,seat_number,passenger_name,mobile,
+     from_station,to_station,travel_date,fare,status,
+
+     payment_mode,booked_by_type,booked_by_id,counter_id)
+
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """,(
+        data['sid'],data['seat'],data['name'],data['mobile'],
+        data['from'],data['to'],data['date'],fare,status,
+
+        data['payment_mode'],
+        data['booked_by_type'],
+        data['booked_by_id'],
+        data.get('counter_id')
+    ))
+
+    conn.commit()
+
+    # Cash booking → direct confirm
+    if data['payment_mode']=="cash":
+        socketio.emit("seat_update",{
+            "sid":data['sid'],
+            "seat":data['seat']
         })
 
-        print(f"✅ BROADCAST: Seat {data['seat']} booked for bus {data['sid']}")
-        return jsonify({"ok": True, "fare": fare})
+        return jsonify({"ok":True,"fare":fare})
 
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"❌ Booking error: {e}")
-        return jsonify({"ok": False, "error": str(e)}), 500
+    # Online → create payment
+    return jsonify({
+        "ok":True,
+        "fare":fare,
+        "need_payment":True
+    })
 
 
 @app.route("/driver/<int:sid>")
@@ -1208,6 +1334,35 @@ def create_payment():
         "amount": amount
     })
 
+@app.route("/verify-payment", methods=["POST"])
+@safe_db
+def verify():
+    data = request.get_json()
+
+    razor_client.utility.verify_payment_signature({
+        'razorpay_order_id': data['order_id'],
+        'razorpay_payment_id': data['payment_id'],
+        'razorpay_signature': data['signature']
+    })
+
+    conn, cur = get_db()
+
+    cur.execute("""
+    UPDATE seat_bookings
+    SET status='confirmed',
+        payment_id=%s,
+        order_id=%s
+    WHERE order_id=%s
+    """,(data['payment_id'],data['order_id'],data['order_id']))
+
+    conn.commit()
+
+    socketio.emit("seat_update",{
+        "sid":data['sid'],
+        "seat":data['seat']
+    })
+
+    return jsonify({"ok":True})
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
