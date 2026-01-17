@@ -921,7 +921,9 @@ def book():
     required = ['sid','seat','name','mobile','date',
                 'from','to','payment_mode',
                 'booked_by_type','booked_by_id']
-
+    for field in required:
+        if field not in data or not data[field]:
+            return jsonify({"ok": False, "error": f"Missing field: {field}"})
     if not all(k in data for k in required):
         return jsonify({"ok":False,"error":"Missing fields"}),400
 
