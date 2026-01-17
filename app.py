@@ -809,10 +809,12 @@ def seats(sid):
 .btn-danger{{background:#dc3545 !important;}}
 
 .bus-icon{{
-    width:100px;
-    height:100px;
+   width:100px !important;
+    height:100px !important;
     background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-    background-size:cover;
+    background-size:contain;
+    background-repeat:no-repeat;
+    filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
 }}
 </style>
 
@@ -860,7 +862,11 @@ if(routePoints.length >= 2){{
 }}
 
 // ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
+let busIcon = L.divIcon({
+    className:'bus-icon',
+    iconSize:[100,100],
+    iconAnchor:[50,50]
+});
 let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
 
 // ===== SOCKET =====
