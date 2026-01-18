@@ -493,6 +493,7 @@ BASE_HTML = """<!DOCTYPE html>
 
             socket.on('connect', () => {
                 console.log('✅ Socket Connected:', socket.id);
+               
             });
 
             socket.on('connect_error', (err) => {
@@ -1301,6 +1302,7 @@ def live_bus(sid):
 
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
+        socket.emit("join_bus", sid);
     }});
 
     socket.on('bus_location', data => {{
