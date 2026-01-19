@@ -421,8 +421,7 @@ BASE_HTML = """<!DOCTYPE html>
 <body>
     <div class="container-fluid py-4">
         <div class="main-container">
-            <!-- Header -->
-            <div class="text-center mb-5">
+              <div class="text-center mb-5">
                 
             </div>
 
