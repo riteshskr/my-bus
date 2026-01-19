@@ -39,7 +39,7 @@ Compress(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="threading",
+    async_mode="eventlet",
     transports=["polling", "websocket"],
     ping_timeout=60,
     ping_interval=25
@@ -217,25 +217,26 @@ def join_bus(sid):
 
 @socketio.on("driver_gps")
 def gps(data):
+    print("📍 LIVE:", data)
 
     sid = data.get('sid')
     if not sid:
         return
 
-    # 🔥 SID ko string banao (MOST IMPORTANT)
     sid = str(sid)
 
     try:
-        lat = float(data.get('lat', 27.5))
-        lng = float(data.get('lng', 75.0))
+        lat = float(data.get('lat'))
+        lng = float(data.get('lng'))
         speed = float(data.get('speed', 0))
     except Exception as e:
         print("GPS parse error:", e)
         return
 
-    print(f"📍 BUS-{sid} → {lat},{lng}")
+    # 👉 DRIVER KO ROOM ME DAALO
+    join_room(sid)
 
-    # ===== DATABASE UPDATE =====
+    # ===== DB UPDATE =====
     try:
         conn, cur = get_db()
         cur.execute("""
@@ -248,40 +249,17 @@ def gps(data):
     except Exception as e:
         print("DB error:", e)
 
-    # ===== MOST IMPORTANT PART =====
-    socketio.emit("bus_location", {
-        "sid": sid,
-        "lat": lat,
-        "lng": lng,
-        "speed": speed
-    }, room=sid)
-
-    print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
-
-    # 👉 DRIVER KO ROOM ME DAALO
-    #join_room(sid)
-
-    # Save to DB
-    try:
-        with app.app_context():
-            conn, cur = get_db()
-            cur.execute("""
-                UPDATE schedules 
-                SET current_lat=%s, current_lng=%s
-                WHERE id=%s
-            """, (lat, lng, sid))
-            conn.commit()
-    except Exception as e:
-        print("DB error:", e)
-
-    # 👉 SIRF ISI BUS KO EMIT
+    # ===== SEAT + LIVE PAGE KO BHEJO =====
     emit("bus_location", {
         "sid": sid,
         "lat": lat,
         "lng": lng,
         "speed": speed,
-        "timestamp": data.get('timestamp', '')
+        "timestamp": data.get('timestamp','')
     }, room=sid)
+
+    print(f"🚀 EMIT TO ROOM {sid}: {lat},{lng}")
+
 
 
 # ================= HTML BASE =================
@@ -925,7 +903,11 @@ let busIcon = L.divIcon({{className:'bus-icon'}});
 let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
 
 // ===== SOCKET =====
-const socket = io();
+const socket = io({
+   transports:["polling","websocket"],
+   secure:true,
+   reconnection:true
+});
 socket.emit("join_bus", sid);
 socket.on("bus_location", d => {{
    if(d.sid == sid){{
