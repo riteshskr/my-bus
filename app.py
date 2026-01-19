@@ -77,122 +77,142 @@ def safe_db(func):
 
 # ================= DB INIT =================
 def init_db():
-    """✅ FIXED: Flask app context added"""
-    with app.app_context():
-        conn, cur = get_db()
-        try:
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS payments (
-                id SERIAL PRIMARY KEY,
-                schedule_id INT,
-                seat_number INT,
-                order_id VARCHAR(100),
-                payment_id VARCHAR(100),
-                amount INT,
-                status VARCHAR(20),
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-            """)
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS routes (
-                id SERIAL PRIMARY KEY, 
-                route_name VARCHAR(100) UNIQUE, 
-                distance_km INT
-            )""")
+    try:
+        conn = pool.getconn()
+        cur = conn.cursor()
 
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS schedules (
-                id SERIAL PRIMARY KEY, 
-                route_id INT REFERENCES routes(id), 
-                bus_name VARCHAR(100),
-                departure_time TIME, 
-                current_lat DOUBLE PRECISION,
-                current_lng DOUBLE PRECISION,
+        # ===== TABLES =====
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id SERIAL PRIMARY KEY,
+            schedule_id INT,
+            seat_number INT,
+            order_id VARCHAR(100),
+            payment_id VARCHAR(100),
+            amount INT,
+            status VARCHAR(20),
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
 
-                total_seats INT DEFAULT 40
-            )""")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS routes (
+            id SERIAL PRIMARY KEY, 
+            route_name VARCHAR(100) UNIQUE, 
+            distance_km INT
+        )""")
 
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS seat_bookings (
-               id SERIAL PRIMARY KEY,
-    schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
-    seat_number INT,
-    passenger_name VARCHAR(100),
-    mobile VARCHAR(15),
-    from_station VARCHAR(50),
-    to_station VARCHAR(50),
-    travel_date DATE,
-    status VARCHAR(20) DEFAULT 'confirmed',
-    fare INT,
-    payment_mode VARCHAR(10) DEFAULT 'cash',
-    booked_by_type VARCHAR(10) DEFAULT 'user',
-    booked_by_id INT,
-    counter_id INT,
-    order_id VARCHAR(100),
-    payment_id VARCHAR(100),
-    created_at TIMESTAMP DEFAULT NOW()
-            )""")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS schedules (
+            id SERIAL PRIMARY KEY, 
+            route_id INT REFERENCES routes(id), 
+            bus_name VARCHAR(100),
+            departure_time TIME, 
+            current_lat DOUBLE PRECISION,
+            current_lng DOUBLE PRECISION,
+            total_seats INT DEFAULT 40
+        )""")
 
-            cur.execute("""
-            CREATE TABLE IF NOT EXISTS route_stations (
-                id SERIAL PRIMARY KEY, 
-                route_id INT REFERENCES routes(id), 
-                station_name VARCHAR(50), 
-                station_order INT
-            )""")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS seat_bookings (
+            id SERIAL PRIMARY KEY,
+            schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
+            seat_number INT,
+            passenger_name VARCHAR(100),
+            mobile VARCHAR(15),
+            from_station VARCHAR(50),
+            to_station VARCHAR(50),
+            travel_date DATE,
+            status VARCHAR(20) DEFAULT 'confirmed',
+            fare INT,
+            payment_mode VARCHAR(10) DEFAULT 'cash',
+            booked_by_type VARCHAR(10) DEFAULT 'user',
+            booked_by_id INT,
+            counter_id INT,
+            order_id VARCHAR(100),
+            payment_id VARCHAR(100),
+            created_at TIMESTAMP DEFAULT NOW()
+        )""")
 
-            cur.execute("""
-            DO $$ BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_seat_booking') THEN
-                    ALTER TABLE seat_bookings ADD CONSTRAINT unique_seat_booking
-                    UNIQUE (schedule_id, seat_number, travel_date);
-                END IF;
-            END$$;
-            """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS route_stations (
+            id SERIAL PRIMARY KEY, 
+            route_id INT REFERENCES routes(id), 
+            station_name VARCHAR(50), 
+            station_order INT,
+            lat DOUBLE PRECISION DEFAULT 27.2,
+            lng DOUBLE PRECISION DEFAULT 75.2
+        )""")
+
+        conn.commit()
+
+        # ===== DEFAULT DATA =====
+        cur.execute("SELECT COUNT(*) FROM routes")
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            routes = [
+                (1, 'बीकानेर → जयपुर', 336),
+                (2, 'बीकानेर → जोधपुर', 252),
+                (3, 'जयपुर → जोधपुर', 330)
+            ]
+
+            for r in routes:
+                cur.execute(
+                    "INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+                    r
+                )
+
+            schedules = [
+                (1, 1, 'Volvo AC Sleeper', '08:00'),
+                (2, 1, 'Semi Sleeper AC', '10:30'),
+                (3, 2, 'Volvo AC Seater', '09:00'),
+                (4, 3, 'Deluxe AC', '07:30')
+            ]
+
+            for s in schedules:
+                cur.execute("""
+                    INSERT INTO schedules
+                    (id, route_id, bus_name, departure_time, total_seats)
+                    VALUES (%s,%s,%s,%s::time,40)
+                    ON CONFLICT DO NOTHING
+                """, s)
+
+            stations = [
+                (1, 'बीकानेर', 1),
+                (1, 'जयपुर', 2),
+                (2, 'बीकानेर', 1),
+                (2, 'जोधपुर', 2),
+                (3, 'जयपुर', 1),
+                (3, 'जोधपुर', 2)
+            ]
+
+            for st in stations:
+                cur.execute("""
+                    INSERT INTO route_stations
+                    (route_id,station_name,station_order)
+                    VALUES (%s,%s,%s)
+                    ON CONFLICT DO NOTHING
+                """, st)
+
             conn.commit()
 
-            # Insert default data
-            cur.execute("SELECT COUNT(*) FROM routes")
-            if cur.fetchone()[0] == 0:
-                routes = [
-                    (1, 'बीकानेर → जयपुर', 336),
-                    (2, 'बीकानेर → जोधपुर', 252),
-                    (3, 'जयपुर → जोधपुर', 330)
-                ]
-                for rid, name, dist in routes:
-                    cur.execute("INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                                (rid, name, dist))
+        cur.close()
+        pool.putconn(conn)
 
-                schedules = [
-                    (1, 1, 'Volvo AC Sleeper', '08:00'),
-                    (2, 1, 'Semi Sleeper AC', '10:30'),
-                    (3, 2, 'Volvo AC Seater', '09:00'),
-                    (4, 3, 'Deluxe AC', '07:30')
-                ]
-                for sid, rid, bus, dep in schedules:
-                    cur.execute("""
-                        INSERT INTO schedules 
-                        (id, route_id, bus_name, departure_time, total_seats)
-                        VALUES (%s,%s,%s,%s::time,40)
-                        ON CONFLICT DO NOTHING
-                    """, (sid, rid, bus, dep))
+        print("✅ DB Init Complete!")
 
-                stations = [
-                    (1, 'बीकानेर', 1), (1, 'जयपुर', 2),
-                    (2, 'बीकानेर', 1), (2, 'जोधपुर', 2),
-                    (3, 'जयपुर', 1), (3, 'जोधपुर', 2)
-                ]
-                for rid, station, order in stations:
-                    cur.execute(
-                        "INSERT INTO route_stations (route_id,station_name,station_order) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                        (rid, station, order))
-                conn.commit()
-            print("✅ DB Init Complete!")
-        except Exception as e:
-            print(f"❌ DB init failed: {e}")
+    except Exception as e:
+        import traceback
+        print("❌ DB INIT REAL ERROR ↓")
+        traceback.print_exc()
+
+        try:
             conn.rollback()
+            pool.putconn(conn, close=True)
+        except:
+            pass
 
-
+print("✅ Connection pool ready")
 init_db()
 
 
