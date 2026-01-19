@@ -170,8 +170,12 @@ def init_db():
                     (4, 3, 'Deluxe AC', '07:30')
                 ]
                 for sid, rid, bus, dep in schedules:
-                    cur.execute("INSERT INTO schedules VALUES (%s,%s,%s,%s::time,40) ON CONFLICT DO NOTHING",
-                                (sid, rid, bus, dep))
+                    cur.execute("""
+                        INSERT INTO schedules 
+                        (id, route_id, bus_name, departure_time, total_seats)
+                        VALUES (%s,%s,%s,%s::time,40)
+                        ON CONFLICT DO NOTHING
+                    """, (sid, rid, bus, dep))
 
                 stations = [
                     (1, 'बीकानेर', 1), (1, 'जयपुर', 2),
