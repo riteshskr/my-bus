@@ -41,15 +41,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL environment variable is missing!")
 
-pool = ConnectionPool(
-    conninfo=DATABASE_URL,
-    min_size=1,
-    max_size=10,
-    timeout=30,
-    max_idle=300,
-    max_lifetime=1800
-)
-
+pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
 
 
@@ -59,58 +51,17 @@ def shutdown_pool():
 
 
 # ================= DB CONTEXT =================
-# ================= DB CONTEXT =================
-
 def get_db():
-    try:
-        # अगर पहले से connection नहीं है
-        if 'db_conn' not in g:
-            g.db_conn = pool.getconn()
-
-        # Connection alive test
-        cur = g.db_conn.cursor()
-        cur.execute("SELECT 1")
-        cur.close()
-
-        return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
-
-    except Exception as e:
-        print("🔁 DB Reconnect:", e)
-
-        # पुराना connection force close
-        try:
-            pool.putconn(g.db_conn, close=True)
-        except:
-            pass
-
-        # नया connection लो
+    if 'db_conn' not in g:
         g.db_conn = pool.getconn()
-        return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
+    return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
 
 
 @app.teardown_appcontext
 def close_db(error=None):
-
     conn = g.pop('db_conn', None)
-
     if conn:
-        try:
-            # अगर transaction open हो तो rollback
-            try:
-                conn.rollback()
-            except:
-                pass
-
-            pool.putconn(conn)
-
-        except Exception as e:
-            print("❌ Pool release error:", e)
-
-            # worst case – connection बंद कर दो
-            try:
-                pool.putconn(conn, close=True)
-            except:
-                pass
+        pool.putconn(conn)
 
 
 def safe_db(func):
@@ -252,27 +203,27 @@ def gps(data):
     sid = data.get('sid')
     lat = float(data.get('lat', 27.5))
     lng = float(data.get('lng', 75.0))
+    speed = float(data.get('speed', 0))
 
-    conn = None
+    print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
+
+    # Save to DB
     try:
-        conn = pool.getconn()
-        cur = conn.cursor()
+        with app.app_context():
+            conn, cur = get_db()
+            cur.execute("""
+                   UPDATE schedules 
+                   SET current_lat=%s, current_lng=%s
+                   WHERE id=%s
+               """, (lat, lng, sid))
+            conn.commit()
+    except:
+        pass
 
-        cur.execute("""
-            UPDATE schedules 
-            SET current_lat=%s, current_lng=%s
-            WHERE id=%s
-        """, (lat, lng, sid))
-
-        conn.commit()
-        cur.close()
-
-    except Exception as e:
-        print("GPS DB Error:", e)
-
-    finally:
-        if conn:
-            pool.putconn(conn)
+    emit("bus_location", {
+        "sid": sid, "lat": lat, "lng": lng, "speed": speed,
+        "timestamp": data.get('timestamp', '')
+    }, broadcast=True)
 
 
 # ================= HTML BASE =================
