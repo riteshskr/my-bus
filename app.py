@@ -41,7 +41,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL environment variable is missing!")
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
+pool = ConnectionPool(
+    conninfo=DATABASE_URL,
+    min_size=1,
+    max_size=10,
+    timeout=30,
+    max_idle=300,
+    max_lifetime=1800
+)
+
 print("✅ Connection pool ready")
 
 
@@ -52,16 +60,39 @@ def shutdown_pool():
 
 # ================= DB CONTEXT =================
 def get_db():
-    if 'db_conn' not in g:
+    try:
+        if 'db_conn' not in g:
+            g.db_conn = pool.getconn()
+
+        # Test connection
+        cur = g.db_conn.cursor(row_factory=dict_row)
+        cur.execute("SELECT 1")
+
+        return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
+
+    except Exception as e:
+        print("🔁 DB Reconnect:", e)
+
+        # पुराना connection हटा दो
+        try:
+            pool.putconn(g.db_conn, close=True)
+        except:
+            pass
+
+        # नया connection लो
         g.db_conn = pool.getconn()
-    return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
+
+        return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
 
 
 @app.teardown_appcontext
 def close_db(error=None):
     conn = g.pop('db_conn', None)
     if conn:
-        pool.putconn(conn)
+        try:
+            pool.putconn(conn)
+        except:
+            pass
 
 
 def safe_db(func):
