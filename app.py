@@ -1,3 +1,6 @@
+from asyncio import transports
+import eventlet
+eventlet.monkey_patch()
 import setuptools
 import os, random
 from datetime import date
@@ -33,8 +36,14 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 Compress(app)
 
 # ✅ PERFECT SocketIO Configuration
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
-                    logger=True, engineio_logger=True, ping_timeout=60)
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="threading",
+    transports=["polling", "websocket"],
+    ping_timeout=60,
+    ping_interval=25
+)
 
 # ================= DATABASE =================
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -213,6 +222,9 @@ def gps(data):
     if not sid:
         return
 
+    # 🔥 SID ko string banao (MOST IMPORTANT)
+    sid = str(sid)
+
     try:
         lat = float(data.get('lat', 27.5))
         lng = float(data.get('lng', 75.0))
@@ -221,10 +233,33 @@ def gps(data):
         print("GPS parse error:", e)
         return
 
+    print(f"📍 BUS-{sid} → {lat},{lng}")
+
+    # ===== DATABASE UPDATE =====
+    try:
+        conn, cur = get_db()
+        cur.execute("""
+            UPDATE schedules 
+            SET current_lat=%s,
+                current_lng=%s
+            WHERE id=%s
+        """, (lat, lng, sid))
+        conn.commit()
+    except Exception as e:
+        print("DB error:", e)
+
+    # ===== MOST IMPORTANT PART =====
+    socketio.emit("bus_location", {
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed
+    }, room=sid)
+
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
     # 👉 DRIVER KO ROOM ME DAALO
-    join_room(sid)
+    #join_room(sid)
 
     # Save to DB
     try:
@@ -1281,7 +1316,7 @@ def live_bus(sid):
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'Blue',   // thick red polyline
+            color: 'blue',   // thick red polyline
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
@@ -1298,8 +1333,11 @@ def live_bus(sid):
 
     // ===== SOCKET LIVE UPDATE =====
     const sid = {sid};
-    const socket = io({{transports:["websocket","polling"]}});
-
+const socket = io({
+    transports: ["polling","websocket"],
+    secure: true,
+    reconnection: true
+});
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
         socket.emit("join_bus", sid);
