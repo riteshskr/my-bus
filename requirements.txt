@@ -6,3 +6,4 @@ gunicorn==21.2.0
 razorpay==1.4.1
 setuptools
 razorpay
+eventlet
