@@ -746,221 +746,210 @@ def select(sid):
     return render_template_string(BASE_HTML, content=form)
 
 
-@app.route("/seats/<int:sid>")
-@safe_db
+@app.get("/seats/<int:sid>")
 def seats(sid):
-
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d  = request.args.get("d", date.today().isoformat())
-
     conn, cur = get_db()
 
-    # ===== STATION ORDER =====
-    cur.execute("""
-        SELECT station_name, station_order
-        FROM route_stations
-        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
-        ORDER BY station_order
-    """, (sid,))
-    stations_data = cur.fetchall()
-
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
-
-    # ===== BOOKED SEATS =====
-    cur.execute("""
-        SELECT seat_number, from_station, to_station
-        FROM seat_bookings
-        WHERE schedule_id=%s
-        AND travel_date=%s
-        AND status='confirmed'
-    """, (sid, d))
-
-    booked_rows = cur.fetchall()
-    booked_seats = set()
-
-    for row in booked_rows:
-        b_fs = station_to_order.get(row['from_station'], 0)
-        b_ts = station_to_order.get(row['to_station'], 0)
-
-        if not (ts_order <= b_fs or fs_order >= b_ts):
-            booked_seats.add(row['seat_number'])
-
-    # ===== SEAT BUTTONS =====
-    seat_buttons = ""
-    available_count = 40 - len(booked_seats)
-
-    for i in range(1, 41):
-        if i in booked_seats:
-            seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
-        else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
-
-    # ===== BUS LOCATION =====
-    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
+    cur.execute("SELECT * FROM schedules WHERE id=%s",(sid,))
     bus = cur.fetchone()
 
-    lat = float(bus['current_lat'] or 27.2)
-    lng = float(bus['current_lng'] or 75.0)
-
-    # ===== ROUTE STATIONS FOR MAP =====
     cur.execute("""
-        SELECT lat, lng, station_name
-        FROM route_stations
-        WHERE route_id=%s
-        ORDER BY station_order
-    """, (bus['route_id'],))
+        SELECT seat_no, status, name
+        FROM seats WHERE schedule_id=%s
+    """,(sid,))
 
-    stations = cur.fetchall()
+    seats = cur.fetchall()
 
-    import json
-    stations_json = json.dumps(stations, ensure_ascii=False)
+    return render_template_string("""
 
-    # ================= HTML =================
-    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<title>Seat Booking</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 
 <style>
-#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
-.btn-success{{background:#28a745 !important;}}
-.btn-danger{{background:#dc3545 !important;}}
+body{
+  font-family:system-ui;
+  background:#f0f2f5;
+}
 
-.bus-icon{{
-   width:30px !important;
-    height:30px !important;
-    background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-    background-size:contain;
-    background-repeat:no-repeat;
-    filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
-}}
+.grid{
+ display:grid;
+ grid-template-columns:repeat(4,1fr);
+ gap:8px;
+}
+
+.seat{
+ padding:10px;
+ text-align:center;
+ border-radius:8px;
+ cursor:pointer;
+}
+
+.free{ background:#28a745;color:white;}
+.booked{ background:#dc3545;color:white;}
+
+#map{
+ height:320px;
+ margin-bottom:10px;
+ border-radius:12px;
+}
+
+.bus-icon{
+ width:34px !important;
+ height:34px !important;
+ background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
+ background-size:contain;
+ background-repeat:no-repeat;
+}
 </style>
 
-<div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available: <span class="badge bg-success">{available_count}</span>
+</head>
+
+<body>
+
+<h3>🚌 Bus: {{bus.bus_name}}</h3>
+
+<div id="status"
+ style="padding:8px;font-weight:bold">
+Connecting...
 </div>
 
-<div id="seat-map"></div>
+<div id="map"></div>
 
-<div class="text-center">
-  {seat_buttons}
+<div class="grid" id="seatBox">
+{% for s in seats %}
+ <div class="seat {{s.status}}"
+      onclick="book('{{s.seat_no}}')">
+   {{s.seat_no}}
+ </div>
+{% endfor %}
 </div>
 
 <script>
-
-const sid = {sid};
-
-// ===== MAP =====
-const map = L.map('seat-map').setView([{lat}, {lng}], 9);
-
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
-
-const stations = {stations_json};
-
-let routePoints = [];
-
-stations.forEach(st => {{
-    let la = parseFloat(st.lat);
-    let ln = parseFloat(st.lng);
-
-    if(!isNaN(la) && !isNaN(ln)){{
-        routePoints.push([la,ln]);
-
-        L.marker([la,ln])
-         .addTo(map)
-         .bindPopup(st.station_name);
-    }}
-}});
-
-if(routePoints.length >= 2){{
-    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
-    map.fitBounds(poly.getBounds());
-}}
-
-// ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
-let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
-
-// ===== SOCKET =====
+const sid = {{sid}};
 const socket = io();
 
-socket.on("bus_location", d => {{
-   if(d.sid == sid){{
-       busMarker.setLatLng([d.lat, d.lng]);
-   }}
-}});
+// ===== MAP INIT =====
+let map = L.map('map').setView([
+   {{bus.current_lat or 26.9}},
+   {{bus.current_lng or 75.8}}
+], 12);
 
-socket.on("seat_update", d => {{
-   if(d.sid == sid){{
-       markSeatBooked(d.seat);
-   }}
-}});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png')
+.addTo(map);
 
-// ===== HELPER =====
-function markSeatBooked(seat){{
-    const btns = document.querySelectorAll(".seat");
-    const btn = btns[seat-1];
+// bus marker
+let busMarker = L.marker([
+   {{bus.current_lat or 26.9}},
+   {{bus.current_lng or 75.8}}
+]).addTo(map);
 
-    if(btn){{
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X";
-        btn.disabled = true;
-    }}
-}}
 
-// ===== BOOK SEAT =====
-async function bookSeat(seat, btn){{
+// ===== SMOOTH MOVE =====
+function smoothMove(newLat, newLng){
 
-    let name = prompt("Passenger Name");
-    if(!name) return;
+ let start = busMarker.getLatLng();
+ let end = L.latLng(newLat, newLng);
 
-    let mobile = prompt("Mobile Number");
-    if(!mobile) return;
+ let steps = 15;
+ let i = 0;
 
-    let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: "cash",
+ let t = setInterval(()=>{
 
-        booked_by_type: "user",
-        booked_by_id: 1
-    }};
+   i++;
 
-    let res = await fetch("/book", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify(payload)
-    }});
+   let lat = start.lat + (end.lat - start.lat) * (i/steps);
+   let lng = start.lng + (end.lng - start.lng) * (i/steps);
 
-    let data = await res.json();
+   busMarker.setLatLng([lat,lng]);
 
-    if(data.ok){{
-        markSeatBooked(seat);
-        alert("Seat Booked Successfully ✅");
-    }} 
-    else {{
-        alert(data.error);
-    }}
-}}
+   if(i>=steps) clearInterval(t);
+
+ },200);
+
+}
+
+
+// ===== SOCKET GPS =====
+socket.on("bus_location", d => {
+
+ if(d.sid == sid){
+
+   smoothMove(d.lat, d.lng);
+
+   document.getElementById("status").innerHTML =
+     "🟢 Live Tracking ON";
+
+ }
+
+});
+
+
+// ===== SEAT BOOK =====
+function book(n){
+
+ let name = prompt("Your name?");
+ if(!name) return;
+
+ fetch("/book",{
+   method:"POST",
+   headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({
+     sid:sid,
+     seat:n,
+     name:name
+   })
+ })
+ .then(r=>r.json())
+ .then(d=>{
+    if(d.ok){
+       alert("Booked!");
+       loadSeats();
+    }else{
+       alert(d.error);
+    }
+ });
+
+}
+
+
+// ===== LOAD SEATS =====
+function loadSeats(){
+
+ fetch("/seats-data/"+sid)
+ .then(r=>r.json())
+ .then(d=>{
+
+   let box = document.getElementById("seatBox");
+   box.innerHTML="";
+
+   d.forEach(s=>{
+
+     box.innerHTML += `
+      <div class="seat ${s.status}"
+           onclick="book('${s.seat_no}')">
+        ${s.seat_no}
+      </div>
+     `;
+
+   });
+
+ });
+
+}
 
 </script>
-"""
 
-    return render_template_string(BASE_HTML, content=html)
+</body>
+</html>
+
+""", sid=sid, bus=bus, seats=seats)
 
 
 
