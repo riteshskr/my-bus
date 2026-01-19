@@ -193,37 +193,86 @@ init_db()
 
 
 # ================= SOCKET EVENTS =================
+from flask_socketio import emit, join_room
+
 @socketio.on("connect")
 def handle_connect():
     print(f"✅ Client connected: {request.sid}")
 
 
+@socketio.on("join_bus")
+def join_bus(sid):
+    join_room(sid)
+    print("👥 User joined bus room:", sid)
+
+
 @socketio.on("driver_gps")
 def gps(data):
+
     sid = data.get('sid')
-    lat = float(data.get('lat', 27.5))
-    lng = float(data.get('lng', 75.0))
-    speed = float(data.get('speed', 0))
+    if not sid:
+        return
+
+    # 🔥 SID ko string banao (MOST IMPORTANT)
+    sid = str(sid)
+
+    try:
+        lat = float(data.get('lat', 27.5))
+        lng = float(data.get('lng', 75.0))
+        speed = float(data.get('speed', 0))
+    except Exception as e:
+        print("GPS parse error:", e)
+        return
+
+    print(f"📍 BUS-{sid} → {lat},{lng}")
+
+    # ===== DATABASE UPDATE =====
+    try:
+        conn, cur = get_db()
+        cur.execute("""
+            UPDATE schedules 
+            SET current_lat=%s,
+                current_lng=%s
+            WHERE id=%s
+        """, (lat, lng, sid))
+        conn.commit()
+    except Exception as e:
+        print("DB error:", e)
+
+    # ===== MOST IMPORTANT PART =====
+    socketio.emit("bus_location", {
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed
+    }, room=sid)
 
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
+
+    # 👉 DRIVER KO ROOM ME DAALO
+    #join_room(sid)
 
     # Save to DB
     try:
         with app.app_context():
             conn, cur = get_db()
             cur.execute("""
-                   UPDATE schedules 
-                   SET current_lat=%s, current_lng=%s
-                   WHERE id=%s
-               """, (lat, lng, sid))
+                UPDATE schedules 
+                SET current_lat=%s, current_lng=%s
+                WHERE id=%s
+            """, (lat, lng, sid))
             conn.commit()
-    except:
-        pass
+    except Exception as e:
+        print("DB error:", e)
 
+    # 👉 SIRF ISI BUS KO EMIT
     emit("bus_location", {
-        "sid": sid, "lat": lat, "lng": lng, "speed": speed,
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed,
         "timestamp": data.get('timestamp', '')
-    }, broadcast=True)
+    }, room=sid)
 
 
 # ================= HTML BASE =================
@@ -470,6 +519,7 @@ BASE_HTML = """<!DOCTYPE html>
 
             socket.on('connect', () => {
                 console.log('✅ Socket Connected:', socket.id);
+               
             });
 
             socket.on('connect_error', (err) => {
@@ -867,7 +917,7 @@ let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
 
 // ===== SOCKET =====
 const socket = io();
-
+socket.emit("join_bus", sid);
 socket.on("bus_location", d => {{
    if(d.sid == sid){{
        busMarker.setLatLng([d.lat, d.lng]);
@@ -1278,6 +1328,7 @@ def live_bus(sid):
 
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
+        socket.emit("join_bus", sid);
     }});
 
     socket.on('bus_location', data => {{
