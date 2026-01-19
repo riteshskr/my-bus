@@ -423,14 +423,7 @@ BASE_HTML = """<!DOCTYPE html>
         <div class="main-container">
             <!-- Header -->
             <div class="text-center mb-5">
-                <h1 class="display-4 fw-bold mb-3">
-                    <i class="fas fa-bus-alt me-3"></i>
-                    Bus Booking India
-                </h1>
-                <p class="lead mb-0">
-                    <i class="fas fa-map-marker-alt me-2 text-success"></i>
-                    Live GPS Tracking + Real-time Seat Booking
-                </p>
+                
             </div>
 
             <!-- Main Content -->
@@ -517,7 +510,7 @@ def home():
 
     # Hero Section
     hero_section = '''
-    <div class="text-center p-5 bg-gradient-primary text-white rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
+    <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
         <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
         <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
         <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
