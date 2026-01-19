@@ -1,7 +1,7 @@
 from asyncio import transports
 import eventlet
 eventlet.monkey_patch()
-import setuptools
+#import setuptools
 import os, random
 from datetime import date
 from functools import wraps
