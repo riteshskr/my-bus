@@ -7,3 +7,5 @@ razorpay==1.4.1
 setuptools
 razorpay
 eventlet
+gevent
+gevent-websocket
