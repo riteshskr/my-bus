@@ -611,8 +611,9 @@ def admin_login():
 def admin_home():
     conn, cur = get_db()
 
-    cur.execute("SELECT COUNT(*) FROM seat_bookings")
-    total = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) AS total FROM seat_bookings")
+    row = cur.fetchone()
+    total = row["total"]
 
     cur.execute("SELECT SUM(fare) FROM seat_bookings")
     earn = cur.fetchone()[0] or 0
