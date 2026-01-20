@@ -926,7 +926,7 @@ async function bookSeat(seat, btn){{
     let data = await res.json();
     if(data.ok){{
         markSeatBooked(seat);
-        alert("✅ Seat Booked! Fare: ₹"+data.fare);
+        alert("✅ Seat Booked! Fare: ₹"+data.fare ! Distance: ₹"+data.distance);
     }} else {{ alert(data.error); }}
 }}
 </script>
@@ -1022,6 +1022,7 @@ def book():
         return jsonify({
             "ok": True,
             "fare": fare,
+            "distance": data.get("distance", "--"),
             "message": "Seat booked successfully (CASH MODE)"
         })
 
