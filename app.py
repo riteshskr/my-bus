@@ -522,10 +522,64 @@ BASE_HTML = """<!DOCTYPE html>
     </script>
 </body>
 </html>"""
+# ========= /admin/add-bus =========
+@app.route("/admin/add-bus", methods=["GET","POST"])
+@admin_required
+def admin_add_bus():
+    conn, cur = get_db()
+
+    # सभी routes dropdown के लिए
+    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
+    routes = cur.fetchall()
+
+    if request.method == "POST":
+        route_id = request.form["route_id"]
+        bus_name = request.form["bus_name"]
+        time = request.form["departure_time"]
+        seats = request.form["total_seats"]
+
+        cur.execute("""
+            INSERT INTO schedules
+            (route_id, bus_name, departure_time, total_seats)
+            VALUES (%s, %s, %s::time, %s)
+        """, (route_id, bus_name, time, seats))
+
+        conn.commit()
+
+        return """
+        <h3>✅ नई बस सफलतापूर्वक जोड़ दी गई!</h3>
+        <a href='/admin'>Admin Dashboard</a>
+        """
+
+    options = "".join(
+        f"<option value='{r['id']}'>{r['route_name']}</option>"
+        for r in routes
+    )
+
+    return f"""
+    <h3>🚌 नई Bus जोड़ें</h3>
+
+    <form method="post">
+
+    Route:
+    <select name="route_id">{options}</select><br><br>
+
+    Bus Name:
+    <input name="bus_name" placeholder="जैसे: Volvo AC"><br><br>
+
+    Departure Time:
+    <input name="departure_time" placeholder="08:30"><br><br>
+
+    Total Seats:
+    <input name="total_seats" value="40"><br><br>
+
+    <button>Add Bus</button>
+
+    </form>
+    """
 #======= /admin/login ========
 
 @app.route("/admin/login", methods=["GET","POST"])
-@safe_db
 def admin_login():
     conn, cur = get_db()
 
@@ -553,7 +607,7 @@ def admin_login():
 #========= admin=======
 @app.route("/admin")
 @admin_required
-@safe_db
+
 def admin_home():
     conn, cur = get_db()
 
@@ -576,7 +630,6 @@ def admin_home():
 #========== /admin/bookings =========
 @app.route("/admin/bookings")
 @admin_required
-@safe_db
 def all_bookings():
     conn, cur = get_db()
 
@@ -592,25 +645,37 @@ def all_bookings():
 
     rows = cur.fetchall()
 
-    html = "<h3>All Bookings</h3><table border=1>"
+    html = """
+    <h3>All Bookings</h3>
+    <table border="1" cellpadding="5">
+    <tr>
+      <th>ID</th>
+      <th>Name</th>
+      <th>Seat</th>
+      <th>Date</th>
+      <th>Fare</th>
+      <th>Type</th>
+    </tr>
+    """
 
     for r in rows:
         html += f"""
         <tr>
-          <td>{r['id']}</td>
-          <td>{r['passenger_name']}</td>
-          <td>{r['seat_number']}</td>
-          <td>{r['travel_date']}</td>
-          <td>{r['fare']}</td>
-          <td>{r['booked_by_type']}</td>
+          <td>{r.get('id','')}</td>
+          <td>{r.get('passenger_name','')}</td>
+          <td>{r.get('seat_number','')}</td>
+          <td>{r.get('travel_date','')}</td>
+          <td>{r.get('fare','')}</td>
+          <td>{r.get('booked_by_type','')}</td>
         </tr>
         """
+
+    html += "</table><br><a href='/admin'>Back</a>"
 
     return html
 #========/admin/book======
 @app.route("/admin/book", methods=["GET","POST"])
 @admin_required
-@safe_db
 def admin_book():
     if request.method=="POST":
 
