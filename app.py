@@ -741,7 +741,6 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
     d  = request.args.get("d", date.today().isoformat())
@@ -750,15 +749,16 @@ def seats(sid):
 
     # ===== STATION ORDER =====
     cur.execute("""
-        SELECT station_name, station_order
+        SELECT station_name, station_order, lat, lng
         FROM route_stations
         WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
         ORDER BY station_order
     """, (sid,))
     stations_data = cur.fetchall()
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
+
     fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
+    ts_order = station_to_order.get(ts, max(station_to_order.values()))
 
     # ===== BOOKED SEATS =====
     cur.execute("""
@@ -771,19 +771,20 @@ def seats(sid):
     booked_rows = cur.fetchall()
     booked_seats = set()
     for row in booked_rows:
-        b_fs = station_to_order.get(row['from_station'], 0)
-        b_ts = station_to_order.get(row['to_station'], 0)
+        b_fs = station_to_order.get(row['from_station'], 1)
+        b_ts = station_to_order.get(row['to_station'], max(station_to_order.values()))
         if not (ts_order <= b_fs or fs_order >= b_ts):
             booked_seats.add(row['seat_number'])
 
     # ===== SEAT BUTTONS =====
     seat_buttons = ""
-    available_count = 40 - len(booked_seats)
-    for i in range(1, 41):
+    total_seats = 40
+    available_count = total_seats - len(booked_seats)
+    for i in range(1, total_seats+1):
         if i in booked_seats:
             seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
         else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
+            seat_buttons += f'<button class="btn btn-success seat" data-seat="{i}" onclick="bookSeat({i}, this)">{i}</button>'
 
     # ===== BUS DATA =====
     cur.execute("SELECT current_lat, current_lng, route_id, bus_name FROM schedules WHERE id=%s", (sid,))
@@ -792,18 +793,8 @@ def seats(sid):
     lng = float(bus['current_lng'] or 75.0)
     bus_name = bus['bus_name'] or "normal"
 
-    # ===== ROUTE STATIONS FOR MAP =====
-    cur.execute("""
-        SELECT lat, lng, station_name
-        FROM route_stations
-        WHERE route_id=%s
-        ORDER BY station_order
-    """, (bus['route_id'],))
-    stations = cur.fetchall()
-    import json
-    stations_json = json.dumps(stations, ensure_ascii=False)
+    stations_json = json.dumps(stations_data, ensure_ascii=False)
 
-    # ================= HTML =================
     html = f"""
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -813,14 +804,7 @@ def seats(sid):
 .seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
 .btn-success{{background:#28a745 !important;}}
 .btn-danger{{background:#dc3545 !important;}}
-.bus-icon{{
-   width:30px !important;
-    height:30px !important;
-    background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-    background-size:contain;
-    background-repeat:no-repeat;
-    filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
-}}
+.bus-icon{{width:30px;height:30px;background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');background-size:contain;background-repeat:no-repeat;filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));}}
 </style>
 
 <div class="text-center mb-3">
@@ -855,42 +839,48 @@ stations.forEach(st => {{
 }});
 
 let routeLine = null;
-function toLatLng(p){{ return L.latLng(p[0],p[1]); }}
-function calculateDistance(){{
-    if(routePoints.length<2) return;
-    let total=0;
-    for(let i=1;i<routePoints.length;i++) total+=toLatLng(routePoints[i-1]).distanceTo(toLatLng(routePoints[i]));
-    let km = (total/1000).toFixed(1);
-    document.getElementById("distanceBox").innerHTML = "🛣️ Distance: <b>"+km+" km</b>";
-    window.selectedDistance = km;
-    updateFare();
-}}
 function drawRoute(points){{
-    routePoints = points;
     if(routeLine) map.removeLayer(routeLine);
     routeLine = L.polyline(points,{{color:'blue',weight:6}}).addTo(map);
     map.fitBounds(routeLine.getBounds());
     calculateDistance();
 }}
+
+function toLatLng(p){{ return L.latLng(p[0],p[1]); }}
+function calculateDistance(){{
+    if(routePoints.length<2) return;
+    let total=0;
+    for(let i=1;i<routePoints.length;i++)
+        total+=toLatLng(routePoints[i-1]).distanceTo(toLatLng(routePoints[i]));
+    let km = (total/1000).toFixed(1);
+    document.getElementById("distanceBox").innerHTML = "🛣️ Distance: <b>"+km+" km</b>";
+    window.selectedDistance = km;
+    updateFare();
+}}
+
 if(routePoints.length>=2) drawRoute(routePoints);
 
 // ===== BUS ICON =====
 let busMarker = L.marker([{lat},{lng}],{{icon:L.divIcon({{className:'bus-icon'}})}}).addTo(map);
 
-// ===== SOCKET =====
-const socket = io();
+// ===== SOCKET.IO =====
+const socket = io("/", {{transports:['websocket','polling']}});
+socket.on("connect", ()=> console.log("✅ Socket Connected"));
+
 socket.on("bus_location", d => {{
    if(d.sid==sid){{
        busMarker.setLatLng([d.lat,d.lng]);
        map.panTo([d.lat,d.lng],{{animate:true}});
    }}
 }});
-socket.on("seat_update", d => {{ if(d.sid==sid) markSeatBooked(d.seat); }});
+
+socket.on("seat_update", d => {{
+    if(d.sid==sid) markSeatBooked(d.seat);
+}});
 
 // ===== SEAT HELPERS =====
 function markSeatBooked(seat){{
-    const btns = document.querySelectorAll(".seat");
-    const btn = btns[seat-1];
+    const btn = document.querySelector(`.seat[data-seat='${{seat}}']`);
     if(btn){{
         btn.classList.remove("btn-success");
         btn.classList.add("btn-danger");
@@ -905,10 +895,7 @@ function updateFare(){{
     let rate = 1.2;
     if(bus_name.includes("volvo")) rate=2.2;
     else if(bus_name.includes("ac")) rate=1.6;
-
-    let factor = 1.0; // default seater
-    // optionally read from seat_type if dynamic
-    let fare = Math.round(distance*rate*factor);
+    let fare = Math.round(distance*rate);
     document.getElementById("fareBox").innerHTML = "💰 Estimated Fare: ₹"+fare;
 }}
 
@@ -916,18 +903,21 @@ function updateFare(){{
 async function bookSeat(seat, btn){{
     let name = prompt("Passenger Name"); if(!name) return;
     let mobile = prompt("Mobile Number"); if(!mobile) return;
+
     let payload = {{
         sid:sid, seat:seat, name:name, mobile:mobile,
         date:"{d}", from:"{fs}", to:"{ts}",
-        distance:window.selectedDistance, seat_type:"seater",
-        payment_mode:"cash", booked_by_type:"user", booked_by_id:1
+        distance:window.selectedDistance, payment_mode:"cash"
     }};
+
     let res = await fetch("/book",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});
     let data = await res.json();
     if(data.ok){{
         markSeatBooked(seat);
-        alert("✅ Seat Booked! Fare: ₹"+data.fare);
-    }} else {{ alert(data.error); }}
+        alert(`✅ Seat Booked!\nFare: ₹${{data.fare}}\nDistance: ${{data.distance}} km`);
+    }} else {{
+        alert(data.error || "Booking failed!");
+    }}
 }}
 </script>
 """
