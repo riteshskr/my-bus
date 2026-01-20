@@ -2,7 +2,7 @@ import setuptools
 import os, random
 from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g
+from flask import Flask, request, jsonify, render_template_string, redirect, g,session
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
@@ -74,6 +74,13 @@ def safe_db(func):
 
     return wrapper
 
+def admin_required(f):
+    def wrap(*a,**k):
+        if "admin" not in session:
+            return redirect("/admin/login")
+        return f(*a,**k)
+    wrap.__name__ = f.__name__
+    return wrap
 
 # ================= DB INIT =================
 def init_db():
@@ -82,6 +89,23 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS admins (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE,
+            password VARCHAR(100),
+            role VARCHAR(20) DEFAULT 'admin'
+        )
+        """)
+        cur.execute("SELECT COUNT(*) FROM routes")
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            cur.execute("""
+            INSERT INTO admins (username, password)
+            VALUES ('admin', '1234')
+            ON CONFLICT DO NOTHING
+            """)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id SERIAL PRIMARY KEY,
@@ -496,7 +520,133 @@ BASE_HTML = """<!DOCTYPE html>
     </script>
 </body>
 </html>"""
+#======= /admin/login ========
 
+@app.route("/admin/login", methods=["GET","POST"])
+@safe_db
+def admin_login():
+    conn, cur = get_db()
+
+    if request.method == "POST":
+        u = request.form["username"]
+        p = request.form["password"]
+
+        cur.execute("SELECT * FROM admins WHERE username=%s AND password=%s",(u,p))
+        admin = cur.fetchone()
+
+        if admin:
+            session["admin"] = admin["username"]
+            return redirect("/admin")
+
+        return "❌ गलत username या password"
+
+    return """
+    <h3>Admin Login</h3>
+    <form method="post">
+        <input name="username" placeholder="username"><br>
+        <input name="password" placeholder="password"><br>
+        <button>Login</button>
+    </form>
+    """
+#========= admin=======
+@app.route("/admin")
+@admin_required
+@safe_db
+def admin_home():
+    conn, cur = get_db()
+
+    cur.execute("SELECT COUNT(*) FROM seat_bookings")
+    total = cur.fetchone()[0]
+
+    cur.execute("SELECT SUM(fare) FROM seat_bookings")
+    earn = cur.fetchone()[0] or 0
+
+    return f"""
+    <h2>Admin Panel</h2>
+
+    <h4>Total Bookings: {total}</h4>
+    <h4>Total Earning: ₹{earn}</h4>
+
+    <a href='/admin/book'>Counter Booking</a><br>
+    <a href='/admin/bookings'>All Bookings</a><br>
+    <a href='/admin/add-bus'>Add Bus</a><br>
+    """
+#========== /admin/bookings =========
+@app.route("/admin/bookings")
+@admin_required
+@safe_db
+def all_bookings():
+    conn, cur = get_db()
+
+    cur.execute("""
+    SELECT id, schedule_id, seat_number,
+           passenger_name, mobile,
+           from_station, to_station,
+           travel_date, fare, status,
+           booked_by_type
+    FROM seat_bookings
+    ORDER BY id DESC
+    """)
+
+    rows = cur.fetchall()
+
+    html = "<h3>All Bookings</h3><table border=1>"
+
+    for r in rows:
+        html += f"""
+        <tr>
+          <td>{r['id']}</td>
+          <td>{r['passenger_name']}</td>
+          <td>{r['seat_number']}</td>
+          <td>{r['travel_date']}</td>
+          <td>{r['fare']}</td>
+          <td>{r['booked_by_type']}</td>
+        </tr>
+        """
+
+    return html
+#========/admin/book======
+@app.route("/admin/book", methods=["GET","POST"])
+@admin_required
+@safe_db
+def admin_book():
+    if request.method=="POST":
+
+        data = request.form
+
+        payload = {
+            "sid": data["sid"],
+            "seat": data["seat"],
+            "name": data["name"],
+            "mobile": data["mobile"],
+            "date": data["date"],
+            "from": data["from"],
+            "to": data["to"],
+            "payment_mode": "cash",
+            "booked_by_type": "counter",
+            "booked_by_id": 1
+        }
+
+        with app.test_client() as c:
+            c.post("/book", json=payload)
+
+        return "✅ Counter se booking ho gayi"
+
+    return """
+    <h3>Counter Booking</h3>
+
+    <form method="post">
+    Bus ID: <input name="sid"><br>
+    Seat: <input name="seat"><br>
+    Name: <input name="name"><br>
+    Mobile: <input name="mobile"><br>
+    Date: <input name="date"><br>
+    From: <input name="from"><br>
+    To: <input name="to"><br>
+
+    <button>Book</button>
+    </form>
+    """
 
 # ================= ROUTES =================
 @app.route("/")
