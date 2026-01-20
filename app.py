@@ -607,28 +607,101 @@ def admin_login():
 #========= admin=======
 @app.route("/admin")
 @admin_required
-
 def admin_home():
     conn, cur = get_db()
 
+    # ===== STATS =====
     cur.execute("SELECT COUNT(*) AS total FROM seat_bookings")
-    row = cur.fetchone()
-    total = row["total"]
+    total = cur.fetchone()["total"]
 
-    cur.execute("SELECT SUM(fare) FROM seat_bookings")
-    earn = cur.fetchone()[0] or 0
+    cur.execute("SELECT COALESCE(SUM(fare),0) AS earn FROM seat_bookings")
+    earn = cur.fetchone()["earn"]
 
-    return f"""
-    <h2>Admin Panel</h2>
+    cur.execute("""
+        SELECT COUNT(*) AS today
+        FROM seat_bookings
+        WHERE travel_date = CURRENT_DATE
+    """)
+    today = cur.fetchone()["today"]
 
-    <h4>Total Bookings: {total}</h4>
-    <h4>Total Earning: ₹{earn}</h4>
+    # ===== RECENT BOOKINGS =====
+    cur.execute("""
+        SELECT passenger_name, seat_number, travel_date,
+               fare, booked_by_type
+        FROM seat_bookings
+        ORDER BY id DESC LIMIT 10
+    """)
+    recent = cur.fetchall()
 
-    <a href='/admin/book'>Counter Booking</a><br>
-    <a href='/admin/bookings'>All Bookings</a><br>
-    <a href='/admin/add-bus'>Add Bus</a><br>
+    # ===== HTML =====
+    html = f"""
+    <style>
+    .card{{
+        display:inline-block;
+        padding:15px;
+        margin:10px;
+        border-radius:8px;
+        background:#f2f2f2;
+        width:200px;
+        text-align:center;
+    }}
+    table{{border-collapse:collapse}}
+    td,th{{padding:6px}}
+    </style>
+
+    <h2>🚌 Admin Dashboard</h2>
+
+    <div class="card">
+      <h3>Total Bookings</h3>
+      <h2>{total}</h2>
+    </div>
+
+    <div class="card">
+      <h3>Total Earning</h3>
+      <h2>₹ {earn}</h2>
+    </div>
+
+    <div class="card">
+      <h3>Today Bookings</h3>
+      <h2>{today}</h2>
+    </div>
+
+    <hr>
+
+    <a href="/admin/add-bus">➕ Add Bus</a> |
+    <a href="/admin/book">🧾 Counter Booking</a> |
+    <a href="/admin/bookings">📋 All Bookings</a> |
+    <a href="/admin/logout">🚪 Logout</a>
+
+    <hr>
+
+    <h3>Recent Bookings</h3>
+
+    <table border="1">
+    <tr>
+      <th>Name</th>
+      <th>Seat</th>
+      <th>Date</th>
+      <th>Fare</th>
+      <th>Type</th>
+    </tr>
     """
-#========== /admin/bookings =========
+
+    for r in recent:
+        html += f"""
+        <tr>
+          <td>{r.get('passenger_name','')}</td>
+          <td>{r.get('seat_number','')}</td>
+          <td>{r.get('travel_date','')}</td>
+          <td>{r.get('fare','')}</td>
+          <td>{r.get('booked_by_type','')}</td>
+        </tr>
+        """
+
+    html += "</table>"
+
+    return html
+    #========== /admin/bookings =========
 @app.route("/admin/bookings")
 @admin_required
 def all_bookings():
