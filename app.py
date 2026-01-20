@@ -1119,7 +1119,7 @@ def driver(sid):
     <script>
         const socket = io({{ transports: ["websocket", "polling"] }});
         let watchId = null;
-
+            
         function startGPS() {{
             const startBtn = document.getElementById("startBtn");
             const stopBtn = document.getElementById("stopBtn");
