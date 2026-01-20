@@ -97,7 +97,7 @@ def init_db():
             role VARCHAR(20) DEFAULT 'admin'
         )
         """)
-        cur.execute("SELECT COUNT(*) FROM routes")
+        cur.execute("SELECT COUNT(*) FROM admins ")
         count = cur.fetchone()[0]
 
         if count == 0:
