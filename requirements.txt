@@ -9,3 +9,4 @@ razorpay
 eventlet
 gevent
 gevent-websocket
+python-dotenv
