@@ -908,7 +908,9 @@ async function bookSeat(seat, btn){{
     let payload = {{
         sid:sid, seat:seat, name:name, mobile:mobile,
         date:"{d}", from:"{fs}", to:"{ts}",
-        distance:window.selectedDistance, payment_mode:"cash"
+        distance:window.selectedDistance, payment_mode:"cash,seat_type: "seater",           // optional, but safe to include
+        booked_by_type: "user",        // ← added
+        booked_by_id: 1"
     }};
 
     let res = await fetch("/book",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});
