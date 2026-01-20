@@ -786,11 +786,11 @@ def seats(sid):
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
 
     # ===== BUS DATA =====
-    cur.execute("SELECT current_lat, current_lng, route_id, bus_type FROM schedules WHERE id=%s", (sid,))
+    cur.execute("SELECT current_lat, current_lng, route_id, bus_name FROM schedules WHERE id=%s", (sid,))
     bus = cur.fetchone()
     lat = float(bus['current_lat'] or 27.2)
     lng = float(bus['current_lng'] or 75.0)
-    bus_type = bus['bus_type'] or "normal"
+    bus_name = bus['bus_name'] or "normal"
 
     # ===== ROUTE STATIONS FOR MAP =====
     cur.execute("""
@@ -836,7 +836,7 @@ Available: <span class="badge bg-success">{available_count}</span>
 
 <script>
 const sid = {sid};
-const bus_type = "{bus_type}".toLowerCase();
+const bus_name = "{bus_name}".toLowerCase();
 
 // ===== MAP =====
 const map = L.map('seat-map').setView([{lat},{lng}], 9);
@@ -903,8 +903,8 @@ function markSeatBooked(seat){{
 function updateFare(){{
     const distance = parseFloat(window.selectedDistance||0);
     let rate = 1.2;
-    if(bus_type.includes("volvo")) rate=2.2;
-    else if(bus_type.includes("ac")) rate=1.6;
+    if(bus_name.includes("volvo")) rate=2.2;
+    else if(bus_name.includes("ac")) rate=1.6;
 
     let factor = 1.0; // default seater
     // optionally read from seat_type if dynamic
