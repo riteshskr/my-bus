@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 import setuptools
 import os, random
 from datetime import date
