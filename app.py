@@ -756,9 +756,7 @@ def seats(sid):
         ORDER BY station_order
     """, (sid,))
     stations_data = cur.fetchall()
-
     station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
@@ -770,33 +768,29 @@ def seats(sid):
         AND travel_date=%s
         AND status='confirmed'
     """, (sid, d))
-
     booked_rows = cur.fetchall()
     booked_seats = set()
-
     for row in booked_rows:
         b_fs = station_to_order.get(row['from_station'], 0)
         b_ts = station_to_order.get(row['to_station'], 0)
-
         if not (ts_order <= b_fs or fs_order >= b_ts):
             booked_seats.add(row['seat_number'])
 
     # ===== SEAT BUTTONS =====
     seat_buttons = ""
     available_count = 40 - len(booked_seats)
-
     for i in range(1, 41):
         if i in booked_seats:
             seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
 
-    # ===== BUS LOCATION =====
-    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
+    # ===== BUS DATA =====
+    cur.execute("SELECT current_lat, current_lng, route_id, bus_type FROM schedules WHERE id=%s", (sid,))
     bus = cur.fetchone()
-
     lat = float(bus['current_lat'] or 27.2)
     lng = float(bus['current_lng'] or 75.0)
+    bus_type = bus['bus_type'] or "normal"
 
     # ===== ROUTE STATIONS FOR MAP =====
     cur.execute("""
@@ -805,25 +799,20 @@ def seats(sid):
         WHERE route_id=%s
         ORDER BY station_order
     """, (bus['route_id'],))
-
     stations = cur.fetchall()
-
     import json
     stations_json = json.dumps(stations, ensure_ascii=False)
 
     # ================= HTML =================
     html = f"""
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
 <style>
 #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
 .seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
 .btn-success{{background:#28a745 !important;}}
 .btn-danger{{background:#dc3545 !important;}}
-
 .bus-icon{{
    width:30px !important;
     height:30px !important;
@@ -835,124 +824,115 @@ def seats(sid):
 </style>
 
 <div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available: <span class="badge bg-success">{available_count}</span>
+<div id="distanceBox" class="alert alert-info mt-2">🛣️ Distance: -- km</div>
+<h3>🚌 {fs} → {ts}</h3>
+<h5>📅 {d}</h5>
+Available: <span class="badge bg-success">{available_count}</span>
+<div id="fareBox" class="mt-2"></div>
 </div>
 
 <div id="seat-map"></div>
-
-<div class="text-center">
-  {seat_buttons}
-</div>
+<div class="text-center">{seat_buttons}</div>
 
 <script>
-
 const sid = {sid};
+const bus_type = "{bus_type}".toLowerCase();
 
 // ===== MAP =====
-const map = L.map('seat-map').setView([{lat}, {lng}], 9);
-
+const map = L.map('seat-map').setView([{lat},{lng}], 9);
 L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
 
+// ===== ROUTE =====
 const stations = {stations_json};
-
 let routePoints = [];
-
 stations.forEach(st => {{
     let la = parseFloat(st.lat);
     let ln = parseFloat(st.lng);
-
     if(!isNaN(la) && !isNaN(ln)){{
         routePoints.push([la,ln]);
-
-        L.marker([la,ln])
-         .addTo(map)
-         .bindPopup(st.station_name);
+        L.marker([la,ln]).addTo(map).bindPopup(st.station_name);
     }}
 }});
 
-if(routePoints.length >= 2){{
-    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
-    map.fitBounds(poly.getBounds());
+let routeLine = null;
+function toLatLng(p){{ return L.latLng(p[0],p[1]); }}
+function calculateDistance(){{
+    if(routePoints.length<2) return;
+    let total=0;
+    for(let i=1;i<routePoints.length;i++) total+=toLatLng(routePoints[i-1]).distanceTo(toLatLng(routePoints[i]));
+    let km = (total/1000).toFixed(1);
+    document.getElementById("distanceBox").innerHTML = "🛣️ Distance: <b>"+km+" km</b>";
+    window.selectedDistance = km;
+    updateFare();
 }}
+function drawRoute(points){{
+    routePoints = points;
+    if(routeLine) map.removeLayer(routeLine);
+    routeLine = L.polyline(points,{{color:'blue',weight:6}}).addTo(map);
+    map.fitBounds(routeLine.getBounds());
+    calculateDistance();
+}}
+if(routePoints.length>=2) drawRoute(routePoints);
 
 // ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
-let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
+let busMarker = L.marker([{lat},{lng}],{{icon:L.divIcon({{className:'bus-icon'}})}}).addTo(map);
 
 // ===== SOCKET =====
 const socket = io();
-
 socket.on("bus_location", d => {{
-   if(d.sid == sid){{
-       busMarker.setLatLng([d.lat, d.lng]);
+   if(d.sid==sid){{
+       busMarker.setLatLng([d.lat,d.lng]);
+       map.panTo([d.lat,d.lng],{{animate:true}});
    }}
 }});
+socket.on("seat_update", d => {{ if(d.sid==sid) markSeatBooked(d.seat); }});
 
-socket.on("seat_update", d => {{
-   if(d.sid == sid){{
-       markSeatBooked(d.seat);
-   }}
-}});
-
-// ===== HELPER =====
+// ===== SEAT HELPERS =====
 function markSeatBooked(seat){{
     const btns = document.querySelectorAll(".seat");
     const btn = btns[seat-1];
-
     if(btn){{
         btn.classList.remove("btn-success");
         btn.classList.add("btn-danger");
-        btn.innerText = "X";
-        btn.disabled = true;
+        btn.innerText="X";
+        btn.disabled=true;
     }}
+}}
+
+// ===== FARE CALCULATION =====
+function updateFare(){{
+    const distance = parseFloat(window.selectedDistance||0);
+    let rate = 1.2;
+    if(bus_type.includes("volvo")) rate=2.2;
+    else if(bus_type.includes("ac")) rate=1.6;
+
+    let factor = 1.0; // default seater
+    // optionally read from seat_type if dynamic
+    let fare = Math.round(distance*rate*factor);
+    document.getElementById("fareBox").innerHTML = "💰 Estimated Fare: ₹"+fare;
 }}
 
 // ===== BOOK SEAT =====
 async function bookSeat(seat, btn){{
-
-    let name = prompt("Passenger Name");
-    if(!name) return;
-
-    let mobile = prompt("Mobile Number");
-    if(!mobile) return;
-
+    let name = prompt("Passenger Name"); if(!name) return;
+    let mobile = prompt("Mobile Number"); if(!mobile) return;
     let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: "cash",
-
-        booked_by_type: "user",
-        booked_by_id: 1
+        sid:sid, seat:seat, name:name, mobile:mobile,
+        date:"{d}", from:"{fs}", to:"{ts}",
+        distance:window.selectedDistance, seat_type:"seater",
+        payment_mode:"cash", booked_by_type:"user", booked_by_id:1
     }};
-
-    let res = await fetch("/book", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify(payload)
-    }});
-
+    let res = await fetch("/book",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(payload)}});
     let data = await res.json();
-
     if(data.ok){{
         markSeatBooked(seat);
-        alert("Seat Booked Successfully ✅");
-    }} 
-    else {{
-        alert(data.error);
-    }}
+        alert("✅ Seat Booked! Fare: ₹"+data.fare);
+    }} else {{ alert(data.error); }}
 }}
-
 </script>
 """
-
     return render_template_string(BASE_HTML, content=html)
+
 
 
 
