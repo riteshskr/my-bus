@@ -883,7 +883,7 @@ def home():
                 <div class="card-body text-center p-3">
                     <h6 class="fw-bold">{bus['bus_name']}</h6>
                     <small class="text-muted">{bus['route_name']}</small><br>
-                    <span class="badge {"bg-success" if bus.get("lat") else "bg-secondary"}">{status}</span>
+                    <span class="badge {'bg-success' if bus.get('lat') else 'bg-secondary'}">{status}</span>
                     <div class="mt-2"><small>📍 {coords}</small></div>
                 </div>
             </div>
