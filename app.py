@@ -4,7 +4,7 @@ import setuptools
 import os, random
 from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g,session
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session, render_template
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
@@ -91,6 +91,16 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
+        cur.execute("""
+                CREATE TABLE IF NOT EXISTS camera_logs (
+                id SERIAL PRIMARY KEY,
+    bus_id INT,
+    station TEXT,
+    boarded INT,
+    dropped INT,
+    time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);""")
+                
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
@@ -1375,7 +1385,72 @@ def book():
         conn.rollback()
         return jsonify({"ok": False, "error": str(e)})
 
+# ================= CAMERA DATA STORE =================
+camera_data = {}
 
+@app.route("/camera_count", methods=["POST"])
+def camera_count():
+    data = request.json
+    conn, cur = get_db()
+
+    cur.execute("""
+        INSERT INTO camera_logs(bus_id, station, boarded, dropped)
+        VALUES(%s,%s,%s,%s)
+    """, (
+        data["bus_id"],
+        data["station"],
+        data["boarded"],
+        data["dropped"]
+    ))
+    conn.commit()
+
+    # 🔥 REAL TIME PUSH TO ADMIN
+    socketio.emit("live_update", data)
+
+    return {"ok": True}
+
+#=====admin/live =======
+
+@app.route("/admin/live")
+@admin_required
+def live_dashboard():
+    conn, cur = get_db()
+    cur.execute("""
+        SELECT station,
+               SUM(boarded) as boarded,
+               SUM(dropped) as dropped
+        FROM camera_logs
+        GROUP BY station
+    """)
+    rows = cur.fetchall()
+    return render_template("live.html", data=rows)
+
+#========== fraud_check =========
+@app.route("/fraud_check/<int:bus_id>")
+def fraud_check(bus_id):
+    conn, cur = get_db()
+
+    cur.execute("""
+        SELECT COUNT(*) 
+        FROM seat_bookings
+        WHERE schedule_id=%s AND status='confirmed'
+    """, (bus_id,))
+    ticket_count = cur.fetchone()["count"]
+
+    cam = camera_data.get(bus_id, {"boarded": 0})
+    camera_count_people = cam["boarded"]
+
+    fraud = camera_count_people - ticket_count
+
+    if fraud > 0:
+        send_alert(bus_id, fraud)
+
+    return jsonify({
+        "ticket": ticket_count,
+        "camera": camera_count_people,
+        "fraud": max(fraud,0)
+    })
+#======= driver ==================
 @app.route("/driver/<int:sid>")
 def driver(sid):
     return f"""
