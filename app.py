@@ -583,42 +583,58 @@ def admin_add_bus():
 def admin_login():
     conn, cur = get_db()
 
+    error = ""
+
     if request.method == "POST":
-        import tkinter as tk
-          
-        root = tk.Tk()
-        root.geometry("300x100")
-        root.title("sc1")
-        root.update_idletasks()
-        width = root.winfo_width()
-        height = root.winfo_height()
-        screen_width = root.winfo_screenwidth()
-        screen_height = root.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        root.geometry(f"{width}x{height}+{x}+{y}")
-        name_var = tk.StringVar()
-        passw_var = tk.StringVar()
         u = request.form["username"]
         p = request.form["password"]
 
-        cur.execute("SELECT * FROM admins WHERE username=%s AND password=%s",(u,p))
+        cur.execute(
+            "SELECT * FROM admins WHERE username=%s AND password=%s",
+            (u, p)
+        )
         admin = cur.fetchone()
 
         if admin:
             session["admin"] = admin["username"]
             return redirect("/admin")
+        else:
+            error = "❌ गलत Username या Password"
 
-        return "❌ गलत username या password"
+    html = f"""
+    <div class="row justify-content-center">
+        <div class="col-md-5">
+            <div class="card shadow-lg border-0 rounded-4 p-4">
+                <div class="text-center mb-4">
+                    <h2 class="fw-bold">🔐 Admin Login</h2>
+                    <p class="text-muted">Bus Booking Control Panel</p>
+                </div>
 
-    return """
-    <h3>Admin Login</h3>
-    <form method="post">
-        <input name="username" placeholder="username"><br>
-        <input name="password" placeholder="password"><br>
-        <button>Login</button>
-    </form>
+                {'<div class="alert alert-danger text-center">'+error+'</div>' if error else ''}
+
+                <form method="post">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input name="username" class="form-control form-control-lg" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input name="password" type="password" class="form-control form-control-lg" required>
+                    </div>
+
+                    <div class="d-grid">
+                        <button class="btn btn-primary btn-lg">
+                            🚀 Login
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
     """
+
+    return render_template_string(BASE_HTML, content=html)
 #========= admin=======
 @app.route("/admin")
 @admin_required
@@ -639,83 +655,90 @@ def admin_home():
     """)
     today = cur.fetchone()["today"]
 
-    # ===== RECENT BOOKINGS =====
     cur.execute("""
         SELECT passenger_name, seat_number, travel_date,
                fare, booked_by_type
         FROM seat_bookings
-        ORDER BY id DESC LIMIT 10
+        ORDER BY id DESC LIMIT 8
     """)
     recent = cur.fetchall()
 
-    # ===== HTML =====
-    html = f"""
-    <style>
-    .card{{
-        display:inline-block;
-        padding:15px;
-        margin:10px;
-        border-radius:8px;
-        background:#f2f2f2;
-        width:200px;
-        text-align:center;
-    }}
-    table{{border-collapse:collapse}}
-    td,th{{padding:6px}}
-    </style>
+    cards = f"""
+    <div class="row g-4 mb-5">
+        <div class="col-md-4">
+            <div class="card shadow text-center border-0 rounded-4 p-4">
+                <h6>Total Bookings</h6>
+                <h2 class="fw-bold text-primary">{total}</h2>
+            </div>
+        </div>
 
-    <h2>🚌 Admin Dashboard</h2>
+        <div class="col-md-4">
+            <div class="card shadow text-center border-0 rounded-4 p-4">
+                <h6>Total Earning</h6>
+                <h2 class="fw-bold text-success">₹ {earn}</h2>
+            </div>
+        </div>
 
-    <div class="card">
-      <h3>Total Bookings</h3>
-      <h2>{total}</h2>
+        <div class="col-md-4">
+            <div class="card shadow text-center border-0 rounded-4 p-4">
+                <h6>Today Bookings</h6>
+                <h2 class="fw-bold text-warning">{today}</h2>
+            </div>
+        </div>
     </div>
+    """
 
-    <div class="card">
-      <h3>Total Earning</h3>
-      <h2>₹ {earn}</h2>
+    actions = """
+    <div class="d-flex justify-content-center gap-3 mb-5 flex-wrap">
+        <a href="/admin/add-bus" class="btn btn-success btn-lg">➕ Add Bus</a>
+        <a href="/admin/book" class="btn btn-primary btn-lg">🧾 Counter Booking</a>
+        <a href="/admin/bookings" class="btn btn-info btn-lg">📋 All Bookings</a>
+        <a href="/admin/logout" class="btn btn-danger btn-lg">🚪 Logout</a>
     </div>
+    """
 
-    <div class="card">
-      <h3>Today Bookings</h3>
-      <h2>{today}</h2>
-    </div>
-
-    <hr>
-
-    <a href="/admin/add-bus">➕ Add Bus</a> |
-    <a href="/admin/book">🧾 Counter Booking</a> |
-    <a href="/admin/bookings">📋 All Bookings</a> |
-    <a href="/admin/logout">🚪 Logout</a>
-
-    <hr>
-
-    <h3>Recent Bookings</h3>
-
-    <table border="1">
-    <tr>
-      <th>Name</th>
-      <th>Seat</th>
-      <th>Date</th>
-      <th>Fare</th>
-      <th>Type</th>
-    </tr>
+    table = """
+    <h4 class="mb-3">🕒 Recent Bookings</h4>
+    <div class="table-responsive">
+    <table class="table table-striped table-hover shadow rounded-4">
+        <thead class="table-dark">
+            <tr>
+                <th>Name</th>
+                <th>Seat</th>
+                <th>Date</th>
+                <th>Fare</th>
+                <th>Type</th>
+            </tr>
+        </thead>
+        <tbody>
     """
 
     for r in recent:
-        html += f"""
+        table += f"""
         <tr>
-          <td>{r.get('passenger_name','')}</td>
-          <td>{r.get('seat_number','')}</td>
-          <td>{r.get('travel_date','')}</td>
-          <td>{r.get('fare','')}</td>
-          <td>{r.get('booked_by_type','')}</td>
+            <td>{r['passenger_name']}</td>
+            <td>{r['seat_number']}</td>
+            <td>{r['travel_date']}</td>
+            <td>₹ {r['fare']}</td>
+            <td>{r['booked_by_type']}</td>
         </tr>
         """
 
-    html += "</table>"
+    table += "</tbody></table></div>"
 
-    return html
+    content = f"""
+    <div class="text-center mb-5">
+        <h2 class="fw-bold">🚌 Admin Dashboard</h2>
+        <p class="text-muted">Bus Booking Management</p>
+    </div>
+
+    {cards}
+    {actions}
+    {table}
+    """
+
+    return render_template_string(BASE_HTML, content=content)
+
     #========== /admin/bookings =========
 @app.route("/admin/bookings")
 @admin_required
