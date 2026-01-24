@@ -1,16 +1,23 @@
 from dotenv import load_dotenv
 load_dotenv()
 import setuptools
+import cv2, requests
 import os, random
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, render_template_string, redirect, g, session, render_template
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+import face_recognition
+import pickle
+import numpy as np
+import requests
+from datetime import datetime
 import atexit
 import razorpay
+from razorpay import Client
 
 razor_client = razorpay.Client(auth=(
     os.getenv("RAZORPAY_KEY_ID"),
@@ -100,7 +107,7 @@ def init_db():
     dropped INT,
     time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );""")
-                
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
@@ -241,12 +248,32 @@ def init_db():
         import traceback
         print("❌ DB INIT REAL ERROR ↓")
         traceback.print_exc()
-
+        conn = None
         try:
-            conn.rollback()
-            pool.putconn(conn, close=True)
-        except:
-            pass
+            conn = pool.getconn()
+            cur = conn.cursor()
+
+            # ... DB INIT code ...
+            conn.commit()
+            cur.close()
+            pool.putconn(conn)
+
+        except Exception as e:
+            import traceback
+            print("❌ DB INIT REAL ERROR ↓")
+            traceback.print_exc()
+
+            # Only rollback if conn was assigned
+            if 'conn' in locals() and conn:
+                try:
+                    conn.rollback()
+                except Exception as rollback_err:
+                    print("⚠️ Rollback failed:", rollback_err)
+
+                try:
+                    pool.putconn(conn)  # ❌ कोई close=True मत डालो
+                except Exception as cleanup_err:
+                    print("⚠️ Connection cleanup failed:", cleanup_err)
 
 
 print("✅ Connection pool ready")
@@ -256,7 +283,8 @@ init_db()
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
-    print(f"✅ Client connected: {request.sid}")
+    sid = getattr(request, "sid", None)
+    print(f"✅ Client connected: {sid}")
 
 
 @socketio.on("driver_gps")
@@ -532,6 +560,83 @@ BASE_HTML = """<!DOCTYPE html>
     </script>
 </body>
 </html>"""
+
+# -------- FACE ENTRY API --------
+@app.route("/face_entry", methods=["POST"])
+def face_entry():
+    conn, cur = get_db()
+    bus_id = int(request.form["bus_id"])
+    lat = float(request.form["lat"])
+    lng = float(request.form["lng"])
+    file = request.files["image"]
+
+    img = face_recognition.load_image_file(file)
+    encs = face_recognition.face_encodings(img)
+    if not encs:
+        return jsonify({"ok": False})
+
+    encoding = encs[0]
+
+    # Load faces of same bus
+    cur.execute("SELECT id, face_data FROM faces WHERE bus_id=%s", (bus_id,))
+    rows = cur.fetchall()
+
+    face_id = None
+    for r in rows:
+        db_enc = pickle.loads(r[1])
+        if face_recognition.compare_faces([db_enc], encoding)[0]:
+            face_id = r[0]
+            break
+
+    # New face
+    if not face_id:
+        cur.execute("""
+            INSERT INTO faces (bus_id, face_data, face_image)
+            VALUES (%s,%s,%s) RETURNING id
+        """, (bus_id, pickle.dumps(encoding), file.read()))
+        face_id = cur.fetchone()[0]
+
+    # 1 minute rule
+    cur.execute("""
+        SELECT entry_time FROM face_logs
+        WHERE face_id=%s AND bus_id=%s
+        ORDER BY entry_time DESC LIMIT 1
+    """, (face_id, bus_id))
+    row = cur.fetchone()
+
+    now = datetime.now()
+    if row:
+        if (now - row[0]) < timedelta(minutes=1):
+            return jsonify({"ignored": True})
+
+    cur.execute("""
+        INSERT INTO face_logs
+        (face_id, bus_id, latitude, longitude, entry_time)
+        VALUES (%s,%s,%s,%s,%s)
+    """, (face_id, bus_id, lat, lng, now))
+    conn.commit()
+
+    return jsonify({"saved": True, "face_id": face_id})
+#=====export_bus =========
+@app.route("/export_bus/<int:bus_id>")
+def export_bus(bus_id):
+    conn, cur = get_db()
+    cur.execute("SELECT * FROM faces WHERE bus_id=%s", (bus_id,))
+    faces = cur.fetchall()
+
+    cur.execute("SELECT * FROM face_logs WHERE bus_id=%s", (bus_id,))
+    logs = cur.fetchall()
+
+    return jsonify({"faces": faces, "logs": logs})
+
+
+@app.route("/delete_bus/<int:bus_id>", methods=["DELETE"])
+def delete_bus(bus_id):
+    conn, cur = get_db()
+    cur.execute("DELETE FROM face_logs WHERE bus_id=%s", (bus_id,))
+    cur.execute("DELETE FROM faces WHERE bus_id=%s", (bus_id,))
+    conn.commit()
+    return jsonify({"deleted": True})
 # ========= /admin/add-bus =========
 @app.route("/admin/add-bus", methods=["GET","POST"])
 @admin_required
@@ -979,7 +1084,7 @@ def buses(rid):
 
                             <!-- Bus Info -->
                             <div class="mb-4">
-                                <h3 class="fw-bold mb-3 display-6">{bus['bus_name']}</h3>
+                                f'<h3 class="fw-bold mb-3 display-6">{bus["bus_name"]}</h3>'
                                 <div class="h2 text-primary mb-4">
                                     <i class="fas fa-clock me-2"></i>{dep_time}
                                 </div>
@@ -1004,10 +1109,10 @@ def buses(rid):
                                 </div>
                             </div>
 
-                            {gps_coords and f'''
+                            {gps_coords and f"""
                             <div class="alert alert-warning mt-4">
                                 📍 LIVE लोकेशन: <strong>{gps_coords}</strong>
-                            </div>''' or ""}
+                            </div>""" or ""}
 
                             <!-- Action Buttons -->
                             <div class="d-grid gap-3 d-md-flex mt-4">
@@ -1388,26 +1493,44 @@ def book():
 # ================= CAMERA DATA STORE =================
 camera_data = {}
 
+
+
 @app.route("/camera_count", methods=["POST"])
 def camera_count():
     data = request.json
+    bus_id = data.get("bus_id")
+    station = data.get("station")
+    boarded = data.get("boarded", 0)
+    dropped = data.get("dropped", 0)
+    camera_data[bus_id] = {
+        "boarded": boarded,
+        "dropped": dropped
+    }
+    # DB में save कर सकते हैं
     conn, cur = get_db()
-
     cur.execute("""
-        INSERT INTO camera_logs(bus_id, station, boarded, dropped)
-        VALUES(%s,%s,%s,%s)
-    """, (
-        data["bus_id"],
-        data["station"],
-        data["boarded"],
-        data["dropped"]
-    ))
+        INSERT INTO camera_logs(bus_id, station, boarded, dropped, time)
+        VALUES (%s, %s, %s, %s, NOW())
+    """, (bus_id, station, boarded, dropped))
     conn.commit()
 
-    # 🔥 REAL TIME PUSH TO ADMIN
-    socketio.emit("live_update", data)
+    # SocketIO event भेजो admin को
+    socketio.emit("live_update", {
+        "bus_id": bus_id,
+        "station": station,
+        "boarded": boarded,
+        "dropped": dropped
+    })
 
-    return {"ok": True}
+    # Alert condition
+    if boarded > 50:  # Example: ज्यादा passengers
+        socketio.emit("alert", {
+            "bus_id": bus_id,
+            "station": station,
+            "message": f"🚨 High passengers detected: {boarded}"
+        })
+
+    return jsonify({"ok": True})
 
 #=====admin/live =======
 
@@ -1425,31 +1548,6 @@ def live_dashboard():
     rows = cur.fetchall()
     return render_template("live.html", data=rows)
 
-#========== fraud_check =========
-@app.route("/fraud_check/<int:bus_id>")
-def fraud_check(bus_id):
-    conn, cur = get_db()
-
-    cur.execute("""
-        SELECT COUNT(*) 
-        FROM seat_bookings
-        WHERE schedule_id=%s AND status='confirmed'
-    """, (bus_id,))
-    ticket_count = cur.fetchone()["count"]
-
-    cam = camera_data.get(bus_id, {"boarded": 0})
-    camera_count_people = cam["boarded"]
-
-    fraud = camera_count_people - ticket_count
-
-    if fraud > 0:
-        send_alert(bus_id, fraud)
-
-    return jsonify({
-        "ticket": ticket_count,
-        "camera": camera_count_people,
-        "fraud": max(fraud,0)
-    })
 #======= driver ==================
 @app.route("/driver/<int:sid>")
 def driver(sid):
@@ -1713,24 +1811,26 @@ def live_bus(sid):
 @app.route("/create-payment", methods=["POST"])
 def create_payment():
     if not RAZORPAY_ENABLED:
-        return jsonify({
-            "ok": False,
-            "error": "Payment gateway not configured"
-        }), 400
+        return jsonify({"ok": False, "error": "Payment gateway not configured"}), 400
 
     data = request.get_json()
+    if not razor_client:
+        return jsonify({"ok": False, "error": "Razorpay client not configured"}), 500
 
-    order = razor_client.order.create({
-        "amount": int(data['fare']) * 100,
-        "currency": "INR",
-        "receipt": f"seat_{data['sid']}_{data['seat']}",
-        "payment_capture": 1
-    })
+    try:
+        order = razor_client.order.create({  # type: ignore
+            "amount": int(data['fare']) * 100,  # ₹ → paise
+            "currency": "INR",
+            "receipt": f"seat_{data['sid']}_{data['seat']}",
+            "payment_capture": 1
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     return jsonify({
         "ok": True,
         "order_id": order['id'],
-        "key": os.getenv("RAZORPAY_KEY_ID")
+        "key": os.getenv("RAZORPAY_KEY_ID")  # ✅ fixed quote and env variable
     })
 
 
@@ -1744,7 +1844,7 @@ def verify():
     # ✅ If Razorpay enabled → verify
     if RAZORPAY_ENABLED:
         try:
-            razor_client.utility.verify_payment_signature({
+            getattr(razor_client, "utility").verify_payment_signature({
                 'razorpay_order_id': data['order_id'],
                 'razorpay_payment_id': data['payment_id'],
                 'razorpay_signature': data['signature']
