@@ -285,7 +285,7 @@ BASE_HTML = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🚌 SmartBus – Live Booking System</title>
+<title>🚌 SmartBus – </title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -368,7 +368,7 @@ body{
     </div>
   </div>
   <div class="hero">
-    <h2>Online Bus Booking System</h2>
+    <h2> My Bus Booking System</h2>
     <p>Live GPS • Real-time Seats • Secure Payments</p>
   </div>
 
@@ -457,8 +457,7 @@ def home():
     # Hero Section
     hero_section = '''
     <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
-        <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
-        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
+        
         <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
     </div>
     '''
