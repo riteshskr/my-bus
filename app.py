@@ -285,7 +285,7 @@ BASE_HTML = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🚌 SmartBus India – Live Booking System</title>
+<title>🚌 SmartBus – Live Booking System</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -297,8 +297,6 @@ body{
  min-height:100vh;
  font-family: 'Segoe UI',sans-serif;
 }
-
-/* Glass Container */
 .main-container{
  background: rgba(255,255,255,0.97);
  border-radius:25px;
@@ -307,8 +305,6 @@ body{
  padding:30px;
  max-width:1200px;
 }
-
-/* Navbar */
 .topbar{
  display:flex;
  justify-content:space-between;
@@ -326,8 +322,6 @@ body{
  font-weight:600;
  color:#333;
 }
-
-/* Hero */
 .hero{
  background:linear-gradient(120deg,#ff3d00,#ff9800);
  color:white;
@@ -337,35 +331,19 @@ body{
  margin-bottom:25px;
  box-shadow:0 15px 30px rgba(0,0,0,.2);
 }
-
-/* Cards */
 .route-card,.bus-card{
  border-radius:20px;
  border:none;
  transition:.3s;
  cursor:pointer;
+ padding:15px;
+ margin-bottom:15px;
+ box-shadow:0 10px 20px rgba(0,0,0,.1);
 }
 .route-card:hover,.bus-card:hover{
  transform:translateY(-6px);
  box-shadow:0 20px 40px rgba(0,0,0,.2);
 }
-
-/* Seat */
-.seat{
- width:50px;height:50px;
- margin:5px;
- border-radius:12px;
- font-weight:bold;
-}
-
-/* Map */
-#map{
- height:350px;
- border-radius:20px;
- box-shadow:0 10px 30px rgba(0,0,0,.2);
-}
-
-/* Bottom nav */
 .nav-buttons{
  text-align:center;
  margin-top:40px;
@@ -377,12 +355,9 @@ body{
 }
 </style>
 </head>
-
 <body>
 <div class="container-fluid py-4">
  <div class="main-container">
-
-  <!-- Navbar -->
   <div class="topbar">
     <div class="logo">🚌 SmartBus</div>
     <div>
@@ -392,8 +367,6 @@ body{
       <a href="/login">Login</a>
     </div>
   </div>
-
-  <!-- Hero -->
   <div class="hero">
     <h2>Online Bus Booking System</h2>
     <p>Live GPS • Real-time Seats • Secure Payments</p>
@@ -402,19 +375,11 @@ body{
   <!-- Dynamic Page Content -->
   {{content|safe}}
 
-  <!-- Bottom Navigation -->
   <div class="nav-buttons">
-    <a href="/" class="btn btn-light btn-lg btn-custom me-3">
-      🏠 Home
-    </a>
-    <a href="/driver/1" class="btn btn-success btn-lg btn-custom me-3">
-      📱 Driver GPS
-    </a>
-    <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">
-      🗺️ Live Track
-    </a>
+    <a href="/" class="btn btn-light btn-lg btn-custom me-3">🏠 Home</a>
+    <a href="/driver/1" class="btn btn-success btn-lg btn-custom me-3">📱 Driver GPS</a>
+    <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">🗺️ Live Track</a>
   </div>
-
  </div>
 </div>
 
@@ -425,26 +390,25 @@ body{
 </html>
 """
 
-# Home Page content in Hindi (inputs and buttons)
 HOME_HTML = """
-<div class="row g-3">
+<div class="row g-3 mb-4">
   <div class="col-md-4">
     <select class="form-select" id="from">
-      <option selected disabled>कहाँ से</option>
-      <option>दिल्ली</option>
-      <option>मुंबई</option>
-      <option>बेंगलुरु</option>
-      <option>जयपुर</option>
+      <option selected disabled>From</option>
+      <option>Delhi</option>
+      <option>Mumbai</option>
+      <option>Bengaluru</option>
+      <option>Jaipur</option>
     </select>
   </div>
 
   <div class="col-md-4">
     <select class="form-select" id="to">
-      <option selected disabled>कहाँ तक</option>
-      <option>जयपुर</option>
-      <option>पुणे</option>
-      <option>चेन्नई</option>
-      <option>हैदराबाद</option>
+      <option selected disabled>To</option>
+      <option>Jaipur</option>
+      <option>Pune</option>
+      <option>Chennai</option>
+      <option>Hyderabad</option>
     </select>
   </div>
 
@@ -453,9 +417,7 @@ HOME_HTML = """
   </div>
 
   <div class="col-md-1 d-grid">
-    <button class="btn btn-danger" onclick="searchBus()">
-      खोजें
-    </button>
+    <button class="btn btn-danger" onclick="searchBus()">Search</button>
   </div>
 </div>
 
@@ -466,18 +428,15 @@ function searchBus(){
   let d = document.getElementById("date").value;
 
   if(!f || !t || !d){
-    alert("कृपया सभी फ़ील्ड भरें");
+    alert("Please fill all fields");
     return;
   }
-
-  alert("बस खोजी जा रही है: " + f + " से " + t);
+  alert("Searching buses from " + f + " to " + t + " on " + d);
 }
 
 function selectRoute(rid){
-    // Bus list page पर redirect
-    window.location.href = "/buses/" + rid;
+  window.location.href = "/buses/" + rid;
 }
-
 </script>
 """
 
