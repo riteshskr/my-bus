@@ -1,5 +1,4 @@
 from dotenv import load_dotenv
-
 load_dotenv()
 
 import os, random, json
@@ -12,26 +11,31 @@ from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 import razorpay
 import atexit
+import eventlet
 
 # ================= CONFIG =================
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
 Compress(app)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
-                    logger=True, engineio_logger=True, ping_timeout=60)
+# SocketIO with eventlet (Render optimized)
+socketio = SocketIO(
+    app, cors_allowed_origins="*", async_mode="eventlet",
+    logger=True, engineio_logger=True, ping_timeout=60
+)
+eventlet.monkey_patch()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL env var missing!")
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
+pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=5, timeout=20)
 
 # Razorpay
 RAZORPAY_ENABLED = bool(os.getenv("RAZORPAY_KEY_ID") and os.getenv("RAZORPAY_KEY_SECRET"))
 razor_client = razorpay.Client(
-    auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))) if RAZORPAY_ENABLED else None
-
+    auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))
+) if RAZORPAY_ENABLED else None
 
 # ================= DB CONTEXT =================
 def get_db():
@@ -39,13 +43,11 @@ def get_db():
         g.db_conn = pool.getconn()
     return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
 
-
 @app.teardown_appcontext
 def close_db(error=None):
     conn = g.pop('db_conn', None)
     if conn:
         pool.putconn(conn)
-
 
 def safe_db(func):
     @wraps(func)
@@ -54,9 +56,7 @@ def safe_db(func):
             return func(*a, **kw)
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)})
-
     return wrapper
-
 
 def admin_required(f):
     @wraps(f)
@@ -64,14 +64,11 @@ def admin_required(f):
         if "admin" not in session:
             return redirect("/admin/login")
         return f(*a, **k)
-
     return wrap
-
 
 @atexit.register
 def shutdown_pool():
     pool.close()
-
 
 # ================= DB INIT =================
 def init_db():
@@ -88,7 +85,10 @@ def init_db():
         )""")
         cur.execute("SELECT COUNT(*) FROM admins")
         if cur.fetchone()[0] == 0:
-            cur.execute("INSERT INTO admins (username,password) VALUES ('admin','1234') ON CONFLICT DO NOTHING")
+            cur.execute("""
+                INSERT INTO admins (username,password) 
+                VALUES ('admin','1234') ON CONFLICT DO NOTHING
+            """)
 
         # Routes, schedules, seat_bookings, route_stations
         cur.execute("""
@@ -145,9 +145,7 @@ def init_db():
         cur.close()
         pool.putconn(conn)
 
-
 init_db()
-
 
 # ================= ROUTES =================
 @app.route("/")
@@ -163,18 +161,19 @@ def home():
         ORDER BY s.id LIMIT 4
     """)
     live_buses = cur.fetchall()
-    return render_template("home.html", routes=routes, live_buses=live_buses)
+    # date variable pass to template
+    return render_template("home.html", routes=routes, live_buses=live_buses, date=date)
 
-
-# Seat selection, booking, admin login/dashboard, driver GPS, live tracking...
-# → Yeh routes aur logic similar hai jaise maine pehle diya tha
-# → Inline HTML templates `templates/` folder me store hoga (base.html, select.html, seats.html)
+# Example API returning JSON with date
+@app.route("/api/today")
+@safe_db
+def today_api():
+    return jsonify({"ok": True, "today": date.today().isoformat()})
 
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
     print(f"✅ Client connected: {request.sid}")
-
 
 @socketio.on("driver_gps")
 def handle_gps(data):
@@ -183,13 +182,21 @@ def handle_gps(data):
     lng = float(data.get('lng', 75.0))
     try:
         conn, cur = get_db()
-        cur.execute("UPDATE schedules SET current_lat=%s, current_lng=%s WHERE id=%s", (lat, lng, sid))
+        cur.execute(
+            "UPDATE schedules SET current_lat=%s, current_lng=%s WHERE id=%s",
+            (lat, lng, sid)
+        )
         conn.commit()
     except:
         pass
     emit("bus_location", {"sid": sid, "lat": lat, "lng": lng}, broadcast=True)
 
-
 # ================= RUN =================
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 5000)),
+        debug=False,
+        server_options={"async_mode": "eventlet"}
+    )
