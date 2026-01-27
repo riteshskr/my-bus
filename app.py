@@ -199,15 +199,22 @@ def search_routes():
     to_station = data["to"]
 
     query = """
-    SELECT * FROM routes
-    WHERE %s = ANY(stations)
-    AND %s = ANY(stations)
+    SELECT r.*
+    FROM routes r
+    WHERE r.id IN (
+        SELECT s1.route_id
+        FROM route_stations s1
+        JOIN route_stations s2 
+          ON s1.route_id = s2.route_id
+        WHERE s1.station_name = %s
+          AND s2.station_name = %s
+          AND s1.station_order < s2.station_order
+    )
     """
 
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, (from_station, to_station))
-            routes = cur.fetchall()
+    conn, cur = get_db()
+    cur.execute(query, (from_station, to_station))
+    routes = cur.fetchall()
 
     return jsonify(routes)
 # ================= RUN =================
