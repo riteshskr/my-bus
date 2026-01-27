@@ -473,7 +473,7 @@ def home():
             </div>
         </div>'''
     routes_section += '</div>'
-
+    print(r.id)
     # Live GPS Status (नीचे छोटा)
     cur.execute("""
         SELECT s.id, s.bus_name, r.route_name, 
