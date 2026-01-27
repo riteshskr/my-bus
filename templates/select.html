@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Select Schedule for Route</h2>
+<ul>
+{% for schedule in schedules %}
+    <li>{{ schedule.bus_name }} - Departure: {{ schedule.departure_time }}
+        <a href="/seats/{{ schedule.id }}">Select Seats</a>
+    </li>
+{% endfor %}
+</ul>
+{% endblock %}

@@ -1,0 +1,6 @@
+body { font-family: Arial, sans-serif; margin:0; padding:0; }
+nav { background:#0044cc; color:#fff; padding:10px; }
+nav a { color:#fff; margin-left:20px; text-decoration:none; }
+main { padding:20px; }
+footer { text-align:center; padding:10px; background:#f1f1f1; margin-top:20px; }
+#map { height:300px; width:100%; background:#eee; margin-top:10px; }

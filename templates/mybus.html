@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartBus AI – Future of Travel</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
+body{
+  min-height:100vh;
+  background:radial-gradient(circle at top,#1a2a6c,#000);
+  color:white;
+  overflow-x:hidden;
+}
+
+/* Floating blobs */
+.blob{
+  position:absolute;
+  width:300px;
+  height:300px;
+  background:linear-gradient(45deg,#00e0ff,#ff00cc);
+  border-radius:50%;
+  filter:blur(120px);
+  animation:float 10s infinite alternate;
+}
+.blob2{right:-100px;top:200px;animation-delay:3s;}
+@keyframes float{from{transform:translateY(0);}to{transform:translateY(-200px);}}
+
+nav{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:20px 60px;
+}
+nav h1{font-size:30px;}
+nav ul{display:flex;gap:30px;list-style:none;}
+nav ul li{cursor:pointer;font-weight:500;}
+
+.hero{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  align-items:center;
+  padding:80px;
+}
+.hero-text h2{font-size:55px;line-height:1.2;}
+.hero-text p{margin:20px 0;font-size:18px;color:#ddd;}
+.hero-text button{
+  padding:14px 30px;
+  border:none;
+  border-radius:30px;
+  background:linear-gradient(45deg,#00e0ff,#ff00cc);
+  color:white;
+  font-size:16px;
+  cursor:pointer;
+}
+
+.card{
+  background:rgba(255,255,255,0.1);
+  backdrop-filter:blur(20px);
+  padding:30px;
+  border-radius:25px;
+}
+.card input, .card button{
+  width:100%;
+  padding:12px;
+  margin:10px 0;
+  border:none;
+  border-radius:10px;
+}
+.card button{background:#00e0ff;font-weight:600;}
+
+.stats{
+  display:flex;
+  justify-content:space-around;
+  padding:40px;
+  text-align:center;
+}
+.stat h3{font-size:40px;color:#00e0ff;}
+
+.features{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:25px;
+  padding:60px;
+}
+.feature{
+  background:rgba(255,255,255,0.08);
+  padding:25px;
+  border-radius:20px;
+  text-align:center;
+  transition:.3s;
+}
+.feature:hover{transform:scale(1.05);background:rgba(255,255,255,0.15);}
+
+/* Login modal */
+.modal{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,0.6);
+  display:none;align-items:center;justify-content:center;
+}
+.modal-content{
+  background:#111;padding:30px;border-radius:20px;width:300px;
+}
+.modal-content input, .modal-content button{
+  width:100%;padding:10px;margin:10px 0;border:none;border-radius:8px;
+}
+.modal-content button{background:#00e0ff;font-weight:600;}
+
+footer{text-align:center;padding:20px;color:#ccc;}
+</style>
+</head>
+<body>
+<div class="blob"></div>
+<div class="blob blob2"></div>
+
+<nav>
+  <h1>🚌 SmartBus AI</h1>
+  <ul>
+    <li>Home</li>
+    <li>Routes</li>
+    <li onclick="openLogin()">Login</li>
+  </ul>
+</nav>
+
+<section class="hero">
+  <div class="hero-text">
+    <h2>The Future of
+    <br>Bus Travel</h2>
+    <p>Face recognition, live GPS, cashless booking.</p>
+    <button>Book Now</button>
+  </div>
+
+  <div class="card">
+    <h3>Search Bus</h3>
+    <input placeholder="From">
+    <input placeholder="To">
+    <input type="date">
+    <button>Find Buses</button>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="stat"><h3>120+</h3><p>Buses</p></div>
+  <div class="stat"><h3>50k+</h3><p>Users</p></div>
+  <div class="stat"><h3>99%</h3><p>Accuracy</p></div>
+</section>
+
+<section class="features">
+  <div class="feature">🤖<h4>Face Boarding</h4></div>
+  <div class="feature">📍<h4>Live Tracking</h4></div>
+  <div class="feature">💳<h4>Payments</h4></div>
+  <div class="feature">🪑<h4>Seat Selection</h4></div>
+</section>
+
+<footer>© 2026 SmartBus AI – Futuristic Transport System</footer>
+
+<!-- Login Modal -->
+<div class="modal" id="loginModal">
+  <div class="modal-content">
+    <h3>Login</h3>
+    <input placeholder="Email">
+    <input type="password" placeholder="Password">
+    <button>Login</button>
+  </div>
+</div>
+
+<script>
+function openLogin(){
+  document.getElementById('loginModal').style.display='flex';
+}
+window.onclick = e =>{
+  if(e.target.id==='loginModal') e.target.style.display='none';
+}
+</script>
+</body>
+</html>

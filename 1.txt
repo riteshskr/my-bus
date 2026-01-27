@@ -1,0 +1,37 @@
+Key	Value
+Key
+DATABASE_URL   Value postgresql://busdb1_yl2r_user:49Tv97dLOzE8yd0WlYyns49KnyB646py@dpg-d5g7u19r0fns739mbng0-a.oregon-postgres.render.com:5432/busdb1_yl2r
+
+Key
+DB_HOST Value dpg-d5g7u19r0fns739mbng0-a
+
+Key
+DB_NAME
+Value
+busdb1_yl2r
+
+Key
+DB_PASSWORD
+Value
+49Tv97dLOzE8yd0WlYyns49KnyB646py
+
+Key
+DB_USER
+Value
+busdb1_yl2r_user
+
+Key
+DEBUG
+Value
+False
+
+Key
+PORT
+Value
+5432
+
+Key
+SECRET_KEY
+Value
+sk-busapp-2026-supersecret123
+

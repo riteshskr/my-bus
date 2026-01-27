@@ -1,0 +1,8 @@
+SECRET_KEY=dev-secret
+postgresql://busdb1_yl2r_user:49Tv97dLOzE8yd0WlYyns49KnyB646py@dpg-d5g7u19r0fns739mbng0-a.oregon-postgres.render.com/busdb1_yl2r
+DB_HOST=localhost
+DB_NAME=busdb1
+DB_USER=postgres
+DB_PASSWORD=49Tv97dLOzE8yd0WlYyns49KnyB646py
+DB_PORT=5432
+DB_SSL=disable

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Available Routes</h2>
+<ul>
+{% for route in routes %}
+    <li>{{ route.route_name }} - {{ route.distance_km }} km
+        <a href="/select/{{ route.id }}">Book Seat</a>
+    </li>
+{% endfor %}
+</ul>
+
+<h2>Live Bus Tracking</h2>
+<div id="map">Map placeholder</div>
+<script>
+    const socket = io();
+    socket.on("bus_location", data => {
+        console.log("Bus Location:", data);
+        // Map update code can go here
+    });
+</script>
+{% endblock %}

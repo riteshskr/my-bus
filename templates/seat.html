@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Seat Selection</h2>
+<form method="POST" action="/book/{{ schedule_id }}">
+    {% for seat in range(1, total_seats+1) %}
+        <input type="checkbox" name="seats" value="{{ seat }}" id="seat{{ seat }}">
+        <label for="seat{{ seat }}">Seat {{ seat }}</label>
+        {% if seat % 10 == 0 %}<br>{% endif %}
+    {% endfor %}
+    <br>
+    <input type="text" name="name" placeholder="Passenger Name" required>
+    <input type="text" name="mobile" placeholder="Mobile" required>
+    <button type="submit">Book Seats</button>
+</form>
+{% endblock %}

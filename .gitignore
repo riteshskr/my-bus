@@ -1,5 +1,35 @@
-pycache__/
-*.pyc
-.env
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
 venv/
-.env.local
+env/
+face_env/
+.env
+
+# Flask / uploads / instance folders
+instance/
+uploads/
+
+# Logs
+*.log
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml

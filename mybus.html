@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <title>🚌 Bus Booking System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Font Awesome -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background: linear-gradient(120deg, #667eea, #764ba2);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .hero {
+            color: white;
+            padding: 60px 20px;
+            text-align: center;
+        }
+
+        .route-card, .bus-card {
+            border-radius: 20px;
+            transition: 0.3s;
+            cursor: pointer;
+        }
+
+        .route-card:hover, .bus-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+
+        .route-card {
+            background: white;
+            padding: 25px;
+            text-align: center;
+        }
+
+        .bus-card {
+            background: #f8f9fa;
+            padding: 20px;
+        }
+
+        .badge-live {
+            background: #28a745;
+        }
+    </style>
+</head>
+<body>
+
+<!-- HERO -->
+<div class="hero">
+    <h1 class="display-4 fw-bold">🚌 Smart Bus Booking System</h1>
+    <p class="lead">Live GPS Tracking • Online Seat Booking • Real-time Updates</p>
+</div>
+
+<div class="container">
+
+    <!-- ROUTES -->
+    <h3 class="text-white mb-3">📍 Available Routes</h3>
+    <div class="row g-4 mb-5">
+        {% for r in routes %}
+        <div class="col-md-4">
+            <div class="route-card" onclick="selectRoute({{r.id}})">
+                <h4>{{ r.route_name }}</h4>
+                <p>Distance: {{ r.distance_km }} KM</p>
+                <button class="btn btn-primary">View Buses</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- LIVE BUSES -->
+    <h3 class="text-white mb-3">🚍 Live Buses</h3>
+    <div class="row g-4 mb-5">
+        {% for b in live_buses %}
+        <div class="col-md-3">
+            <div class="bus-card" onclick="selectBus({{b.id}})">
+                <h5>{{ b.bus_name }}</h5>
+                <p class="mb-1">{{ b.route_name }}</p>
+                <span class="badge badge-live">LIVE</span>
+                <div class="mt-2 small">
+                    Lat: {{ b.lat }}<br>
+                    Lng: {{ b.lng }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+</div>
+
+<script>
+function selectRoute(id){
+    window.location.href = "/buses/" + id;
+}
+function selectBus(id){
+    window.location.href = "/select/" + id;
+}
+</script>
+
+</body>
+</html>

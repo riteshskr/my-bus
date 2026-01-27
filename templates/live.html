@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Live Dashboard</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+<style>
+body{font-family:Arial;background:#f4f6f9}
+.card{background:white;padding:15px;margin:10px;border-radius:12px;
+box-shadow:0 4px 10px rgba(0,0,0,.2)}
+</style>
+</head>
+<body>
+
+<h2>🚨 LIVE PASSENGER MONITORING</h2>
+<div id="data"></div>
+
+<script>
+const socket = io();
+
+socket.on("live_update", d=>{
+    let html = `
+    <div class="card">
+        <b>Bus:</b> ${d.bus_id}<br>
+        <b>Station:</b> ${d.station}<br>
+        <span style="color:green">Boarded: ${d.boarded}</span><br>
+        <span style="color:red">Dropped: ${d.dropped}</span>
+    </div>`;
+    document.getElementById("data").innerHTML = html;
+});
+</script>
+</body>
+</html>
