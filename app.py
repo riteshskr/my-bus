@@ -386,6 +386,11 @@ body{
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+function selectRoute(rid){
+    window.location.href = "/buses/" + rid;
+}
+</script>
 </body>
 </html>
 """
