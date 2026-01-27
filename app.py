@@ -278,250 +278,202 @@ def gps(data):
 
 
 # ================= HTML BASE =================
-BASE_HTML = """<!DOCTYPE html>
-<html lang="hi">
+
+BASE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚌 Bus Booking India - Live GPS + Real-time Seats</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🚌 SmartBus India – Live Booking System</title>
 
-    <!-- Bootstrap 5.3 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    <!-- Leaflet Maps CSS (Live GPS के लिए) -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+body{
+ background: linear-gradient(120deg,#ff3d00,#ff9800);
+ min-height:100vh;
+ font-family: 'Segoe UI',sans-serif;
+}
 
-    <!-- Font Awesome Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+/* Glass Container */
+.main-container{
+ background: rgba(255,255,255,0.97);
+ border-radius:25px;
+ box-shadow:0 25px 50px rgba(0,0,0,.25);
+ margin:20px auto;
+ padding:30px;
+ max-width:1200px;
+}
 
-    <style>
-        /* Bus Booking Theme */
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
+/* Navbar */
+.topbar{
+ display:flex;
+ justify-content:space-between;
+ align-items:center;
+ margin-bottom:20px;
+}
+.logo{
+ font-size:28px;
+ font-weight:700;
+ color:#ff3d00;
+}
+.topbar a{
+ margin-left:20px;
+ text-decoration:none;
+ font-weight:600;
+ color:#333;
+}
 
-        .main-container {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: 25px;
-            box-shadow: 0 25px 50px rgba(0,0,0,0.2);
-            margin: 20px auto;
-            padding: 30px;
-        }
+/* Hero */
+.hero{
+ background:linear-gradient(120deg,#ff3d00,#ff9800);
+ color:white;
+ padding:30px;
+ border-radius:20px;
+ text-align:center;
+ margin-bottom:25px;
+ box-shadow:0 15px 30px rgba(0,0,0,.2);
+}
 
-        /* Route Cards */
-        .route-card {
-            transition: all 0.4s ease;
-            border: none;
-            border-radius: 20px;
-            overflow: hidden;
-            height: 100%;
-        }
+/* Cards */
+.route-card,.bus-card{
+ border-radius:20px;
+ border:none;
+ transition:.3s;
+ cursor:pointer;
+}
+.route-card:hover,.bus-card:hover{
+ transform:translateY(-6px);
+ box-shadow:0 20px 40px rgba(0,0,0,.2);
+}
 
-        .route-card:hover {
-            transform: translateY(-10px) scale(1.02);
-            box-shadow: 0 30px 60px rgba(0,0,0,0.3) !important;
-        }
+/* Seat */
+.seat{
+ width:50px;height:50px;
+ margin:5px;
+ border-radius:12px;
+ font-weight:bold;
+}
 
-        /* Bus Cards */
-        .bus-card {
-            border-radius: 20px;
-            border: none;
-            transition: all 0.3s;
-            cursor: pointer;
-        }
+/* Map */
+#map{
+ height:350px;
+ border-radius:20px;
+ box-shadow:0 10px 30px rgba(0,0,0,.2);
+}
 
-        .bus-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2) !important;
-        }
-
-        /* Seat Layout */
-        .seat {
-            width: 55px !important;
-            height: 55px !important;
-            margin: 4px;
-            font-weight: bold;
-            border-radius: 12px !important;
-            font-size: 14px;
-            transition: all 0.3s ease;
-            border: 3px solid transparent;
-        }
-
-        .seat:hover:not(:disabled) {
-            transform: scale(1.1);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-        }
-
-        .bus-row {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 8px;
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        /* Live GPS Map */
-        #map, .mini-map {
-            height: 400px;
-            width: 100%;
-            border-radius: 20px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
-            margin-bottom: 20px;
-        }
-
-        .live-bus {
-            animation: pulse 2s infinite;
-            width: 30px;
-            height: 30px;
-            background: #ff4444;
-            border-radius: 50%;
-            border: 4px solid #fff;
-            box-shadow: 0 0 20px #ff4444;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.3); }
-        }
-
-        /* Booking Header */
-        .booking-header {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 25px;
-            color: white;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-        }
-
-        /* Navigation Buttons */
-        .nav-buttons {
-            background: rgba(255,255,255,0.2);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-top: 40px;
-        }
-
-        .btn-custom {
-            border-radius: 25px;
-            padding: 12px 30px;
-            font-weight: 600;
-            border: none;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .btn-custom:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .seat { width: 45px !important; height: 45px !important; font-size: 12px; }
-            .main-container { margin: 10px; padding: 20px; }
-        }
-
-        /* Loading Animation */
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-    </style>
+/* Bottom nav */
+.nav-buttons{
+ text-align:center;
+ margin-top:40px;
+}
+.btn-custom{
+ border-radius:25px;
+ padding:12px 28px;
+ font-weight:600;
+}
+</style>
 </head>
 
 <body>
-    <div class="container-fluid py-4">
-        <div class="main-container">
-              <div class="text-center mb-5">
+<div class="container-fluid py-4">
+ <div class="main-container">
 
-            </div>
-
-            <!-- Main Content -->
-            {{content|safe}}
-
-            <!-- Navigation -->
-            <div class="nav-buttons text-center">
-                <a href="/" class="btn btn-light btn-lg btn-custom me-3">
-                    <i class="fas fa-home me-2"></i>🏠 Home
-                </a>
-                <a href="/driver/1" class="btn btn-success btn-lg btn-custom" target="_blank">
-                    <i class="fas fa-map-marker-alt me-2"></i>📱 Driver GPS
-                </a>
-                <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">
-                    <i class="fas fa-route me-2"></i>🗺️ Live Track
-                </a>
-            </div>
-        </div>
+  <!-- Navbar -->
+  <div class="topbar">
+    <div class="logo">🚌 SmartBus</div>
+    <div>
+      <a href="/">Home</a>
+      <a href="/bookings">My Bookings</a>
+      <a href="/offers">Offers</a>
+      <a href="/login">Login</a>
     </div>
+  </div>
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Hero -->
+  <div class="hero">
+    <h2>Online Bus Booking System</h2>
+    <p>Live GPS • Real-time Seats • Secure Payments</p>
+  </div>
 
-    <!-- Socket.IO CDN (Real-time Updates) -->
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- Dynamic Page Content -->
+  {{content|safe}}
 
-    <!-- Leaflet Maps JS (GPS Tracking) -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Bottom Navigation -->
+  <div class="nav-buttons">
+    <a href="/" class="btn btn-light btn-lg btn-custom me-3">
+      🏠 Home
+    </a>
+    <a href="/driver/1" class="btn btn-success btn-lg btn-custom me-3">
+      📱 Driver GPS
+    </a>
+    <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">
+      🗺️ Live Track
+    </a>
+  </div>
 
-    <!-- Route Selection Flow -->
-    <script>
-        // Route card click handler
-        function selectRoute(routeId) {
-            window.location.href = `/buses/${routeId}`;
-        }
+ </div>
+</div>
 
-        // Bus card click handler
-        function selectBus(busId) {
-            window.location.href = `/select/${busId}`;
-        }
-
-        // Smooth hover effects
-        document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.route-card, .bus-card').forEach(card => {
-                card.style.transition = 'all 0.4s ease';
-                card.addEventListener('mouseenter', () => {
-                    card.style.transform = 'translateY(-8px) scale(1.02)';
-                });
-                card.addEventListener('mouseleave', () => {
-                    card.style.transform = 'translateY(0) scale(1)';
-                });
-            });
-        });
-
-        // Socket connection status
-        if (typeof io !== 'undefined') {
-            const socket = io({
-                transports: ['websocket', 'polling'],
-                timeout: 10000
-            });
-
-            socket.on('connect', () => {
-                console.log('✅ Socket Connected:', socket.id);
-            });
-
-            socket.on('connect_error', (err) => {
-                console.log('❌ Socket Error:', err.message);
-            });
-        }
-    </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </body>
-</html>"""
+</html>
+"""
+
+# Home Page content in Hindi (inputs and buttons)
+HOME_HTML = """
+<div class="row g-3">
+  <div class="col-md-4">
+    <select class="form-select" id="from">
+      <option selected disabled>कहाँ से</option>
+      <option>दिल्ली</option>
+      <option>मुंबई</option>
+      <option>बेंगलुरु</option>
+      <option>जयपुर</option>
+    </select>
+  </div>
+
+  <div class="col-md-4">
+    <select class="form-select" id="to">
+      <option selected disabled>कहाँ तक</option>
+      <option>जयपुर</option>
+      <option>पुणे</option>
+      <option>चेन्नई</option>
+      <option>हैदराबाद</option>
+    </select>
+  </div>
+
+  <div class="col-md-3">
+    <input type="date" class="form-control" id="date">
+  </div>
+
+  <div class="col-md-1 d-grid">
+    <button class="btn btn-danger" onclick="searchBus()">
+      खोजें
+    </button>
+  </div>
+</div>
+
+<script>
+function searchBus(){
+  let f = document.getElementById("from").value;
+  let t = document.getElementById("to").value;
+  let d = document.getElementById("date").value;
+
+  if(!f || !t || !d){
+    alert("कृपया सभी फ़ील्ड भरें");
+    return;
+  }
+
+  alert("बस खोजी जा रही है: " + f + " से " + t);
+}
+</script>
+"""
 
 
 # ================= ROUTES =================
