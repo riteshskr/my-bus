@@ -162,7 +162,7 @@ def home():
     """)
     live_buses = cur.fetchall()
     # date variable pass to template
-    return render_template("home.html", routes=routes, live_buses=live_buses, date=date)
+    return render_template("mybus.html", routes=routes, live_buses=live_buses, date=date)
 
 # Example API returning JSON with date
 @app.route("/api/today")
