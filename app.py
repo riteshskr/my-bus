@@ -462,9 +462,9 @@ def home():
     routes_section = '<div class="row g-4 mb-5">'
     for r in routes:
         routes_section += f'''
-        <div class="col-md-6 col-lg-4">
-            <div class="card h-100 bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:20px;cursor:pointer;">
-                <div class="card-body p-5 text-center" onclick="selectRoute({r['id']})">
+        <div class="col-md-4 col-lg-3">
+            <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
+                <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
                     <h3 class="fw-bold mb-3">{r['route_name']}</h3>
                     <div class="display-4 text-warning mb-4">🛣️ {r['distance_km']} km</div>
                     <div class="h5 mb-3">⚡ Live GPS Tracking</div>
