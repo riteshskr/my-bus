@@ -466,9 +466,7 @@ def home():
             <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
                 <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
                     <h3 class="fw-bold mb-3">{r['route_name']}</h3>
-                    <div class="display-4 text-warning mb-4">🛣️ {r['distance_km']} km</div>
-                    <div class="h5 mb-3">⚡ Live GPS Tracking</div>
-                    <button class="btn btn-success btn-lg px-5" onclick="selectRoute({r['id']})">
+                     <button class="btn btn-success btn-lg px-5" onclick="selectRoute({r['id']})">
                         🚀 Buses देखें → Bus {r['id']}
                     </button>
                 </div>
