@@ -466,15 +466,14 @@ def home():
             <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
                 <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
                     <h3 class="fw-bold mb-3">{r['route_name']}</h3>
-                     <button class="btn btn-success btn-lg px-5" onclick="selectRoute({r['id']})">
+                     
                         🚀 Buses देखें → Bus {r['id']}
                     </button>
                 </div>
             </div>
         </div>'''
     routes_section += '</div>'
-    print(r.id)
-    # Live GPS Status (नीचे छोटा)
+       # Live GPS Status (नीचे छोटा)
     cur.execute("""
         SELECT s.id, s.bus_name, r.route_name, 
                s.current_lat as lat, s.current_lng as lng
