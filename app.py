@@ -472,6 +472,12 @@ function searchBus(){
 
   alert("बस खोजी जा रही है: " + f + " से " + t);
 }
+
+function selectRoute(rid){
+    // Bus list page पर redirect
+    window.location.href = "/buses/" + rid;
+}
+
 </script>
 """
 
