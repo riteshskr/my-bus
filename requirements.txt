@@ -10,7 +10,4 @@ eventlet
 gevent
 gevent-websocket
 python-dotenv
-opencv-python
 requests
-face-recognition
-numpy
