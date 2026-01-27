@@ -154,6 +154,7 @@ def home():
     conn, cur = get_db()
     cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
     routes = cur.fetchall()
+
     cur.execute("""
         SELECT s.id, s.bus_name, r.route_name,
                s.current_lat, s.current_lng
@@ -161,14 +162,14 @@ def home():
         ORDER BY s.id LIMIT 4
     """)
     live_buses = cur.fetchall()
-    # date variable pass to template
-    return render_template("mybus.html", routes=routes, live_buses=live_buses, date=date)
 
-# Example API returning JSON with date
-@app.route("/api/today")
-@safe_db
-def today_api():
-    return jsonify({"ok": True, "today": date.today().isoformat()})
+    today = date.today().isoformat()   # ← yahin convert
+    return render_template(
+        "mybus.html",
+        routes=routes,
+        live_buses=live_buses,
+        today=today
+    )
 
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
@@ -190,7 +191,25 @@ def handle_gps(data):
     except:
         pass
     emit("bus_location", {"sid": sid, "lat": lat, "lng": lng}, broadcast=True)
+# ********* routes search *******
+@app.route("/search", methods=["POST"])
+def search_routes():
+    data = request.json
+    from_station = data["from"]
+    to_station = data["to"]
 
+    query = """
+    SELECT * FROM routes
+    WHERE %s = ANY(stations)
+    AND %s = ANY(stations)
+    """
+
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (from_station, to_station))
+            routes = cur.fetchall()
+
+    return jsonify(routes)
 # ================= RUN =================
 if __name__ == "__main__":
     socketio.run(
