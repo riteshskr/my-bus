@@ -434,8 +434,6 @@ function searchBus(){
   alert("Searching buses from " + f + " to " + t + " on " + d);
 }
 
-function selectRoute(rid){
-  window.location.href = "/buses/" + rid;
 }
 </script>
 """
@@ -470,7 +468,7 @@ def home():
                     <h3 class="fw-bold mb-3">{r['route_name']}</h3>
                     <div class="display-4 text-warning mb-4">🛣️ {r['distance_km']} km</div>
                     <div class="h5 mb-3">⚡ Live GPS Tracking</div>
-                    <button class="btn btn-success btn-lg px-5">
+                    <button class="btn btn-success btn-lg px-5" onclick="selectRoute({r['id']})">
                         🚀 Buses देखें → Bus {r['id']}
                     </button>
                 </div>
