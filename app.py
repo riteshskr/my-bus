@@ -452,7 +452,11 @@ LOGIN_HTML = """
 
         <h3 class="text-center mb-4">Admin Login</h3>
 
-        <form method="POST">
+       <form method="POST" autocomplete="on">
+       <!-- Hidden fields (Chrome autofill रोकने के लिए) -->
+          <input type="text" style="display:none">
+          <input type="password" style="display:none">
+          
           <input type="text" name="username"
                  class="form-control mb-3"
                  placeholder="Username" required>
