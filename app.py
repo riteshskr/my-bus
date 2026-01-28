@@ -98,7 +98,7 @@ def init_db():
             username VARCHAR(50) UNIQUE,
             password VARCHAR(100),
             role VARCHAR(20) DEFAULT 'admin',
-            counter_no INTEGER DEFAULT 0,
+            counter_no INTEGER DEFAULT 0
         )
         """)
         cur.execute("SELECT COUNT(*) FROM admins ")
@@ -748,13 +748,14 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
+
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
+    d  = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
-    # ===== STATION ORDER =====
+    # ===== Station Order =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -767,53 +768,59 @@ def seats(sid):
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
-    # ===== BOOKED SEATS =====
+    # ===== Booked Seats =====
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
         WHERE schedule_id=%s
-        AND travel_date=%s
-        AND status='confirmed'
+          AND travel_date=%s
+          AND status='confirmed'
     """, (sid, d))
 
-    booked_rows = cur.fetchall()
     booked_seats = set()
+    for r in cur.fetchall():
+        bfs = station_to_order.get(r["from_station"], 0)
+        bts = station_to_order.get(r["to_station"], 0)
+        if not (ts_order <= bfs or fs_order >= bts):
+            booked_seats.add(r["seat_number"])
 
-    for row in booked_rows:
-        b_fs = station_to_order.get(row['from_station'], 0)
-        b_ts = station_to_order.get(row['to_station'], 0)
-
-        if not (ts_order <= b_fs or fs_order >= b_ts):
-            booked_seats.add(row['seat_number'])
-
-    # ===== SEAT BUTTONS =====
+    # ===== Seat Buttons =====
     seat_buttons = ""
-    available_count = 40 - len(booked_seats)
+    total_seats = 40
+    available = total_seats - len(booked_seats)
 
-    for i in range(1, 41):
+    for i in range(1, total_seats + 1):
         if i in booked_seats:
             seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
         else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
+            seat_buttons += f'''
+            <button class="btn btn-success seat"
+                    onclick="bookSeat({i}, this)">
+                {i}
+            </button>'''
 
-    # ===== BUS LOCATION =====
-    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
+    # ===== Bus + Map =====
+    cur.execute("""
+        SELECT current_lat, current_lng, route_id
+        FROM schedules WHERE id=%s
+    """, (sid,))
     bus = cur.fetchone()
 
-    lat = float(bus['current_lat'] or 27.2)
-    lng = float(bus['current_lng'] or 75.0)
+    lat = float(bus["current_lat"] or 27.2)
+    lng = float(bus["current_lng"] or 75.0)
 
-    # ===== ROUTE STATIONS FOR MAP =====
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
         WHERE route_id=%s
         ORDER BY station_order
-    """, (bus['route_id'],))
-
-    stations = cur.fetchall()
+    """, (bus["route_id"],))
     import json
-    stations_json = json.dumps(stations, ensure_ascii=False)
+    stations_json = json.dumps(cur.fetchall(), ensure_ascii=False)
+
+    role = session.get("role", "user")
+    user_id = session.get("user_id", 0)
+    counter_no = session.get("counter_no", None)
 
     # ================= HTML =================
     html = f"""
@@ -823,94 +830,79 @@ def seats(sid):
 
 <style>
 #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
-.btn-success{{background:#28a745 !important;}}
-.btn-danger{{background:#dc3545 !important;}}
-
-.bus-icon{{
-   width:30px !important;
-   height:30px !important;
-   background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-   background-size:contain;
-   background-repeat:no-repeat;
-   filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
-}}
+.seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;}}
 </style>
 
 <div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available: <span class="badge bg-success">{available_count}</span>
+    <h3>🚌 {fs} → {ts}</h3>
+    <h5>📅 {d}</h5>
+    <span class="badge bg-success">Available {available}</span>
 </div>
 
 <div id="seat-map"></div>
 
-<div class="text-center">
-  {seat_buttons}
+<div class="text-center mb-4">
+    {seat_buttons}
 </div>
 
 <script>
 const sid = {sid};
+let bookingLock = false;
 
 // ===== MAP =====
-const map = L.map('seat-map').setView([{lat}, {lng}], 9);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+const map = L.map("seat-map").setView([{lat},{lng}], 9);
+L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
 
 const stations = {stations_json};
-let routePoints = [];
+let routePts = [];
 
-stations.forEach(st => {{
-    let la = parseFloat(st.lat);
-    let ln = parseFloat(st.lng);
+stations.forEach(s => {{
+    let la = parseFloat(s.lat), ln = parseFloat(s.lng);
     if(!isNaN(la) && !isNaN(ln)){{
-        routePoints.push([la, ln]);
-        L.marker([la, ln]).addTo(map).bindPopup(st.station_name);
+        routePts.push([la,ln]);
+        L.marker([la,ln]).addTo(map).bindPopup(s.station_name);
     }}
 }});
 
-if(routePoints.length >= 2){{
-    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
-    map.fitBounds(poly.getBounds());
+if(routePts.length>1){{
+    let p = L.polyline(routePts).addTo(map);
+    map.fitBounds(p.getBounds());
 }}
 
-// ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
-let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
-
-// ===== SOCKET =====
 const socket = io();
-
-socket.on("bus_location", d => {{
-   if(d.sid == sid){{
-       busMarker.setLatLng([d.lat, d.lng]);
-   }}
-}});
-
 socket.on("seat_update", d => {{
-   if(d.sid == sid){{
-       markSeatBooked(d.seat);
-   }}
+    if(d.sid == sid) markSeatBooked(d.seat);
 }});
 
-// ===== HELPER =====
 function markSeatBooked(seat){{
-    const btns = document.querySelectorAll(".seat");
-    const btn = btns[seat-1];
+    let btn = document.querySelectorAll(".seat")[seat-1];
     if(btn){{
+        btn.disabled = true;
         btn.classList.remove("btn-success");
         btn.classList.add("btn-danger");
         btn.innerText = "X";
-        btn.disabled = true;
     }}
 }}
 
 // ===== BOOK SEAT =====
 async function bookSeat(seat, btn){{
+    if(bookingLock) return;
+
     let name = prompt("Passenger Name");
     if(!name) return;
 
     let mobile = prompt("Mobile Number");
     if(!mobile) return;
+
+    let payment = "online";
+    let role = "{role}";
+
+    if(role !== "user"){{
+        payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
+    }}
+
+    bookingLock = true;
+    btn.disabled = true;
 
     let payload = {{
         sid: sid,
@@ -920,9 +912,10 @@ async function bookSeat(seat, btn){{
         date: "{d}",
         from: "{fs}",
         to: "{ts}",
-        payment_mode: "cash",
-        booked_by_type: "user",
-        booked_by_id: 1
+        payment_mode: payment,
+        booked_by_type: role,
+        booked_by_id: {user_id},
+        counter_id: {counter_no if counter_no else 'null'}
     }};
 
     let res = await fetch("/book", {{
@@ -935,14 +928,17 @@ async function bookSeat(seat, btn){{
 
     if(data.ok){{
         markSeatBooked(seat);
-        alert("Seat Booked Successfully ✅");
-    }} 
-    else {{
+        alert("Seat Booked ✅ ("+payment.toUpperCase()+")");
+    }}else{{
         alert(data.error);
+        btn.disabled = false;
     }}
+
+    bookingLock = false;
 }}
 </script>
 """
+
     return render_template_string(BASE_HTML, content=html)
 
 @app.route("/book", methods=["POST"])
@@ -980,8 +976,14 @@ def book():
         fare = random.randint(250, 450)
 
         # 👉 RAZORPAY IGNORE → ALWAYS CASH
-        status = "confirmed"
-        payment_mode = "cash"
+        role = data['booked_by_type']
+
+        if role == "user":
+            payment_mode = "online"
+            status = "pending"  # online payment ke baad confirm
+        else:
+            payment_mode = "cash"
+            status = "confirmed"
 
         # ===== INSERT BOOKING =====
         cur.execute("""
