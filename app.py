@@ -720,6 +720,8 @@ def login():
                 error = "गलत यूज़रनेम या पासवर्ड"
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print("LOGIN ERROR:", e)
             error = "Server error"
 
