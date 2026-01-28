@@ -665,35 +665,47 @@ def buses(rid):
 def login():
     error = ""
 
-
     if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
-        conn = pool.getconn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, role, counter_no
-            FROM admins
-            WHERE username=%s AND password=%s
-        """, (username, password))
-        user = cur.fetchone()
+        username = request.form.get("username")
+        password = request.form.get("password")
 
-        if user:
-            session["user_logged_in"] = True
-            session["user_id"] = user["id"]
-            session["role"] = user["role"]          # admin / office / conductor
-            session["counter_no"] = user["counter_no"]
+        try:
+            conn = pool.getconn()
+            cur = conn.cursor(row_factory=dict_row)  # ✅ IMPORTANT
 
-            return redirect("/dashboard")
-        else:
-            error = "गलत यूज़रनेम या पासवर्ड"
+            cur.execute("""
+                SELECT id, role, counter_no
+                FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
 
+            user = cur.fetchone()
+
+            if user:
+                session.clear()   # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]        # admin / office / conductor
+                session["counter_no"] = user["counter_no"]
+
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            print("LOGIN ERROR:", e)
+            error = "Server error"
+
+        finally:
+            if cur:
+                cur.close()
+            if conn:
+                pool.putconn(conn)
 
     return render_template_string(
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error)
     )
-
 @app.route("/admin")
 def admin():
     return render_template_string(
