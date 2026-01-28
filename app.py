@@ -178,15 +178,9 @@ def init_db():
         count = cur.fetchone()[0]
 
         if count == 0:
-            admin = [
-                (1, 'admin', 336),
-                ]
+            cur.execute(""" INSERT INTO  admins(username, password, role, counter_no)
+            VALUES('admin', 'admin123', 'admin', 1);""")
 
-            for r in admin:
-                cur.execute(
-                    "INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                    r
-                )
 
 
         cur.execute("SELECT COUNT(*) FROM routes")
@@ -454,8 +448,6 @@ function searchBus(){
     return;
   }
   alert("Searching buses from " + f + " to " + t + " on " + d);
-}
-
 }
 </script>
 """
