@@ -954,7 +954,7 @@ def book():
     ]
 
     for field in required:
-        if field not in data or str(data[field]).strip() == "":
+        if field not in data:
             return jsonify({"ok": False, "error": f"Missing field: {field}"})
 
     conn, cur = get_db()
@@ -980,7 +980,7 @@ def book():
 
         if role == "user":
             payment_mode = "online"
-            status = "pending"  # online payment ke baad confirm
+            status = "confirmed"  # online payment ke baad confirm
         else:
             payment_mode = "cash"
             status = "confirmed"
