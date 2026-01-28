@@ -91,7 +91,7 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
-        cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
+        #cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
