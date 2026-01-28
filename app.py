@@ -699,7 +699,9 @@ def login():
         try:
             conn = pool.getconn()
             cur = conn.cursor(row_factory=dict_row)  # ✅ IMPORTANT
-
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
             cur.execute("""
                 SELECT id, role, counter_no
                 FROM admins
