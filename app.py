@@ -91,12 +91,14 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
+        cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE,
             password VARCHAR(100),
-            role VARCHAR(20) DEFAULT 'admin'
+            role VARCHAR(20) DEFAULT 'admin',
+            counter_no INTEGER DEFAULT 0,
         )
         """)
         cur.execute("SELECT COUNT(*) FROM admins ")
@@ -663,20 +665,35 @@ def buses(rid):
 def login():
     error = ""
 
-    if request.method == "POST":
-        u = request.form.get("username")
-        p = request.form.get("password")
 
-        # demo credentials
-        if u == "admin" and p == "1234":
-            return redirect("/admin")
+    if request.method == "POST":
+        username = request.form["username"]
+        password = request.form["password"]
+        conn = pool.getconn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, role, counter_no
+            FROM admins
+            WHERE username=%s AND password=%s
+        """, (username, password))
+        user = cur.fetchone()
+
+        if user:
+            session["user_logged_in"] = True
+            session["user_id"] = user["id"]
+            session["role"] = user["role"]          # admin / office / conductor
+            session["counter_no"] = user["counter_no"]
+
+            return redirect("/dashboard")
         else:
-            error = "Invalid username or password"
+            error = "गलत यूज़रनेम या पासवर्ड"
+
 
     return render_template_string(
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error)
     )
+
 @app.route("/admin")
 def admin():
     return render_template_string(
