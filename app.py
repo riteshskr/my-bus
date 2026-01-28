@@ -359,7 +359,7 @@ body{
 <div class="container-fluid py-4">
  <div class="main-container">
   <div class="topbar">
-    <div class="logo">🚌 SmartBus</div>
+    <div class="logo">🚌 My Bus</div>
     <div>
       <a href="/">Home</a>
       <a href="/bookings">My Bookings</a>
@@ -443,7 +443,40 @@ function searchBus(){
 </script>
 """
 
+#===== login html =======
+LOGIN_HTML = """
+<div class="row justify-content-center mt-5">
+  <div class="col-md-4">
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-4">
 
+        <h3 class="text-center mb-4">Admin Login</h3>
+
+        <form method="POST">
+          <input type="text" name="username"
+                 class="form-control mb-3"
+                 placeholder="Username" required>
+
+          <input type="password" name="password"
+                 class="form-control mb-3"
+                 placeholder="Password" required>
+
+          <button class="btn btn-success w-100">
+            Login
+          </button>
+        </form>
+
+        {% if error %}
+          <div class="text-danger text-center mt-3">
+            {{ error }}
+          </div>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+</div>
+"""
 # ================= ROUTES =================
 @app.route("/")
 @safe_db
@@ -622,7 +655,30 @@ def buses(rid):
     """
 
     return render_template_string(BASE_HTML, content=html)
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
 
+    if request.method == "POST":
+        u = request.form.get("username")
+        p = request.form.get("password")
+
+        # demo credentials
+        if u == "admin" and p == "1234":
+            return redirect("/admin")
+        else:
+            error = "Invalid username or password"
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(LOGIN_HTML, error=error)
+    )
+@app.route("/admin")
+def admin():
+    return render_template_string(
+        BASE_HTML,
+        content="<h2 class='text-center mt-5'>Welcome Admin 🎉</h2>"
+    )
 
 @app.route("/select/<int:sid>", methods=["GET", "POST"])
 @safe_db
