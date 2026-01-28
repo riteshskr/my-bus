@@ -174,6 +174,21 @@ def init_db():
         conn.commit()
 
         # ===== DEFAULT DATA =====
+        cur.execute("SELECT COUNT(*) FROM admins")
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            admin = [
+                (1, 'admin', 336),
+                ]
+
+            for r in admin:
+                cur.execute(
+                    "INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+                    r
+                )
+
+        
         cur.execute("SELECT COUNT(*) FROM routes")
         count = cur.fetchone()[0]
 
