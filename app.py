@@ -188,7 +188,7 @@ def init_db():
                     r
                 )
 
-        
+
         cur.execute("SELECT COUNT(*) FROM routes")
         count = cur.fetchone()[0]
 
@@ -560,7 +560,27 @@ def home():
     content = hero_section + routes_section + live_section
     return render_template_string(BASE_HTML, content=content)
 
+@app.route("/dashboard")
+def dashboard():
+    if not session.get("user_logged_in"):
+        return redirect("/login")
 
+    role = session.get("role", "user")
+
+    return render_template_string(
+        BASE_HTML,
+        content=f"""
+        <div class="text-center mt-5">
+            <h2>Welcome 🎉</h2>
+            <h4>Role: <b>{role.upper()}</b></h4>
+
+            <div class="mt-4">
+                <a href="/" class="btn btn-primary">🏠 Home</a>
+                <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
+            </div>
+        </div>
+        """
+    )
 @app.route("/buses/<int:rid>")
 @safe_db
 def buses(rid):
