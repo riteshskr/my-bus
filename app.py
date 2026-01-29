@@ -233,8 +233,10 @@ def init_db():
 
             conn.commit()
 
+            cur.close()
+            pool.putconn(conn)  # ✅ सबसे important line
 
-        print("✅ DB Init Complete!")
+            print("✅ DB Init Complete!")
 
 
     except Exception as e:
@@ -246,13 +248,9 @@ def init_db():
         traceback.print_exc()
 
         try:
-
             conn.rollback()
-
-            conn.close()
-
+            pool.putconn(conn, close=True)
         except:
-
             pass
 
 
