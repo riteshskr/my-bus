@@ -571,7 +571,7 @@ def dashboard():
             <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
-            <a href="/create counter" class="btn btn-success">🎫 create-counter</a>
+            <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
         </div>
         """
 
@@ -762,6 +762,7 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=form_html)
+#******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
