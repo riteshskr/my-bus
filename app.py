@@ -697,8 +697,8 @@ def login():
         password = request.form.get("password")
 
         try:
-            conn = pool.getconn()
-            cur = conn.cursor(row_factory=dict_row)  # ✅ IMPORTANT
+            conn, cur = get_db()
+            # ✅ IMPORTANT
             cur.execute("SELECT * FROM admins")
             user = cur.fetchone()
             print(user)
