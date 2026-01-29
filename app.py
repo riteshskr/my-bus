@@ -233,20 +233,26 @@ def init_db():
 
             conn.commit()
 
-        cur.close()
-        pool.putconn(conn)
 
         print("✅ DB Init Complete!")
 
+
     except Exception as e:
+
         import traceback
+
         print("❌ DB INIT REAL ERROR ↓")
+
         traceback.print_exc()
 
         try:
+
             conn.rollback()
-            pool.putconn(conn, close=True)
+
+            conn.close()
+
         except:
+
             pass
 
 
@@ -703,8 +709,7 @@ def login():
             user = cur.fetchone()
             print(user)
             cur.execute("""
-                SELECT id, role, counter_no
-                FROM admins
+                SELECT id, role, FROM admins
                 WHERE username=%s AND password=%s
             """, (username, password))
 
@@ -715,7 +720,7 @@ def login():
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
                 session["role"] = user["role"]        # admin / office / conductor
-                session["counter_no"] = user["counter_no"]
+
 
                 return redirect("/dashboard")
             else:
