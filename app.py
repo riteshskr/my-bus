@@ -575,6 +575,7 @@ def dashboard():
     if role.lower() == "admin":
         admin_links = """
         <div class="mt-3">
+             <a href="/trip-close" class="btn btn-info me-2">🛣️ Trip close</a>
             <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
