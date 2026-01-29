@@ -75,9 +75,8 @@ def safe_db(func):
     def wrapper(*a, **kw):
         try:
             return func(*a, **kw)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
-
+        finally:
+            close_db()   # चाहे error आये या न आये
     return wrapper
 
 def admin_required(f):
