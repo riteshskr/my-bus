@@ -563,6 +563,17 @@ def dashboard():
 
     role = session.get("role", "user")
 
+    # Admin को extra links
+    admin_links = ""
+    if role.lower() == "admin":
+        admin_links = """
+        <div class="mt-3">
+            <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
+            <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
+            <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
+        </div>
+        """
+
     return render_template_string(
         BASE_HTML,
         content=f"""
@@ -574,6 +585,8 @@ def dashboard():
                 <a href="/" class="btn btn-primary">🏠 Home</a>
                 <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
             </div>
+
+            {admin_links}
         </div>
         """
     )
