@@ -81,11 +81,15 @@ def safe_db(func):
     return wrapper
 
 def admin_required(f):
+    @wraps(f)
     def wrap(*a,**k):
-        if "admin" not in session:
-            return redirect("/admin/login")
+        if not session.get("user_logged_in"):
+            return redirect("/login")
+
+        if session.get("role") != "admin":
+            return "Access Denied", 403
+
         return f(*a,**k)
-    wrap.__name__ = f.__name__
     return wrap
 
 # ================= DB INIT =================
