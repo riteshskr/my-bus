@@ -771,9 +771,96 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=form_html)
-@app.route("/trip-close")
+@app.route("/trip-close", methods=["GET","POST"])
+@admin_required
+@safe_db
 def trip_close():
-    return "OK"
+    conn, cur = get_db()
+
+    # सभी routes
+    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
+    routes = cur.fetchall()
+
+    buses = []
+    if request.method == "POST":
+        route_id = request.form.get("route_id")
+
+        cur.execute("""
+            SELECT id, bus_name, departure_time
+            FROM schedules
+            WHERE route_id=%s
+            ORDER BY departure_time
+        """, (route_id,))
+        buses = cur.fetchall()
+
+    html = """
+    <h3 class="text-center mb-4">🛑 Trip Close</h3>
+
+    <form method="POST">
+        <label>Select Route</label>
+        <select name="route_id" class="form-control"
+                onchange="this.form.submit()">
+            <option value="">-- Route चुनें --</option>
+    """
+
+    for r in routes:
+        html += f'<option value="{r["id"]}">{r["route_name"]}</option>'
+
+    html += "</select>"
+
+    if buses:
+        html += """
+        <hr>
+        <label>Select Bus</label>
+        <select name="bus_id" class="form-control">
+        """
+        for b in buses:
+            t = b["departure_time"].strftime("%H:%M")
+            html += f'<option value="{b["id"]}">{b["bus_name"]} ({t})</option>'
+
+        html += """
+        </select>
+        <button formaction="/end-trip"
+                class="btn btn-danger mt-3 w-100">
+            Trip Close
+        </button>
+        """
+
+    html += "</form>"
+
+    return render_template_string(BASE_HTML, content=html)
+
+@app.route("/end-trip", methods=["POST"])
+@admin_required
+@safe_db
+def end_trip():
+    bus_id = request.form["bus_id"]
+    conn, cur = get_db()
+
+    # copy seat bookings
+    cur.execute("""
+        INSERT INTO seat_bookings_archive
+        SELECT * FROM seat_bookings
+        WHERE schedule_id=%s
+    """, (bus_id,))
+
+    # copy schedule
+    cur.execute("""
+        INSERT INTO schedules_archive
+        SELECT * FROM schedules
+        WHERE id=%s
+    """, (bus_id,))
+
+    # delete from live tables
+    cur.execute("DELETE FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
+    cur.execute("DELETE FROM schedules WHERE id=%s", (bus_id,))
+
+    conn.commit()
+
+    return render_template_string(
+        BASE_HTML,
+        content="<h2 class='text-center text-success mt-5'>Trip Closed Successfully ✅</h2>"
+    )
 #******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
