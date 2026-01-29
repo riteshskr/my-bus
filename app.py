@@ -571,6 +571,7 @@ def dashboard():
             <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
+            <a href="/create counter" class="btn btn-success">🎫 create-counter</a>
         </div>
         """
 
@@ -705,6 +706,62 @@ def buses(rid):
     """
 
     return render_template_string(BASE_HTML, content=html)
+#**** create counter ******
+@app.route("/create-counter", methods=["GET", "POST"])
+@admin_required
+def create_counter():
+    error = ""
+    success = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        counter_no = request.form.get("counter_no")
+
+        if not username or not password or not counter_no:
+            error = "सभी fields भरें"
+        else:
+            try:
+                conn, cur = get_db()
+                cur.execute("""
+                    INSERT INTO admins (username, password, role, counter_no)
+                    VALUES (%s, %s, 'counter', %s)
+                    ON CONFLICT (username) DO NOTHING
+                """, (username, password, counter_no))
+                conn.commit()
+                success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
+            except Exception as e:
+                conn.rollback()
+                error = str(e)
+
+    form_html = f"""
+    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
+        <div class="card-body">
+            <h4 class="card-title text-center mb-4">➕ Create New Counter</h4>
+
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Counter Number</label>
+                    <input type="number" name="counter_no" class="form-control" required>
+                </div>
+                <button class="btn btn-success w-100">Create Counter</button>
+            </form>
+
+            {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
+            {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
+        </div>
+    </div>
+    """
+
+    return render_template_string(BASE_HTML, content=form_html)
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
