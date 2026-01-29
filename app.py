@@ -56,15 +56,19 @@ def shutdown_pool():
 def get_db():
     if 'db_conn' not in g:
         g.db_conn = pool.getconn()
-    return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
-
+    if 'db_cur' not in g:
+        g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+    return g.db_conn, g.db_cur
 
 @app.teardown_appcontext
 def close_db(error=None):
+    cur = g.pop('db_cur', None)
     conn = g.pop('db_conn', None)
+
+    if cur:
+        cur.close()
     if conn:
         pool.putconn(conn)
-
 
 def safe_db(func):
     @wraps(func)
