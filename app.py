@@ -725,13 +725,7 @@ def login():
             import traceback
             traceback.print_exc()
             print("LOGIN ERROR:", e)
-            error = "Server error"
-
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                pool.putconn(conn)
+            error = "सर्वर में समस्या"
 
     return render_template_string(
         BASE_HTML,
