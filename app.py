@@ -707,7 +707,7 @@ def login():
             user = cur.fetchone()
             print(user)
             cur.execute("""
-                SELECT id, role, FROM admins
+                SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
             """, (username, password))
 
