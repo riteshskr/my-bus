@@ -575,11 +575,11 @@ def dashboard():
     if role.lower() == "admin":
         admin_links = """
         <div class="mt-3">
-             <a href="/trip-close" class="btn btn-info me-2">🛣️ Trip close</a>
             <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
             <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
+            <a href="/trip-close" class="btn btn-success">🎫 Trip Close </a>
         </div>
         """
 
@@ -599,6 +599,7 @@ def dashboard():
         </div>
         """
     )
+
 @app.route("/buses/<int:rid>")
 @safe_db
 def buses(rid):
@@ -770,6 +771,9 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=form_html)
+@app.route("/trip-close")
+def trip_close():
+    return "OK"
 #******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
