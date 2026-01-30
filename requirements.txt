@@ -11,3 +11,4 @@ gevent
 gevent-websocket
 python-dotenv
 requests
+mysql-connector-python
