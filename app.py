@@ -9,6 +9,7 @@ from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+import mysql.connector
 import atexit
 import razorpay
 
@@ -45,7 +46,12 @@ if not DATABASE_URL:
 
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
-
+local_conn = mysql.connector.connect(
+    host=os.getenv("LOCAL_DB_HOST"),
+    user=os.getenv("LOCAL_DB_USER"),
+    password=os.getenv("LOCAL_DB_PASSWORD"),
+    database=os.getenv("LOCAL_DB_NAME")
+)
 
 @atexit.register
 def shutdown_pool():
@@ -99,6 +105,29 @@ def init_db():
 
         # ===== TABLES =====
         #cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS faces (
+                id SERIAL PRIMARY KEY,
+                bus_id INT NOT NULL,
+                face_data BYTEA NOT NULL,
+                face_image BYTEA NOT NULL
+            );
+            """)
+
+        # face_logs table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS face_logs (
+                id SERIAL PRIMARY KEY,
+                face_id INT NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                bus_id INT NOT NULL,
+                entry_time TIMESTAMP NOT NULL,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION
+            );
+            """)
+
+
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
@@ -836,30 +865,61 @@ def trip_close():
 def end_trip():
     bus_id = request.form["bus_id"]
     conn, cur = get_db()
+    lcur = local_conn.cursor()
 
-    # copy seat bookings
-    cur.execute("""
-        INSERT INTO seat_bookings_archive
-        SELECT * FROM seat_bookings
-        WHERE schedule_id=%s
-    """, (bus_id,))
+    # ===== SEAT BOOKINGS =====
+    cur.execute("SELECT * FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
+    rows = cur.fetchall()
 
-    # copy schedule
-    cur.execute("""
-        INSERT INTO schedules_archive
-        SELECT * FROM schedules
-        WHERE id=%s
-    """, (bus_id,))
+    for r in rows:
+        lcur.execute("""
+            INSERT INTO seat_bookings
+            (id, schedule_id, seat_number, passenger_name, mobile,
+             from_station, to_station, travel_date, status,
+             fare, payment_mode, booked_by_type,
+             booked_by_id, counter_id, order_id, payment_id, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, tuple(r.values()))
 
-    # delete from live tables
+    # ===== FACES =====
+    cur.execute("SELECT * FROM faces WHERE bus_id=%s", (bus_id,))
+    faces = cur.fetchall()
+
+    for f in faces:
+        lcur.execute("""
+            INSERT INTO faces
+            (id, bus_id, face_data, face_image)
+            VALUES (%s,%s,%s,%s)
+        """, tuple(f.values()))
+
+    # ===== FACE LOGS =====
+    cur.execute("SELECT * FROM face_logs WHERE bus_id=%s", (bus_id,))
+    logs = cur.fetchall()
+
+    for log in logs:
+        lcur.execute("""
+            INSERT INTO face_logs
+            (id, face_id, bus_id, entry_time, latitude, longitude)
+            VALUES (%s,%s,%s,%s,%s,%s)
+        """, tuple(log.values()))
+
+    # PC में save
+    local_conn.commit()
+
+    # Render से delete
     cur.execute("DELETE FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
-    cur.execute("DELETE FROM schedules WHERE id=%s", (bus_id,))
-
+    cur.execute("DELETE FROM face_logs WHERE bus_id=%s", (bus_id,))
+    cur.execute("DELETE FROM faces WHERE bus_id=%s", (bus_id,))
     conn.commit()
 
     return render_template_string(
         BASE_HTML,
-        content="<h2 class='text-center text-success mt-5'>Trip Closed Successfully ✅</h2>"
+        content="""
+        <h2 class='text-center text-success mt-5'>
+            Trip Closed Successfully ✅<br>
+            पूरा Data PC में Safe हो गया 💾
+        </h2>
+        """
     )
 #******* login ********
 @app.route("/login", methods=["GET", "POST"])
