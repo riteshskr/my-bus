@@ -46,33 +46,6 @@ if not DATABASE_URL:
 
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
-local_conn = None
-
-
-def get_local_db():
-    """सिर्फ LOCAL machine पर ही PC MySQL connect करेगा"""
-    global local_conn
-
-    if local_conn is not None:
-        return local_conn
-
-    # Render पर LOCAL_MODE env variable मत रखना
-    if os.getenv("LOCAL_MODE") != "1":
-        print("⚠️ Local DB disabled (Render mode)")
-        return None
-
-    try:
-        local_conn = mysql.connector.connect(
-            host=os.getenv("LOCAL_DB_HOST", "localhost"),
-            user=os.getenv("LOCAL_DB_USER", "root"),
-            password=os.getenv("LOCAL_DB_PASSWORD", ""),
-            database=os.getenv("LOCAL_DB_NAME", "bus_db")
-        )
-        print("✅ Local MySQL connected")
-        return local_conn
-    except Exception as e:
-        print(f"❌ Local DB Error: {e}")
-        return None
 
 @atexit.register
 def shutdown_pool():
@@ -629,7 +602,7 @@ def dashboard():
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
             <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
-            <a href="/trip-close" class="btn btn-success">🎫 Trip Close </a>
+            
         </div>
         """
 
@@ -821,135 +794,7 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=form_html)
-@app.route("/trip-close", methods=["GET","POST"])
-@admin_required
-@safe_db
-def trip_close():
-    conn, cur = get_db()
 
-    # सभी routes
-    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
-    routes = cur.fetchall()
-
-    buses = []
-    if request.method == "POST":
-        route_id = request.form.get("route_id")
-
-        cur.execute("""
-            SELECT id, bus_name, departure_time
-            FROM schedules
-            WHERE route_id=%s
-            ORDER BY departure_time
-        """, (route_id,))
-        buses = cur.fetchall()
-
-    html = """
-    <h3 class="text-center mb-4">🛑 Trip Close</h3>
-
-    <form method="POST">
-        <label>Select Route</label>
-        <select name="route_id" class="form-control"
-                onchange="this.form.submit()">
-            <option value="">-- Route चुनें --</option>
-    """
-
-    for r in routes:
-        html += f'<option value="{r["id"]}">{r["route_name"]}</option>'
-
-    html += "</select>"
-
-    if buses:
-        html += """
-        <hr>
-        <label>Select Bus</label>
-        <select name="bus_id" class="form-control">
-        """
-        for b in buses:
-            t = b["departure_time"].strftime("%H:%M")
-            html += f'<option value="{b["id"]}">{b["bus_name"]} ({t})</option>'
-
-        html += """
-        </select>
-        <button formaction="/end-trip"
-                class="btn btn-danger mt-3 w-100">
-            Trip Close
-        </button>
-        """
-
-    html += "</form>"
-
-    return render_template_string(BASE_HTML, content=html)
-
-
-@app.route("/end-trip", methods=["POST"])
-@admin_required
-@safe_db
-def end_trip():
-    bus_id = request.form["bus_id"]
-    conn, cur = get_db()  # Render PostgreSQL
-
-    # Local backup सिर्फ PC पर
-    local_db = get_local_db()
-    if local_db:
-        try:
-            lcur = local_db.cursor()
-
-            # SEAT BOOKINGS copy
-            cur.execute("SELECT * FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
-            rows = cur.fetchall()
-            for r in rows:
-                lcur.execute("""
-                    INSERT INTO seat_bookings
-                    (id, schedule_id, seat_number, passenger_name, mobile,
-                     from_station, to_station, travel_date, status,
-                     fare, payment_mode, booked_by_type,
-                     booked_by_id, counter_id, order_id, payment_id, created_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, tuple(r.values()))
-
-            # FACES copy
-            cur.execute("SELECT * FROM faces WHERE bus_id=%s", (bus_id,))
-            faces = cur.fetchall()
-            for f in faces:
-                lcur.execute("""
-                    INSERT INTO faces (id, bus_id, face_data, face_image)
-                    VALUES (%s,%s,%s,%s)
-                """, tuple(f.values()))
-
-            # FACE LOGS copy
-            cur.execute("SELECT * FROM face_logs WHERE bus_id=%s", (bus_id,))
-            logs = cur.fetchall()
-            for log in logs:
-                lcur.execute("""
-                    INSERT INTO face_logs
-                    (id, face_id, bus_id, entry_time, latitude, longitude)
-                    VALUES (%s,%s,%s,%s,%s,%s)
-                """, tuple(log.values()))
-
-            local_db.commit()
-            print("✅ Data backed up to PC MySQL")
-
-        except Exception as e:
-            print(f"❌ Local backup failed: {e}")
-    else:
-        print("⚠️ Skipping local backup (Render mode)")
-
-    # Render DB से delete
-    cur.execute("DELETE FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
-    cur.execute("DELETE FROM face_logs WHERE bus_id=%s", (bus_id,))
-    cur.execute("DELETE FROM faces WHERE bus_id=%s", (bus_id,))
-    conn.commit()
-
-    return render_template_string(
-        BASE_HTML,
-        content="""
-        <h2 class='text-center text-success mt-5'>
-            Trip Closed Successfully ✅<br>
-            पूरा Data Safe हो गया 💾
-            """ + ("" if local_db else "<br><small class='text-warning'>(Local backup skipped)</small>") + """
-        </h2>
-        """
-    )
 #******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
