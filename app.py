@@ -1044,12 +1044,12 @@ async function bookSeat(seat, btn){{
     if(!mobile) return;
 
     let payment = "online";  // default
-    let amount = 0;          // default
+    let fare = 0;          // default
     
     let role = "{role}";
     
     if(role !== "user"){{
-        amount = prompt("Enter Amount");
+        fare = prompt("Enter fare");
         payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
     }}
 
@@ -1065,6 +1065,7 @@ async function bookSeat(seat, btn){{
         from: "{fs}",
         to: "{ts}",
         payment_mode: payment,
+        fare: fare,   
         booked_by_type: role,
         booked_by_id: {user_id},
         counter_id: {counter_no if counter_no else 'null'}
