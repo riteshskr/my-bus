@@ -998,28 +998,25 @@ let bookingLock = false;
 // ===== MAP =====
 const map = L.map("seat-map").setView([{lat},{lng}], 9);
 L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
-const busIcon = L.divIcon({{
-        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
-        className: 'bus-icon',
-        iconSize: [60,60]
-    }});
-    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
+const busIcon = L.divIcon({{
+    html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+    className: 'bus-icon',
+    iconSize: [40,40]
+}});
+let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
+// ===== STATIONS + ROUTE =====
 const stations = {stations_json};
 let routePts = [];
-
 stations.forEach(s => {{
     let la = parseFloat(s.lat), ln = parseFloat(s.lng);
-    if(!isNaN(la) && !isNaN(ln)){{
-        routePts.push([la,ln]);
-        
-    }}
+    if(!isNaN(la) && !isNaN(ln)) routePts.push([la, ln]);
 }});
-
 if(routePts.length>1){{
-    let p = L.polyline(routePts).addTo(map);
-    map.fitBounds(p.getBounds());
+    let poly = L.polyline(routePts, {{color:'blue'}}).addTo(map);
+    map.fitBounds(poly.getBounds());
 }}
+
 
 const socket = io();
 socket.on("seat_update", d => {{
