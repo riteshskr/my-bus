@@ -998,6 +998,12 @@ let bookingLock = false;
 // ===== MAP =====
 const map = L.map("seat-map").setView([{lat},{lng}], 9);
 L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
+const busIcon = L.divIcon({{
+        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+        className: 'bus-icon',
+        iconSize: [60,60]
+    }});
+    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
 const stations = {stations_json};
 let routePts = [];
