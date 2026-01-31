@@ -46,12 +46,33 @@ if not DATABASE_URL:
 
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
-local_conn = mysql.connector.connect(
-    host=os.getenv("LOCAL_DB_HOST"),
-    user=os.getenv("LOCAL_DB_USER"),
-    password=os.getenv("LOCAL_DB_PASSWORD"),
-    database=os.getenv("LOCAL_DB_NAME")
-)
+local_conn = None
+
+
+def get_local_db():
+    """सिर्फ LOCAL machine पर ही PC MySQL connect करेगा"""
+    global local_conn
+
+    if local_conn is not None:
+        return local_conn
+
+    # Render पर LOCAL_MODE env variable मत रखना
+    if os.getenv("LOCAL_MODE") != "1":
+        print("⚠️ Local DB disabled (Render mode)")
+        return None
+
+    try:
+        local_conn = mysql.connector.connect(
+            host=os.getenv("LOCAL_DB_HOST", "localhost"),
+            user=os.getenv("LOCAL_DB_USER", "root"),
+            password=os.getenv("LOCAL_DB_PASSWORD", ""),
+            database=os.getenv("LOCAL_DB_NAME", "bus_db")
+        )
+        print("✅ Local MySQL connected")
+        return local_conn
+    except Exception as e:
+        print(f"❌ Local DB Error: {e}")
+        return None
 
 @atexit.register
 def shutdown_pool():
@@ -859,54 +880,61 @@ def trip_close():
 
     return render_template_string(BASE_HTML, content=html)
 
+
 @app.route("/end-trip", methods=["POST"])
 @admin_required
 @safe_db
 def end_trip():
     bus_id = request.form["bus_id"]
-    conn, cur = get_db()
-    lcur = local_conn.cursor()
+    conn, cur = get_db()  # Render PostgreSQL
 
-    # ===== SEAT BOOKINGS =====
-    cur.execute("SELECT * FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
-    rows = cur.fetchall()
+    # Local backup सिर्फ PC पर
+    local_db = get_local_db()
+    if local_db:
+        try:
+            lcur = local_db.cursor()
 
-    for r in rows:
-        lcur.execute("""
-            INSERT INTO seat_bookings
-            (id, schedule_id, seat_number, passenger_name, mobile,
-             from_station, to_station, travel_date, status,
-             fare, payment_mode, booked_by_type,
-             booked_by_id, counter_id, order_id, payment_id, created_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, tuple(r.values()))
+            # SEAT BOOKINGS copy
+            cur.execute("SELECT * FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
+            rows = cur.fetchall()
+            for r in rows:
+                lcur.execute("""
+                    INSERT INTO seat_bookings
+                    (id, schedule_id, seat_number, passenger_name, mobile,
+                     from_station, to_station, travel_date, status,
+                     fare, payment_mode, booked_by_type,
+                     booked_by_id, counter_id, order_id, payment_id, created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, tuple(r.values()))
 
-    # ===== FACES =====
-    cur.execute("SELECT * FROM faces WHERE bus_id=%s", (bus_id,))
-    faces = cur.fetchall()
+            # FACES copy
+            cur.execute("SELECT * FROM faces WHERE bus_id=%s", (bus_id,))
+            faces = cur.fetchall()
+            for f in faces:
+                lcur.execute("""
+                    INSERT INTO faces (id, bus_id, face_data, face_image)
+                    VALUES (%s,%s,%s,%s)
+                """, tuple(f.values()))
 
-    for f in faces:
-        lcur.execute("""
-            INSERT INTO faces
-            (id, bus_id, face_data, face_image)
-            VALUES (%s,%s,%s,%s)
-        """, tuple(f.values()))
+            # FACE LOGS copy
+            cur.execute("SELECT * FROM face_logs WHERE bus_id=%s", (bus_id,))
+            logs = cur.fetchall()
+            for log in logs:
+                lcur.execute("""
+                    INSERT INTO face_logs
+                    (id, face_id, bus_id, entry_time, latitude, longitude)
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                """, tuple(log.values()))
 
-    # ===== FACE LOGS =====
-    cur.execute("SELECT * FROM face_logs WHERE bus_id=%s", (bus_id,))
-    logs = cur.fetchall()
+            local_db.commit()
+            print("✅ Data backed up to PC MySQL")
 
-    for log in logs:
-        lcur.execute("""
-            INSERT INTO face_logs
-            (id, face_id, bus_id, entry_time, latitude, longitude)
-            VALUES (%s,%s,%s,%s,%s,%s)
-        """, tuple(log.values()))
+        except Exception as e:
+            print(f"❌ Local backup failed: {e}")
+    else:
+        print("⚠️ Skipping local backup (Render mode)")
 
-    # PC में save
-    local_conn.commit()
-
-    # Render से delete
+    # Render DB से delete
     cur.execute("DELETE FROM seat_bookings WHERE schedule_id=%s", (bus_id,))
     cur.execute("DELETE FROM face_logs WHERE bus_id=%s", (bus_id,))
     cur.execute("DELETE FROM faces WHERE bus_id=%s", (bus_id,))
@@ -917,7 +945,8 @@ def end_trip():
         content="""
         <h2 class='text-center text-success mt-5'>
             Trip Closed Successfully ✅<br>
-            पूरा Data PC में Safe हो गया 💾
+            पूरा Data Safe हो गया 💾
+            """ + ("" if local_db else "<br><small class='text-warning'>(Local backup skipped)</small>") + """
         </h2>
         """
     )
