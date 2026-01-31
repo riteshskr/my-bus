@@ -818,10 +818,11 @@ def login():
             user = cur.fetchone()
 
             if user:
-                session.clear()   # ✅ clean old session
+                session.clear()
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
-                session["role"] = user["role"]        # admin / office / conductor
+                session["role"] = user["role"]
+                session["counter_no"] = user["counter_no"]  # admin / office / conductor
 
 
                 return redirect("/dashboard")
@@ -1126,8 +1127,15 @@ def book():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
         # ===== Temporary Fare =====
-        fare = random.randint(250, 450)
+        role = data['booked_by_type']
 
+        if role == "user":
+            fare = random.randint(250, 450)
+            payment_mode = "online"
+        else:
+            fare = int(data.get("fare", 0))  # ✅ counter/admin ka input
+            payment_mode = data.get("payment_mode", "cash")
+            
         # 👉 RAZORPAY IGNORE → ALWAYS CASH
         role = data['booked_by_type']
 
