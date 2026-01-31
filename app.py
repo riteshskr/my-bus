@@ -1043,10 +1043,13 @@ async function bookSeat(seat, btn){{
     let mobile = prompt("Mobile Number");
     if(!mobile) return;
 
-    let payment = "online";
+    let payment = "online";  // default
+    let amount = 0;          // default
+    
     let role = "{role}";
-
+    
     if(role !== "user"){{
+        amount = prompt("Enter Amount");
         payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
     }}
 
