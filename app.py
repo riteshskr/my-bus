@@ -1006,7 +1006,7 @@ stations.forEach(s => {{
     let la = parseFloat(s.lat), ln = parseFloat(s.lng);
     if(!isNaN(la) && !isNaN(ln)){{
         routePts.push([la,ln]);
-        L.marker([la,ln]).addTo(map).bindPopup(s.station_name);
+        
     }}
 }});
 
