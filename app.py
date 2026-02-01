@@ -929,14 +929,22 @@ def admin():
 @safe_db
 def select(sid):
     conn, cur = get_db()
+
+    # ✅ इस bus की route_id fetch करें
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
     route_id = row["route_id"] if row else 1
 
-    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (route_id,))
-    stations = [r["station_name"] for r in cur.fetchall()]
+    # ✅ Route के सभी stations order के साथ
+    cur.execute("""
+        SELECT station_name, station_order
+        FROM route_stations
+        WHERE route_id=%s
+        ORDER BY station_order
+    """, (route_id,))
+    stations_data = cur.fetchall()
+    stations = [s["station_name"] for s in stations_data]
 
-    opts = "".join(f"<option>{s}</option>" for s in stations)
     today = date.today().isoformat()
 
     if request.method == "POST":
@@ -945,18 +953,25 @@ def select(sid):
         d = request.form["date"]
         return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
-    form = f'''
-    <div class="card mx-auto" style="max-width:500px">
+    # Dropdown options HTML
+    options = "".join(f"<option>{s}</option>" for s in stations)
+
+    form_html = f"""
+    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
         <div class="card-body">
-            <h5 class="card-title text-center">🎫 Journey Details</h5>
+            <h4 class="card-title text-center mb-4">🎫 Journey Details</h4>
             <form method="POST">
                 <div class="mb-3">
                     <label class="form-label">From:</label>
-                    <select name="from" class="form-select" required>{opts}</select>
+                    <select name="from" class="form-select" required onchange="updateTo(this.value)">
+                        {options}
+                    </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">To:</label>
-                    <select name="to" class="form-select" required>{opts}</select>
+                    <select name="to" class="form-select" required>
+                        {options}
+                    </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Date:</label>
@@ -965,8 +980,27 @@ def select(sid):
                 <button class="btn btn-success w-100">View Available Seats</button>
             </form>
         </div>
-    </div>'''
-    return render_template_string(BASE_HTML, content=form)
+    </div>
+
+    <script>
+    const stations = {stations_data};  // stations with order
+    function updateTo(fromStation){{
+        const fromOrder = stations.find(s=>s.station_name===fromStation).station_order;
+        const toSelect = document.querySelector('select[name="to"]');
+        toSelect.innerHTML = '';
+        stations.forEach(s=>{{
+            if(s.station_order > fromOrder){{
+                let opt = document.createElement('option');
+                opt.value = s.station_name;
+                opt.innerText = s.station_name;
+                toSelect.appendChild(opt);
+            }}
+        }});
+    }}
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=form_html)
 
 
 @app.route("/seats/<int:sid>")
@@ -1608,13 +1642,31 @@ def search():
         WHERE rs1.station_name = %s AND rs2.station_name = %s
     """, (from_station, to_station))
 
-    routes = cur.fetchall()
-    if not routes:
-        return f"No routes found from {from_station} to {to_station}", 404
+    route_ids = [r['route_id'] for r in cur.fetchall()]
 
-    # If multiple routes, show first one for demo
-    route_id = routes[0]["id"]
-    return redirect(f"/buses/{route_id}")
+    if not route_ids:
+        return f"कोई route नहीं मिला {from_station} → {to_station}", 404
+
+    # ✅ Routes की पूरी जानकारी fetch करें
+    cur.execute("""
+            SELECT id, route_name, distance_km
+            FROM routes
+            WHERE id = ANY(%s)
+        """, (route_ids,))
+
+    routes = cur.fetchall()
+
+    # HTML में दिखाएँ
+    html = f"<h3>Routes from {from_station} → {to_station}:</h3>"
+    for r in routes:
+        html += f"""
+            <div class='card mb-3 p-3'>
+                <h5>🛣️ {r['route_name']} ({r['distance_km']} km)</h5>
+                <a href='/buses/{r['id']}' class='btn btn-primary btn-sm'>View Buses</a>
+            </div>
+            """
+
+    return render_template_string(BASE_HTML, content=html)
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
