@@ -1588,7 +1588,33 @@ def verify():
     })
 
     return jsonify({"ok": True})
+@app.route("/search", methods=["POST"])
+@safe_db
+def search():
+    from_station = request.form.get("from")
+    to_station = request.form.get("to")
+    travel_date = request.form.get("date")
 
+    if not from_station or not to_station or not travel_date:
+        return "Please fill all fields", 400
+
+    # Find routes that include both stations
+    conn, cur = get_db()
+    cur.execute("""
+        SELECT DISTINCT r.id, r.route_name
+        FROM routes r
+        JOIN route_stations rs1 ON r.id = rs1.route_id
+        JOIN route_stations rs2 ON r.id = rs2.route_id
+        WHERE rs1.station_name = %s AND rs2.station_name = %s
+    """, (from_station, to_station))
+
+    routes = cur.fetchall()
+    if not routes:
+        return f"No routes found from {from_station} to {to_station}", 404
+
+    # If multiple routes, show first one for demo
+    route_id = routes[0]["id"]
+    return redirect(f"/buses/{route_id}")
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
