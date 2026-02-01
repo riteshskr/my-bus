@@ -821,8 +821,7 @@ def login():
                 session.clear()   # ✅ clean old session
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
-                session["role"] = user["role"]
-                session["counter_no"] = user["counter_no"] # admin / office / conductor
+                session["role"] = user["role"] # admin / office / conductor
                 return redirect("/dashboard")
             else:
                 error = "गलत यूज़रनेम या पासवर्ड"
