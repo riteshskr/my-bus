@@ -491,7 +491,7 @@ footer p{font-size:.9rem;}
     {% for s in stations %}
       <option value="{{s}}">
     {% endfor %}
-  </datalist>	
+     </datalist>	
       <input type="date" name="date">
       <button type="submit">Search</button>
     </form>
@@ -651,62 +651,15 @@ LOGIN_HTML = """
 def home():
     conn, cur = get_db()
 
-    # सभी Routes (बड़े cards)
+    # Fetch all routes for route cards
     cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
     routes = cur.fetchall()
 
-    # Hero Section
-    hero_section = '''
-    <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
+    # Fetch all unique stations for search
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+    stations = [r["station_name"] for r in cur.fetchall()]
 
-        <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
-    </div>
-    '''
-
-    # 🔥 Route Selection Cards (बड़ा + Clear)
-    routes_section = '<div class="row g-4 mb-5">'
-    for r in routes:
-        routes_section += f'''
-        <div class="col-md-4 col-lg-3">
-            <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
-                <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
-                    <h3 class="fw-bold mb-3">{r['route_name']}</h3>
-
-                        🚀 Buses देखें → Bus {r['id']}
-                    </button>
-                </div>
-            </div>
-        </div>'''
-    routes_section += '</div>'
-    # Live GPS Status (नीचे छोटा)
-    cur.execute("""
-        SELECT s.id, s.bus_name, r.route_name, 
-               s.current_lat as lat, s.current_lng as lng
-        FROM schedules s JOIN routes r ON s.route_id = r.id
-        ORDER BY s.id LIMIT 4
-    """)
-    live_buses = cur.fetchall()
-
-    live_section = '<h3 class="text-center mb-4">🟢 Live Running Buses</h3><div class="row g-4">'
-    for bus in live_buses:
-        status = "🟢 LIVE GPS" if bus.get('lat') else "⚪ Ready"
-        coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
-        live_section += f'''
-        <div class="col-md-6 col-lg-3">
-            <div class="card border-0 shadow">
-                <div class="card-body text-center p-3">
-                    <h6 class="fw-bold">{bus['bus_name']}</h6>
-                    <small class="text-muted">{bus['route_name']}</small><br>
-                    <span class="badge {'bg-success' if bus.get('lat') else 'bg-secondary'}">{status}</span>
-                    <div class="mt-2"><small>📍 {coords}</small></div>
-                </div>
-            </div>
-        </div>'''
-    live_section += '</div>'
-
-    content = hero_section + routes_section + live_section
-    return render_template_string(BASE_HTML, content=content)
-
+    return render_template_string(BASE_HTML, stations=stations, routes=routes)
 
 @app.route("/dashboard")
 def dashboard():
