@@ -1,10 +1,11 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 import setuptools
 import os, random
 from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g, session, render_template
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
@@ -47,6 +48,7 @@ if not DATABASE_URL:
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
 
+
 @atexit.register
 def shutdown_pool():
     pool.close()
@@ -60,6 +62,7 @@ def get_db():
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
     return g.db_conn, g.db_cur
 
+
 @app.teardown_appcontext
 def close_db(error=None):
     cur = g.pop('db_cur', None)
@@ -70,26 +73,31 @@ def close_db(error=None):
     if conn:
         pool.putconn(conn)
 
+
 def safe_db(func):
     @wraps(func)
     def wrapper(*a, **kw):
         try:
             return func(*a, **kw)
         finally:
-            close_db()   # चाहे error आये या न आये
+            close_db()  # चाहे error आये या न आये
+
     return wrapper
+
 
 def admin_required(f):
     @wraps(f)
-    def wrap(*a,**k):
+    def wrap(*a, **k):
         if not session.get("user_logged_in"):
             return redirect("/login")
 
         if session.get("role") != "admin":
             return "Access Denied", 403
 
-        return f(*a,**k)
+        return f(*a, **k)
+
     return wrap
+
 
 # ================= DB INIT =================
 def init_db():
@@ -98,7 +106,7 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
-        #cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
+        # cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS faces (
                 id SERIAL PRIMARY KEY,
@@ -119,8 +127,6 @@ def init_db():
                 longitude DOUBLE PRECISION
             );
             """)
-
-
 
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
@@ -210,8 +216,6 @@ def init_db():
         if count == 0:
             cur.execute(""" INSERT INTO  admins(username, password, role, counter_no)
             VALUES('admin', 'admin123', 'admin', 1);""")
-
-
 
         cur.execute("SELECT COUNT(*) FROM routes")
         count = cur.fetchone()[0]
@@ -330,129 +334,250 @@ BASE_HTML = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🚌 SmartBus – </title>
+<title>My Bus AI - Book Your Journey</title>
 
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
 
 <style>
-body{
- background: linear-gradient(120deg,#ff3d00,#ff9800);
- min-height:100vh;
- font-family: 'Segoe UI',sans-serif;
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
+
+body{background:#f5f7fb;color:#222;}
+
+/* NAVBAR */
+.navbar{
+  position:fixed;
+  top:0;left:0;width:100%;
+  background:white;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:15px 8%;
+  box-shadow:0 5px 20px rgba(0,0,0,.1);
+  z-index:1000;
 }
-.main-container{
- background: rgba(255,255,255,0.97);
- border-radius:25px;
- box-shadow:0 25px 50px rgba(0,0,0,.25);
- margin:20px auto;
- padding:30px;
- max-width:1200px;
-}
-.topbar{
- display:flex;
- justify-content:space-between;
- align-items:center;
- margin-bottom:20px;
-}
-.logo{
- font-size:28px;
- font-weight:700;
- color:#ff3d00;
-}
-.topbar a{
- margin-left:20px;
- text-decoration:none;
- font-weight:600;
- color:#333;
-}
+.logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
+.navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
+.navbar a:hover{color:#ff512f;}
+
+/* HERO */
 .hero{
- background:linear-gradient(120deg,#ff3d00,#ff9800);
- color:white;
- padding:30px;
- border-radius:20px;
- text-align:center;
- margin-bottom:25px;
- box-shadow:0 15px 30px rgba(0,0,0,.2);
+  height:100vh;
+  background:
+    linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80");
+  background-size:cover;
+  background-position:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  color:white;
+  padding-top:70px;
 }
-.route-card,.bus-card{
- border-radius:20px;
- border:none;
- transition:.3s;
- cursor:pointer;
- padding:15px;
- margin-bottom:15px;
- box-shadow:0 10px 20px rgba(0,0,0,.1);
+
+.hero h1{font-size:3.5rem;}
+.hero p{font-size:1.3rem;margin:15px 0 30px;}
+
+/* SEARCH */
+.search-box{
+  background:white;
+  padding:20px;
+  border-radius:15px;
+  display:flex;
+  gap:10px;
+  box-shadow:0 20px 40px rgba(0,0,0,.3);
 }
-.route-card:hover,.bus-card:hover{
- transform:translateY(-6px);
- box-shadow:0 20px 40px rgba(0,0,0,.2);
+.search-box input{
+  padding:12px;
+  border:none;
+  outline:none;
+  border-radius:8px;
+  width:180px;
+  background:#f1f3f7;
 }
-.nav-buttons{
- text-align:center;
- margin-top:40px;
+.search-box button{
+  padding:12px 30px;
+  border:none;
+  border-radius:10px;
+  background:linear-gradient(45deg,#ff512f,#dd2476);
+  color:white;
+  font-weight:600;
+  cursor:pointer;
 }
-.btn-custom{
- border-radius:25px;
- padding:12px 28px;
- font-weight:600;
+
+/* STATS */
+.stats{
+  padding:60px 10%;
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  text-align:center;
+  gap:30px;
 }
+.stat h2{color:#ff512f;font-size:2.2rem;}
+.stat p{color:#666;}
+
+/* FEATURES */
+.features{
+  padding:60px 10%;
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+  gap:30px;
+}
+.card{
+  background:white;
+  border-radius:20px;
+  box-shadow:0 15px 30px rgba(0,0,0,.1);
+  transition:.4s;
+}
+.card:hover{transform:translateY(-10px);}
+.card img{
+  width:100%;height:180px;object-fit:cover;
+  border-radius:20px 20px 0 0;
+}
+.card .content{padding:20px;}
+
+/* CTA */
+.cta{
+  background:linear-gradient(45deg,#ff512f,#dd2476);
+  color:white;
+  padding:60px 10%;
+  text-align:center;
+}
+.cta h2{font-size:2.5rem;margin-bottom:15px;}
+.cta button{
+  padding:15px 40px;
+  border:none;
+  border-radius:30px;
+  background:white;
+  color:#ff512f;
+  font-weight:600;
+  cursor:pointer;
+}
+
+/* FOOTER */
+footer{
+  background:#111;
+  color:#aaa;
+  padding:40px 10%;
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+}
+footer h3{color:white;margin-bottom:10px;}
+footer p{font-size:.9rem;}
+.copy{text-align:center;background:#000;color:#777;padding:15px;}
 </style>
 </head>
 <body>
-<div class="container-fluid py-4">
- <div class="main-container">
-  <div class="topbar">
-    <div class="logo">🚌 My Bus</div>
-    <div>
-      <a href="/">Home</a>
-      <a href="/bookings">My Bookings</a>
-      <a href="/offers">Offers</a>
-      <a href="/login">Login</a>
-    </div>
-  </div>
-  <div class="hero">
-    <h2> My Bus Booking System</h2>
-    <p>Live GPS • Real-time Seats • Secure Payments</p>
-  </div>
 
-  <!-- Dynamic Page Content -->
-  {{content|safe}}
-
-  <div class="nav-buttons">
-    <a href="/" class="btn btn-light btn-lg btn-custom me-3">🏠 Home</a>
-    <a href="/driver/1" class="btn btn-success btn-lg btn-custom me-3">📱 Driver GPS</a>
-    <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">🗺️ Live Track</a>
+<!-- NAVBAR -->
+<div class="navbar">
+  <div class="logo">🚌 My Bus AI</div>
+  <div>
+    <a href="/login">User Login</a>
+    <a href="/admin">Admin</a>
+    <a href="/counter">Counter</a>
   </div>
- </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-function selectRoute(rid){
-    window.location.href = "/buses/" + rid;
-}
-</script>
+<!-- HERO -->
+<section class="hero">
+  <div>
+    <h1>India’s Smart Bus Platform</h1>
+    <p>Book | Track | Face Boarding | Live Seats</p>
+    <form class="search-box" action="/search" method="POST">
+      <input name="from" placeholder="From">
+      <input name="to" placeholder="To">
+      <datalist id="stations">
+    {% for s in stations %}
+      <option value="{{s}}">
+    {% endfor %}
+  </datalist>	
+      <input type="date" name="date">
+      <button type="submit">Search</button>
+    </form>
+  </div>
+</section>
+
+<!-- STATS -->
+<section class="stats">
+  <div class="stat"><h2>5,000+</h2><p>Buses</p></div>
+  <div class="stat"><h2>2M+</h2><p>Passengers</p></div>
+  <div class="stat"><h2>99%</h2><p>On-Time</p></div>
+  <div class="stat"><h2>AI</h2><p>Face Boarding</p></div>
+</section>
+
+<!-- FEATURES -->
+<section class="features">
+  <div class="card">
+    <img src="https://images.unsplash.com/photo-1509749837427-ac94a2553d0e">
+    <div class="content">
+      <h3>Luxury Buses</h3>
+      <p>AC Sleeper, Volvo & Electric</p>
+    </div>
+  </div>
+  <div class="card">
+    <img src="https://images.unsplash.com/photo-1519582149095-fe7d19b07b63">
+    <div class="content">
+      <h3>Live GPS</h3>
+      <p>Real-time tracking</p>
+    </div>
+  </div>
+  <div class="card">
+    <img src="https://images.unsplash.com/photo-1500530855697-b586d89ba3ee">
+    <div class="content">
+      <h3>AI Boarding</h3>
+      <p>No ticket, just face scan</p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <h2>Ready for Smart Travel?</h2>
+  <p>Join India’s first AI-powered bus system</p>
+  <button onclick="location.href='/register'">Create Free Account</button>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div>
+    <h3>SmartBus AI</h3>
+    <p>Future of travel in India</p>
+  </div>
+  <div>
+    <h3>Company</h3>
+    <p>About | Careers | Blog</p>
+  </div>
+  <div>
+    <h3>Support</h3>
+    <p>Help Center | Terms | Privacy</p>
+  </div>
+</footer>
+<div class="copy">© 2026 SmartBus AI</div>
+
 </body>
 </html>
 """
-#======== home page ========
+
 HOME_HTML = """
 <div class="row g-3 mb-4">
   <div class="col-md-4">
     <select class="form-select" id="from">
       <option selected disabled>From</option>
-      {{from_options|safe}}
+      <option>Delhi</option>
+      <option>Mumbai</option>
+      <option>Bengaluru</option>
+      <option>Jaipur</option>
     </select>
   </div>
 
   <div class="col-md-4">
     <select class="form-select" id="to">
       <option selected disabled>To</option>
-      {{to_options|safe}}
+      <option>Jaipur</option>
+      <option>Pune</option>
+      <option>Chennai</option>
+      <option>Hyderabad</option>
     </select>
   </div>
 
@@ -475,12 +600,12 @@ function searchBus(){
     alert("Please fill all fields");
     return;
   }
-  window.location.href = `/search?from=${f}&to=${t}&date=${d}`;
+  alert("Searching buses from " + f + " to " + t + " on " + d);
 }
 </script>
 """
 
-#===== login html =======
+# ===== login html =======
 LOGIN_HTML = """
 <div class="row justify-content-center mt-5">
   <div class="col-md-4">
@@ -493,7 +618,7 @@ LOGIN_HTML = """
        <!-- Hidden fields (Chrome autofill रोकने के लिए) -->
           <input type="text" style="display:none">
           <input type="password" style="display:none">
-          
+
           <input type="text" name="username"
                  class="form-control mb-3"
                  placeholder="Username" required>
@@ -518,13 +643,70 @@ LOGIN_HTML = """
   </div>
 </div>
 """
+
+
 # ================= ROUTES =================
 @app.route("/")
+@safe_db
 def home():
-    stations = ["बीकानेर", "जयपुर", "जोधपुर"]
-    return render_template("home.html", stations=stations)
+    conn, cur = get_db()
 
-#===== dash bord ======
+    # सभी Routes (बड़े cards)
+    cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
+    routes = cur.fetchall()
+
+    # Hero Section
+    hero_section = '''
+    <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
+
+        <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
+    </div>
+    '''
+
+    # 🔥 Route Selection Cards (बड़ा + Clear)
+    routes_section = '<div class="row g-4 mb-5">'
+    for r in routes:
+        routes_section += f'''
+        <div class="col-md-4 col-lg-3">
+            <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
+                <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
+                    <h3 class="fw-bold mb-3">{r['route_name']}</h3>
+
+                        🚀 Buses देखें → Bus {r['id']}
+                    </button>
+                </div>
+            </div>
+        </div>'''
+    routes_section += '</div>'
+    # Live GPS Status (नीचे छोटा)
+    cur.execute("""
+        SELECT s.id, s.bus_name, r.route_name, 
+               s.current_lat as lat, s.current_lng as lng
+        FROM schedules s JOIN routes r ON s.route_id = r.id
+        ORDER BY s.id LIMIT 4
+    """)
+    live_buses = cur.fetchall()
+
+    live_section = '<h3 class="text-center mb-4">🟢 Live Running Buses</h3><div class="row g-4">'
+    for bus in live_buses:
+        status = "🟢 LIVE GPS" if bus.get('lat') else "⚪ Ready"
+        coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
+        live_section += f'''
+        <div class="col-md-6 col-lg-3">
+            <div class="card border-0 shadow">
+                <div class="card-body text-center p-3">
+                    <h6 class="fw-bold">{bus['bus_name']}</h6>
+                    <small class="text-muted">{bus['route_name']}</small><br>
+                    <span class="badge {'bg-success' if bus.get('lat') else 'bg-secondary'}">{status}</span>
+                    <div class="mt-2"><small>📍 {coords}</small></div>
+                </div>
+            </div>
+        </div>'''
+    live_section += '</div>'
+
+    content = hero_section + routes_section + live_section
+    return render_template_string(BASE_HTML, content=content)
+
 
 @app.route("/dashboard")
 def dashboard():
@@ -542,7 +724,7 @@ def dashboard():
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
             <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
-            
+
         </div>
         """
 
@@ -562,6 +744,7 @@ def dashboard():
         </div>
         """
     )
+
 
 @app.route("/buses/<int:rid>")
 @safe_db
@@ -678,7 +861,9 @@ def buses(rid):
     """
 
     return render_template_string(BASE_HTML, content=html)
-#**** create counter ******
+
+
+# **** create counter ******
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
 def create_counter():
@@ -735,7 +920,8 @@ def create_counter():
 
     return render_template_string(BASE_HTML, content=form_html)
 
-#******* login ********
+
+# ******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -758,10 +944,10 @@ def login():
             user = cur.fetchone()
 
             if user:
-                session.clear()   # ✅ clean old session
+                session.clear()  # ✅ clean old session
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
-                session["role"] = user["role"] # admin / office / conductor
+                session["role"] = user["role"]  # admin / office / conductor
                 return redirect("/dashboard")
             else:
                 error = "गलत यूज़रनेम या पासवर्ड"
@@ -776,12 +962,15 @@ def login():
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error)
     )
+
+
 @app.route("/admin")
 def admin():
     return render_template_string(
         BASE_HTML,
         content="<h2 class='text-center mt-5'>Welcome Admin 🎉</h2>"
     )
+
 
 @app.route("/select/<int:sid>", methods=["GET", "POST"])
 @safe_db
@@ -830,10 +1019,9 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
-    d  = request.args.get("d", date.today().isoformat())
+    d = request.args.get("d", date.today().isoformat())
 
     conn, cur = get_db()
 
@@ -983,9 +1171,9 @@ async function bookSeat(seat, btn){{
 
     let payment = "online";  // default
     let fare = 0;          // default
-    
+
     let role = "{role}";
-    
+
     if(role !== "user"){{
         fare = prompt("Enter fare");
         payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
@@ -1031,6 +1219,7 @@ async function bookSeat(seat, btn){{
 """
 
     return render_template_string(BASE_HTML, content=html)
+
 
 @app.route("/book", methods=["POST"])
 @safe_db
@@ -1446,62 +1635,7 @@ def verify():
     })
 
     return jsonify({"ok": True})
-#======= search ========
-@app.route("/search")
-@safe_db
-def search():
-    fs = request.args.get("from")
-    ts = request.args.get("to")
-    d  = request.args.get("date")
 
-    conn, cur = get_db()
-
-    # route find करो जो इन stations से गुजरता हो
-    cur.execute("""
-        SELECT r.id, r.route_name
-        FROM routes r
-        JOIN route_stations f ON r.id=f.route_id
-        JOIN route_stations t ON r.id=t.route_id
-        WHERE f.station_name=%s
-          AND t.station_name=%s
-          AND f.station_order < t.station_order
-    """, (fs, ts))
-
-    routes = cur.fetchall()
-
-    if not routes:
-        return render_template_string(
-            BASE_HTML,
-            content="<h3 class='text-center text-danger'>No buses found 😢</h3>"
-        )
-
-    html = f"<h3 class='text-center mb-4'>🚌 {fs} → {ts} ({d})</h3>"
-
-    for r in routes:
-        cur.execute("""
-            SELECT id, bus_name, departure_time
-            FROM schedules
-            WHERE route_id=%s
-            ORDER BY departure_time
-        """, (r["id"],))
-
-        buses = cur.fetchall()
-
-        for b in buses:
-            html += f"""
-            <div class="card mb-3 shadow">
-                <div class="card-body text-center">
-                    <h4>{b['bus_name']}</h4>
-                    <h5>⏰ {b['departure_time']}</h5>
-                    <a href="/select/{b['id']}?fs={fs}&ts={ts}&d={d}"
-                       class="btn btn-success mt-2">
-                       Book Seat
-                    </a>
-                </div>
-            </div>
-            """
-
-    return render_template_string(BASE_HTML, content=html)
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
