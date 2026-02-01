@@ -930,8 +930,7 @@ def admin():
 def select(sid):
     # DB connection
     conn, cur = get_db()
-    print("SID =", sid)
-    print("SID TYPE =", type(sid))
+
     # ✅ Bus schedule fetch
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
@@ -1655,7 +1654,8 @@ def search():
     """, (from_station, to_station))
 
     route_ids = [r['route_id'] for r in cur.fetchall()]
-
+    print("SID =", route_ids)
+    
     if not route_ids:
         return f"कोई route नहीं मिला {from_station} → {to_station}", 404
 
