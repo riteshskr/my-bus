@@ -651,27 +651,15 @@ LOGIN_HTML = """
 def home():
     conn, cur = get_db()
 
-    # Fetch all unique station names
-    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
-    stations = [row["station_name"] for row in cur.fetchall()]
+    # Fetch all routes for route cards
+    cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
+    routes = cur.fetchall()
 
-    # Render a simple HTML form (you can integrate in BASE_HTML)
-    form_html = """
-    <form action="/search" method="POST">
-        <select name="from" required>
-            <option value="">From</option>
-            {options}
-        </select>
-        <select name="to" required>
-            <option value="">To</option>
-            {options}
-        </select>
-        <input type="date" name="date" required>
-        <button type="submit">Search</button>
-    </form>
-    """
-    options_html = "".join([f"<option value='{s}'>{s}</option>" for s in stations])
-    return form_html.format(options=options_html)
+    # Fetch all unique stations for search
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+    stations = [r["station_name"] for r in cur.fetchall()]
+
+    return render_template_string(BASE_HTML, stations=stations, routes=routes)
 
 @app.route("/dashboard")
 def dashboard():
@@ -1610,33 +1598,23 @@ def search():
     if not from_station or not to_station or not travel_date:
         return "Please fill all fields", 400
 
+    # Find routes that include both stations
     conn, cur = get_db()
-
-    # Get route IDs that include both stations in correct order
     cur.execute("""
-        SELECT DISTINCT rs1.route_id
-        FROM route_stations rs1
-        JOIN route_stations rs2 ON rs1.route_id = rs2.route_id
-        WHERE rs1.station_name = %s
-          AND rs2.station_name = %s
-          AND rs1.station_order < rs2.station_order
+        SELECT DISTINCT r.id, r.route_name
+        FROM routes r
+        JOIN route_stations rs1 ON r.id = rs1.route_id
+        JOIN route_stations rs2 ON r.id = rs2.route_id
+        WHERE rs1.station_name = %s AND rs2.station_name = %s
     """, (from_station, to_station))
 
-    route_ids = [row["route_id"] for row in cur.fetchall()]
-    if not route_ids:
+    routes = cur.fetchall()
+    if not routes:
         return f"No routes found from {from_station} to {to_station}", 404
 
-    # Fetch route details from routes table
-    cur.execute("""
-        SELECT * FROM routes
-        WHERE id = ANY(%s)
-    """, (route_ids,))
-
-    routes = cur.fetchall()
-
-    # Display routes
-    route_links = "".join([f"<a href='/buses/{r['id']}'>{r['route_name']}</a><br>" for r in routes])
-    return f"<h3>Available Routes from {from_station} to {to_station}:</h3>{route_links}"
+    # If multiple routes, show first one for demo
+    route_id = routes[0]["id"]
+    return redirect(f"/buses/{route_id}")
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
