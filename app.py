@@ -928,18 +928,17 @@ def admin():
 @app.route("/select/<int:sid>", methods=["GET", "POST"])
 @safe_db
 def select(sid):
+    # DB connection
     conn, cur = get_db()
 
-    # ✅ इस bus की route_id fetch करें
+    # ✅ Bus schedule fetch
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
-    row = cur.fetchone()
-    if row:
-        route_id = row["route_id"]
-    else:
+    if not row:
         return "Bus schedule not found", 404
+    route_id = row["route_id"]
 
-    # ✅ Route के सभी stations order के साथ
+    # ✅ Route stations fetch with order
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -951,15 +950,20 @@ def select(sid):
 
     today = date.today().isoformat()
 
+    # ✅ Handle POST form submission
     if request.method == "POST":
-        fs = request.form["from"]
-        ts = request.form["to"]
-        d = request.form["date"]
+        fs = request.form.get("from")
+        ts = request.form.get("to")
+        d = request.form.get("date")
+        if not (fs and ts and d):
+            return "Please select From, To, and Date", 400
         return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
-    # Dropdown options HTML
+    # ✅ Dropdown HTML options
     options = "".join(f"<option>{s}</option>" for s in stations)
+    stations_json = json.dumps(stations_data)  # Python list → JSON for JS
 
+    # ✅ Form HTML
     form_html = f"""
     <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
         <div class="card-body">
@@ -987,13 +991,15 @@ def select(sid):
     </div>
 
     <script>
-    const stations = {stations_data};  // stations with order
-    function updateTo(fromStation){{
-        const fromOrder = stations.find(s=>s.station_name===fromStation).station_order;
+    // Stations data from Python
+    const stations = {stations_json};
+
+    function updateTo(fromStation) {{
+        const fromOrder = stations.find(s => s.station_name === fromStation).station_order;
         const toSelect = document.querySelector('select[name="to"]');
         toSelect.innerHTML = '';
-        stations.forEach(s=>{{
-            if(s.station_order > fromOrder){{
+        stations.forEach(s => {{
+            if(s.station_order > fromOrder) {{
                 let opt = document.createElement('option');
                 opt.value = s.station_name;
                 opt.innerText = s.station_name;
