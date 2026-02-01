@@ -930,7 +930,8 @@ def admin():
 def select(sid):
     # DB connection
     conn, cur = get_db()
-
+    print("SID =", sid)
+    print("SID TYPE =", type(sid))
     # ✅ Bus schedule fetch
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
