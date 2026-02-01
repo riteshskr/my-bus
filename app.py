@@ -933,7 +933,11 @@ def select(sid):
     # ✅ इस bus की route_id fetch करें
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
-    route_id = row["route_id"] if row else 1
+    row = cur.fetchone()
+    if row:
+        route_id = row["route_id"]
+    else:
+        return "Bus schedule not found", 404
 
     # ✅ Route के सभी stations order के साथ
     cur.execute("""
