@@ -519,7 +519,7 @@ LOGIN_HTML = """
 </div>
 """
 # ================= ROUTES =================
-@app.route("/")
+app.route("/")
 def home():
     conn = pool.getconn()
     cur = conn.cursor(row_factory=dict_row)
@@ -529,7 +529,15 @@ def home():
 
     pool.putconn(conn)
 
-    return render_template("home.html", stations=stations)
+    # FROM + TO options banate hain
+    from_options = "".join(f"<option>{s}</option>" for s in stations)
+    to_options   = from_options
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(HOME_HTML, from_options=from_options, to_options=to_options)
+    )
+#===== dash bord ======
 
 @app.route("/dashboard")
 def dashboard():
