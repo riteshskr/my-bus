@@ -439,26 +439,20 @@ function selectRoute(rid){
 </body>
 </html>
 """
-
+#======== home page ========
 HOME_HTML = """
 <div class="row g-3 mb-4">
   <div class="col-md-4">
     <select class="form-select" id="from">
       <option selected disabled>From</option>
-      <option>Delhi</option>
-      <option>Mumbai</option>
-      <option>Bengaluru</option>
-      <option>Jaipur</option>
+      {{from_options|safe}}
     </select>
   </div>
 
   <div class="col-md-4">
     <select class="form-select" id="to">
       <option selected disabled>To</option>
-      <option>Jaipur</option>
-      <option>Pune</option>
-      <option>Chennai</option>
-      <option>Hyderabad</option>
+      {{to_options|safe}}
     </select>
   </div>
 
@@ -481,7 +475,7 @@ function searchBus(){
     alert("Please fill all fields");
     return;
   }
-  alert("Searching buses from " + f + " to " + t + " on " + d);
+  window.location.href = `/search?from=${f}&to=${t}&date=${d}`;
 }
 </script>
 """
@@ -530,60 +524,15 @@ LOGIN_HTML = """
 def home():
     conn, cur = get_db()
 
-    # सभी Routes (बड़े cards)
-    cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
-    routes = cur.fetchall()
-
-    # Hero Section
-    hero_section = '''
-    <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
-        
-        <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
-    </div>
-    '''
-
-    # 🔥 Route Selection Cards (बड़ा + Clear)
-    routes_section = '<div class="row g-4 mb-5">'
-    for r in routes:
-        routes_section += f'''
-        <div class="col-md-4 col-lg-3">
-            <div class="card  bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:15px;cursor:pointer;">
-                <div class="card-body p-3 text-center" onclick="selectRoute({r['id']})">
-                    <h3 class="fw-bold mb-3">{r['route_name']}</h3>
-                     
-                        🚀 Buses देखें → Bus {r['id']}
-                    </button>
-                </div>
-            </div>
-        </div>'''
-    routes_section += '</div>'
-       # Live GPS Status (नीचे छोटा)
+    # सभी unique stations
     cur.execute("""
-        SELECT s.id, s.bus_name, r.route_name, 
-               s.current_lat as lat, s.current_lng as lng
-        FROM schedules s JOIN routes r ON s.route_id = r.id
-        ORDER BY s.id LIMIT 4
+        SELECT DISTINCT station_name 
+        FROM route_stations 
+        ORDER BY station_name
     """)
-    live_buses = cur.fetchall()
+    stations = [r["station_name"] for r in cur.fetchall()]
 
-    live_section = '<h3 class="text-center mb-4">🟢 Live Running Buses</h3><div class="row g-4">'
-    for bus in live_buses:
-        status = "🟢 LIVE GPS" if bus.get('lat') else "⚪ Ready"
-        coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
-        live_section += f'''
-        <div class="col-md-6 col-lg-3">
-            <div class="card border-0 shadow">
-                <div class="card-body text-center p-3">
-                    <h6 class="fw-bold">{bus['bus_name']}</h6>
-                    <small class="text-muted">{bus['route_name']}</small><br>
-                    <span class="badge {'bg-success' if bus.get('lat') else 'bg-secondary'}">{status}</span>
-                    <div class="mt-2"><small>📍 {coords}</small></div>
-                </div>
-            </div>
-        </div>'''
-    live_section += '</div>'
-
-    content = hero_section + routes_section + live_section
+    content = render_template_string(HOME_HTML, stations=stations)
     return render_template_string(BASE_HTML, content=content)
 
 @app.route("/dashboard")
@@ -1506,7 +1455,62 @@ def verify():
     })
 
     return jsonify({"ok": True})
+#======= search ========
+@app.route("/search")
+@safe_db
+def search():
+    fs = request.args.get("from")
+    ts = request.args.get("to")
+    d  = request.args.get("date")
 
+    conn, cur = get_db()
+
+    # route find करो जो इन stations से गुजरता हो
+    cur.execute("""
+        SELECT r.id, r.route_name
+        FROM routes r
+        JOIN route_stations f ON r.id=f.route_id
+        JOIN route_stations t ON r.id=t.route_id
+        WHERE f.station_name=%s
+          AND t.station_name=%s
+          AND f.station_order < t.station_order
+    """, (fs, ts))
+
+    routes = cur.fetchall()
+
+    if not routes:
+        return render_template_string(
+            BASE_HTML,
+            content="<h3 class='text-center text-danger'>No buses found 😢</h3>"
+        )
+
+    html = f"<h3 class='text-center mb-4'>🚌 {fs} → {ts} ({d})</h3>"
+
+    for r in routes:
+        cur.execute("""
+            SELECT id, bus_name, departure_time
+            FROM schedules
+            WHERE route_id=%s
+            ORDER BY departure_time
+        """, (r["id"],))
+
+        buses = cur.fetchall()
+
+        for b in buses:
+            html += f"""
+            <div class="card mb-3 shadow">
+                <div class="card-body text-center">
+                    <h4>{b['bus_name']}</h4>
+                    <h5>⏰ {b['departure_time']}</h5>
+                    <a href="/select/{b['id']}?fs={fs}&ts={ts}&d={d}"
+                       class="btn btn-success mt-2">
+                       Book Seat
+                    </a>
+                </div>
+            </div>
+            """
+
+    return render_template_string(BASE_HTML, content=html)
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
