@@ -934,6 +934,7 @@ def select(sid):
     # ✅ Bus schedule fetch
     cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
     row = cur.fetchone()
+    print(row)
     if not row:
         return "Bus schedule not found", 404
     route_id = row["route_id"]
