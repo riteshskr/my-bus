@@ -4,7 +4,7 @@ import setuptools
 import os, random
 from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g,session
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session, render_template
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
@@ -520,20 +520,16 @@ LOGIN_HTML = """
 """
 # ================= ROUTES =================
 @app.route("/")
-@safe_db
 def home():
-    conn, cur = get_db()
+    conn = pool.getconn()
+    cur = conn.cursor(row_factory=dict_row)
 
-    # सभी unique stations
-    cur.execute("""
-        SELECT DISTINCT station_name 
-        FROM route_stations 
-        ORDER BY station_name
-    """)
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
     stations = [r["station_name"] for r in cur.fetchall()]
 
-    content = render_template_string(HOME_HTML, stations=stations)
-    return render_template_string(BASE_HTML, content=content)
+    pool.putconn(conn)
+
+    return render_template("home.html", stations=stations)
 
 @app.route("/dashboard")
 def dashboard():
