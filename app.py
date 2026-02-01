@@ -1653,9 +1653,8 @@ def search():
         WHERE rs1.station_name = %s AND rs2.station_name = %s
     """, (from_station, to_station))
 
-    route_ids = [r['route_id'] for r in cur.fetchall()]
-    print("SID =", route_ids)
-    
+    route_ids = [r['id'] for r in cur.fetchall()]
+
     if not route_ids:
         return f"कोई route नहीं मिला {from_station} → {to_station}", 404
 
