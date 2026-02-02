@@ -895,7 +895,7 @@ def seat_page(schedule_id):
         if i in booked_seats:
             seat_buttons_html += f'<button class="btn btn-danger m-1" disabled>{i}</button>'
         else:
-            seat_buttons_html += f'<button class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
+            seat_buttons_html += f'<button id="seat-{i}" class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
 
     # Google Maps iframe for live bus location
     bus_lat = schedule['current_lat'] or 0
@@ -1043,6 +1043,10 @@ def book():
         ))
 
         conn.commit()
+        socketio.emit("seat_update", {
+            "sid": data['schedule_id'],
+            "seat": data['seat_number']
+        }, broadcast=True)
         return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
