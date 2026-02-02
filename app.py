@@ -567,7 +567,7 @@ def dashboard():
 
 
 @app.route("/buses/<int:rid>")
-@safe_db
+#@safe_db
 def buses(rid):
     conn, cur = get_db()
 
@@ -682,7 +682,7 @@ def buses(rid):
     </html>
         """
 
-    return render_template_string(BASE_HTML, content=html)
+    return render_template_string(html, route=route, buses=buses_data)
 
 
 # **** create counter ******
