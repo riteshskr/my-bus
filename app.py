@@ -1502,47 +1502,41 @@ def verify():
 @safe_db
 def search():
     from_station = request.form.get("from")
-    to_station = request.form.get("to")
-    travel_date = request.form.get("date")
+    to_station   = request.form.get("to")
+    date         = request.form.get("date")
 
-    if not from_station or not to_station or not travel_date:
-        return "Please fill all fields", 400
-
-    # Find routes that include both stations
     conn, cur = get_db()
+
+    # Search routes containing both stations in correct order
     cur.execute("""
-        SELECT DISTINCT r.id, r.route_name
+        SELECT r.id, r.route_name, r.distance_km
         FROM routes r
-        JOIN route_stations rs1 ON r.id = rs1.route_id
-        JOIN route_stations rs2 ON r.id = rs2.route_id
-        WHERE rs1.station_name = %s AND rs2.station_name = %s
+        JOIN route_stations rs_from ON rs_from.route_id = r.id AND rs_from.station_name = %s
+        JOIN route_stations rs_to   ON rs_to.route_id = r.id AND rs_to.station_name = %s
+        WHERE rs_from.stop_order < rs_to.stop_order
+        ORDER BY r.id
     """, (from_station, to_station))
-
-    route_ids = [r['id'] for r in cur.fetchall()]
-
-    if not route_ids:
-        return f"कोई route नहीं मिला {from_station} → {to_station}", 404
-
-    # ✅ Routes की पूरी जानकारी fetch करें
-    cur.execute("""
-            SELECT id, route_name, distance_km
-            FROM routes
-            WHERE id = ANY(%s)
-        """, (route_ids,))
 
     routes = cur.fetchall()
 
-    # HTML में दिखाएँ
-    html = f"<h3>Routes from {from_station} → {to_station}:</h3>"
-    for r in routes:
-        html += f"""
-            <div class='card mb-3 p-3'>
-                <h5>🛣️ {r['route_name']} ({r['distance_km']} km)</h5>
-                <a href='/buses/{r['id']}' class='btn btn-primary btn-sm'>View Buses</a>
+    if not routes:
+        content = "<h3>No routes found 😢</h3>"
+    else:
+        content = ""
+        for r in routes:
+            content += f"""
+            <div class="card">
+                <h3>{r['route_name']}</h3>
+                <p>Distance: {r['distance_km']} km</p>
+                <a href="/book/{r['id']}">Book Now 🚌</a>
             </div>
             """
 
-    return render_template_string(BASE_HTML, content=html)
+    # Stations for search box
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+    stations = [r["station_name"] for r in cur.fetchall()]
+
+    return render_template_string(BASE_HTML, stations=stations, content=content)
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
