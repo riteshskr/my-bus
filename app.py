@@ -835,91 +835,17 @@ def admin():
     )
 
 
-@app.route("/select/<int:sid>", methods=["GET", "POST"])
+@app.route("/select/<int:sid>")
 @safe_db
 def select(sid):
-    # DB connection
-    conn, cur = get_db()
-       # ✅ Bus schedule fetch
-    cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
-    row = cur.fetchone()
-    if not row:
-        return "Bus schedule not found", 404
-    route_id = row["route_id"]
+    fs = session.get("from")
+    ts = session.get("to")
+    d  = session.get("date")
 
-    # ✅ Route stations fetch with order
-    cur.execute("""
-        SELECT station_name, station_order
-        FROM route_stations
-        WHERE route_id=%s
-        ORDER BY station_order
-    """, (route_id,))
-    stations_data = cur.fetchall()
-    stations = [s["station_name"] for s in stations_data]
+    if not fs or not ts or not d:
+        return redirect("/")
 
-    today = date.today().isoformat()
-
-    # ✅ Handle POST form submission
-    if request.method == "POST":
-        fs = request.form.get("from")
-        ts = request.form.get("to")
-        d = request.form.get("date")
-        if not (fs and ts and d):
-            return "Please select From, To, and Date", 400
-        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
-
-    # ✅ Dropdown HTML options
-    options = "".join(f"<option>{s}</option>" for s in stations)
-    stations_json = json.dumps(stations_data)  # Python list → JSON for JS
-
-    # ✅ Form HTML
-    form_html = f"""
-    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
-        <div class="card-body">
-            <h4 class="card-title text-center mb-4">🎫 Journey Details</h4>
-            <form method="POST">
-                <div class="mb-3">
-                    <label class="form-label">From:</label>
-                    <select name="from" class="form-select" required onchange="updateTo(this.value)">
-                        {options}
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">To:</label>
-                    <select name="to" class="form-select" required>
-                        {options}
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Date:</label>
-                    <input type="date" name="date" class="form-control" value="{today}" min="{today}" required>
-                </div>
-                <button class="btn btn-success w-100">View Available Seats</button>
-            </form>
-        </div>
-    </div>
-
-    <script>
-    // Stations data from Python
-    const stations = {stations_json};
-
-    function updateTo(fromStation) {{
-        const fromOrder = stations.find(s => s.station_name === fromStation).station_order;
-        const toSelect = document.querySelector('select[name="to"]');
-        toSelect.innerHTML = '';
-        stations.forEach(s => {{
-            if(s.station_order > fromOrder) {{
-                let opt = document.createElement('option');
-                opt.value = s.station_name;
-                opt.innerText = s.station_name;
-                toSelect.appendChild(opt);
-            }}
-        }});
-    }}
-    </script>
-    """
-
-    return render_template_string(BASE_HTML, content=form_html)
+    return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
 
 @app.route("/seats/<int:sid>")
@@ -1547,7 +1473,9 @@ def search():
     fs_input = request.form.get("from", "").strip()
     ts_input = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
-
+    session["from"] = fs_input
+    session["to"] = ts_input
+    session["date"] = travel_date
     if not fs_input or not ts_input:
         return "Please select both From and To stations", 400
 
