@@ -1070,55 +1070,82 @@ def book():
 
     for field in required:
         if field not in data:
-            return jsonify({"ok": False, "error": f"Missing field: {field}"})
+            return jsonify({"ok": False, "error": f"Missing field: {field}"}), 400
 
     conn, cur = get_db()
 
     try:
-        # ===== Check if seat already booked =====
+        # ===== Fetch station order map =====
         cur.execute("""
-            SELECT id FROM seat_bookings
-            WHERE schedule_id=%s 
-            AND seat_number=%s 
-            AND travel_date::date = %s
-            AND status='confirmed'
+            SELECT station_name, station_order
+            FROM route_stations
+            WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
+        """, (data['sid'],))
+
+        station_map = {
+            r['station_name'].strip().lower(): r['station_order']
+            for r in cur.fetchall()
+        }
+
+        fs_new = station_map.get(data['from'].strip().lower())
+        ts_new = station_map.get(data['to'].strip().lower())
+
+        if fs_new is None or ts_new is None:
+            return jsonify({"ok": False, "error": "Invalid stations"}), 400
+
+        # ===== Check overlap bookings =====
+        cur.execute("""
+            SELECT from_station, to_station
+            FROM seat_bookings
+            WHERE schedule_id=%s
+              AND seat_number=%s
+              AND travel_date::date = %s
+              AND status='confirmed'
         """, (data['sid'], data['seat'], data['date']))
 
-        if cur.fetchone():
-            return jsonify({"ok": False, "error": "Seat already booked"}), 409
+        existing = cur.fetchall()
 
-        # ===== Temporary Fare =====
+        for r in existing:
+            fs_old = station_map.get(r['from_station'].strip().lower())
+            ts_old = station_map.get(r['to_station'].strip().lower())
+
+            if fs_old is None or ts_old is None:
+                continue
+
+            # segment overlap
+            if not (ts_new <= fs_old or fs_new >= ts_old):
+                return jsonify({"ok": False, "error": "Seat already booked"}), 409
+
+        # ===== Fare Logic =====
         fare = random.randint(250, 450)
 
-        # 👉 RAZORPAY IGNORE → ALWAYS CASH
         role = data['booked_by_type']
-
         if role == "user":
             payment_mode = "online"
-            status = "confirmed"  # online payment ke baad confirm
+            status = "confirmed"
         else:
             payment_mode = "cash"
             status = "confirmed"
 
-        # ===== INSERT BOOKING =====
+        # ===== Insert booking =====
         cur.execute("""
-        INSERT INTO seat_bookings
-        (
-            schedule_id,
-            seat_number,
-            passenger_name,
-            mobile,
-            from_station,
-            to_station,
-            travel_date,
-            fare,
-            status,
-            payment_mode,
-            booked_by_type,
-            booked_by_id,
-            counter_id
-        )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO seat_bookings
+            (
+                schedule_id,
+                seat_number,
+                passenger_name,
+                mobile,
+                from_station,
+                to_station,
+                travel_date,
+                fare,
+                status,
+                payment_mode,
+                booked_by_type,
+                booked_by_id,
+                counter_id
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             data['sid'],
             data['seat'],
@@ -1132,12 +1159,12 @@ def book():
             payment_mode,
             data['booked_by_type'],
             data['booked_by_id'],
-            data.get('counter_id')  # optional
+            data.get('counter_id')
         ))
 
         conn.commit()
 
-        # ===== LIVE UPDATE =====
+        # ===== Live update =====
         socketio.emit("seat_update", {
             "sid": data['sid'],
             "seat": data['seat']
@@ -1146,12 +1173,14 @@ def book():
         return jsonify({
             "ok": True,
             "fare": fare,
-            "message": "Seat booked successfully (CASH MODE)"
+            "message": "Seat booked successfully"
         })
 
     except Exception as e:
         conn.rollback()
-        return jsonify({"ok": False, "error": str(e)})
+        import traceback
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": "Server error"}), 500
 
 
 @app.route("/driver/<int:sid>")
