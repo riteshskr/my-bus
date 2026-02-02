@@ -1043,12 +1043,10 @@ def book():
         ))
 
         conn.commit()
-        socketio.emit(
-            "seat_update",
-            {"sid": data['schedule_id'], "seat": data['seat_number']},
-            namespace="/",
-            broadcast=True
-        )
+        socketio.emit("seat_update", {
+            "sid": data['sid'],
+            "seat": data['seat']
+        })
         return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
