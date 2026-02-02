@@ -855,7 +855,7 @@ def seat_page(schedule_id):
 
     # Schedule details, route info, bus info
     cur.execute("""
-        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.bus_lat, s.bus_lon
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.current_lat, s.current_lng
         FROM schedules s
         JOIN routes r ON s.route_id = r.id
         WHERE s.id = %s
