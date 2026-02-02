@@ -340,10 +340,8 @@ BASE_HTML = """
 
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
-
 body{background:#f5f7fb;color:#222;}
 
-/* NAVBAR */
 .navbar{
   position:fixed;
   top:0;left:0;width:100%;
@@ -357,16 +355,13 @@ body{background:#f5f7fb;color:#222;}
 }
 .logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
 .navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
-.navbar a:hover{color:#ff512f;}
 
-/* HERO */
 .hero{
   height:100vh;
   background:
     linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
-    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80");
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
   background-size:cover;
-  background-position:center;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -375,101 +370,27 @@ body{background:#f5f7fb;color:#222;}
   padding-top:70px;
 }
 
-.hero h1{font-size:3.5rem;}
-.hero p{font-size:1.3rem;margin:15px 0 30px;}
-
-/* SEARCH */
 .search-box{
   background:white;
   padding:20px;
   border-radius:15px;
   display:flex;
   gap:10px;
-  box-shadow:0 20px 40px rgba(0,0,0,.3);
 }
-.search-box input{
-  padding:12px;
-  border:none;
-  outline:none;
-  border-radius:8px;
-  width:180px;
-  background:#f1f3f7;
-}
-.search-box button{
-  padding:12px 30px;
-  border:none;
-  border-radius:10px;
-  background:linear-gradient(45deg,#ff512f,#dd2476);
-  color:white;
-  font-weight:600;
-  cursor:pointer;
-}
+.search-box input{padding:12px;border:none;border-radius:8px;}
+.search-box button{padding:12px 30px;border:none;border-radius:10px;background:#ff512f;color:white;}
 
-/* STATS */
-.stats{
-  padding:60px 10%;
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
-  text-align:center;
-  gap:30px;
-}
-.stat h2{color:#ff512f;font-size:2.2rem;}
-.stat p{color:#666;}
-
-/* FEATURES */
-.features{
-  padding:60px 10%;
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
-  gap:30px;
-}
 .card{
   background:white;
-  border-radius:20px;
-  box-shadow:0 15px 30px rgba(0,0,0,.1);
-  transition:.4s;
+  border-radius:15px;
+  box-shadow:0 10px 25px rgba(0,0,0,.1);
+  padding:20px;
+  margin-bottom:20px;
 }
-.card:hover{transform:translateY(-10px);}
-.card img{
-  width:100%;height:180px;object-fit:cover;
-  border-radius:20px 20px 0 0;
-}
-.card .content{padding:20px;}
-
-/* CTA */
-.cta{
-  background:linear-gradient(45deg,#ff512f,#dd2476);
-  color:white;
-  padding:60px 10%;
-  text-align:center;
-}
-.cta h2{font-size:2.5rem;margin-bottom:15px;}
-.cta button{
-  padding:15px 40px;
-  border:none;
-  border-radius:30px;
-  background:white;
-  color:#ff512f;
-  font-weight:600;
-  cursor:pointer;
-}
-
-/* FOOTER */
-footer{
-  background:#111;
-  color:#aaa;
-  padding:40px 10%;
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
-}
-footer h3{color:white;margin-bottom:10px;}
-footer p{font-size:.9rem;}
-.copy{text-align:center;background:#000;color:#777;padding:15px;}
 </style>
 </head>
 <body>
 
-<!-- NAVBAR -->
 <div class="navbar">
   <div class="logo">🚌 My Bus AI</div>
   <div>
@@ -479,81 +400,27 @@ footer p{font-size:.9rem;}
   </div>
 </div>
 
-<!-- HERO -->
+{% if not content %}
 <section class="hero">
   <div>
     <h1>India’s Smart Bus Platform</h1>
     <p>Book | Track | Face Boarding | Live Seats</p>
+
     <form class="search-box" action="/search" method="POST">
-      <input name="from" placeholder="From">
-      <input name="to" placeholder="To">
-      <datalist id="stations">
-    {% for s in stations %}
-      <option value="{{s}}">
-    {% endfor %}
-     </datalist>	
-      <input type="date" name="date">
+      <input name="from" placeholder="From" required>
+      <input name="to" placeholder="To" required>
+      <input type="date" name="date" required>
       <button type="submit">Search</button>
     </form>
   </div>
 </section>
+{% endif %}
 
-<!-- STATS -->
-<section class="stats">
-  <div class="stat"><h2>5,000+</h2><p>Buses</p></div>
-  <div class="stat"><h2>2M+</h2><p>Passengers</p></div>
-  <div class="stat"><h2>99%</h2><p>On-Time</p></div>
-  <div class="stat"><h2>AI</h2><p>Face Boarding</p></div>
-</section>
-
-<!-- FEATURES -->
-<section class="features">
-  <div class="card">
-    <img src="https://images.unsplash.com/photo-1509749837427-ac94a2553d0e">
-    <div class="content">
-      <h3>Luxury Buses</h3>
-      <p>AC Sleeper, Volvo & Electric</p>
-    </div>
-  </div>
-  <div class="card">
-    <img src="https://images.unsplash.com/photo-1519582149095-fe7d19b07b63">
-    <div class="content">
-      <h3>Live GPS</h3>
-      <p>Real-time tracking</p>
-    </div>
-  </div>
-  <div class="card">
-    <img src="https://images.unsplash.com/photo-1500530855697-b586d89ba3ee">
-    <div class="content">
-      <h3>AI Boarding</h3>
-      <p>No ticket, just face scan</p>
-    </div>
-  </div>
-</section>
-
-<!-- CTA -->
-<section class="cta">
-  <h2>Ready for Smart Travel?</h2>
-  <p>Join India’s first AI-powered bus system</p>
-  <button onclick="location.href='/register'">Create Free Account</button>
-</section>
-
-<!-- FOOTER -->
-<footer>
-  <div>
-    <h3>SmartBus AI</h3>
-    <p>Future of travel in India</p>
-  </div>
-  <div>
-    <h3>Company</h3>
-    <p>About | Careers | Blog</p>
-  </div>
-  <div>
-    <h3>Support</h3>
-    <p>Help Center | Terms | Privacy</p>
-  </div>
-</footer>
-<div class="copy">© 2026 SmartBus AI</div>
+{% if content %}
+<div style="padding:100px 10%;">
+    {{ content|safe }}
+</div>
+{% endif %}
 
 </body>
 </html>
