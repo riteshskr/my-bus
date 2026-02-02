@@ -332,14 +332,6 @@ BASE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>
-.seat {
-  width: 52px !important; height: 52px !important; 
-  margin: 4px !important; font-weight: bold !important;
-  border-radius: 12px !important; font-size: 14px !important;
-}
-</style>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Bus AI - Book Your Journey</title>
@@ -848,7 +840,7 @@ def admin():
 def select(sid):
     fs = session.get("from")
     ts = session.get("to")
-    d = session.get("date")  # ✅ Session से exact date
+    d  = session.get("date")
 
     if not fs or not ts or not d:
         return redirect("/")
@@ -859,18 +851,10 @@ def select(sid):
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    d = request.args.get('d')
-    if not d:  # अगर date parameter नहीं है
-        return redirect("/")
-
-        # ✅ Date validate करें (YYYY-MM-DD format)
-    try:
-        from datetime import datetime
-        datetime.strptime(d, '%Y-%m-%d').date()
-    except ValueError:
-        return "❌ गलत date format! YYYY-MM-DD यूज़ करें", 400
     fs = request.args.get("fs", "बीकानेर")
     ts = request.args.get("ts", "जयपुर")
+    d = request.args.get("d", date.today().isoformat())
+
     conn, cur = get_db()
 
     # ===== Station Order =====
@@ -882,13 +866,9 @@ def seats(sid):
     """, (sid,))
     stations_data = cur.fetchall()
 
-    station_to_order = {
-        r['station_name'].strip().lower(): r['station_order']
-        for r in stations_data
-    }
-
-    fs_order = station_to_order.get(fs.strip().lower(), 1)
-    ts_order = station_to_order.get(ts.strip().lower(), 2)
+    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
+    fs_order = station_to_order.get(fs, 1)
+    ts_order = station_to_order.get(ts, 2)
 
     # ===== Booked Seats =====
     cur.execute("""
@@ -1492,7 +1472,7 @@ def verify():
 def search():
     fs_input = request.form.get("from", "").strip()
     ts_input = request.form.get("to", "").strip()
-    travel_date = request.form.get("date")
+    travel_date = request.form.get("date", date.today().isoformat())
     session["from"] = fs_input
     session["to"] = ts_input
     session["date"] = travel_date
@@ -1541,7 +1521,7 @@ def search():
         )
 
     # 🔥 DIRECT REDIRECT
-    return redirect(f"/seats/1?fs={fs_input}&ts={ts_input}&d={travel_date}")
+    return redirect(f"/buses/{route['id']}")
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
