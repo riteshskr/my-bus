@@ -875,7 +875,7 @@ def seats(sid):
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
         WHERE schedule_id=%s
-          AND travel_date=%s
+          AND travel_date::date = %s
           AND status='confirmed'
     """, (sid, d))
 
@@ -1078,7 +1078,7 @@ def book():
             SELECT id FROM seat_bookings
             WHERE schedule_id=%s 
             AND seat_number=%s 
-            AND travel_date=%s
+            AND travel_date::date = %s
             AND status='confirmed'
         """, (data['sid'], data['seat'], data['date']))
 
