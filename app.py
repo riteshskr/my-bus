@@ -945,14 +945,14 @@ def seat_page(schedule_id):
         const response = await fetch('/book', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({
+            body: JSON.stringify({{
                 schedule_id: {schedule_id},
                 seat_number: seatNumber,
                 passenger_name: passengerName,
                 mobile: mobile,
                 date: "{today}",
                 counter_id: {counter_js}
-            })
+            }})
         }});
         const result = await response.json();
         if(result.ok){{
