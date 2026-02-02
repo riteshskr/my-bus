@@ -903,6 +903,7 @@ def seat_page(schedule_id):
     counter_js = "null"
     if session.get("role") == "counter":
         counter_js = session.get("user_id")
+
     map_iframe = f"""
     <iframe
         width="100%"
@@ -935,7 +936,29 @@ def seat_page(schedule_id):
     </div>
 
     <script>
-    
+     <!-- SOCKET -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <script>
+    const socket = io({{transports:["websocket","polling"]}});
+    const SID = {schedule_id};
+
+    socket.on("connect", () => {{
+        console.log("Socket connected");
+    }});
+
+    // 🔥 REAL-TIME UPDATE
+    socket.on("seat_update", data => {{
+        if(data.sid == SID){{
+            const btn = document.getElementById("seat-" + data.seat);
+            if(btn){{
+                btn.classList.remove("btn-success");
+                btn.classList.add("btn-danger");
+                btn.disabled = true;
+                btn.innerText = data.seat;
+            }}
+        }}
+    }});
     async function bookSeat(seatNumber){{
         const passengerName = prompt("Enter Passenger Name:");
         if(!passengerName) return;
