@@ -342,6 +342,7 @@ BASE_HTML = """
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
 body{background:#f5f7fb;color:#222;}
 
+/* Navbar */
 .navbar{
   position:fixed;
   top:0;left:0;width:100%;
@@ -356,12 +357,14 @@ body{background:#f5f7fb;color:#222;}
 .logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
 .navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
 
+/* Hero */
 .hero{
   height:100vh;
   background:
     linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
     url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
   background-size:cover;
+  background-position:center;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -370,6 +373,7 @@ body{background:#f5f7fb;color:#222;}
   padding-top:70px;
 }
 
+/* Search Box */
 .search-box{
   background:white;
   padding:20px;
@@ -377,15 +381,51 @@ body{background:#f5f7fb;color:#222;}
   display:flex;
   gap:10px;
 }
-.search-box input{padding:12px;border:none;border-radius:8px;}
-.search-box button{padding:12px 30px;border:none;border-radius:10px;background:#ff512f;color:white;}
+.search-box input{
+  padding:12px;
+  border:none;
+  border-radius:8px;
+  outline:none;
+}
+.search-box button{
+  padding:12px 30px;
+  border:none;
+  border-radius:10px;
+  background:#ff512f;
+  color:white;
+  font-weight:600;
+  cursor:pointer;
+}
 
+/* Cards */
 .card{
   background:white;
   border-radius:15px;
   box-shadow:0 10px 25px rgba(0,0,0,.1);
   padding:20px;
   margin-bottom:20px;
+}
+
+/* ---------- Mobile Fixes ---------- */
+@media(max-width:768px){
+
+  .navbar{
+    flex-direction:column;
+    gap:10px;
+    padding:10px 20px;
+  }
+
+  .search-box{
+    flex-direction:column;
+    width:100%;
+  }
+
+  .search-box input,
+  .search-box button{
+    width:100%;
+  }
+
+  .hero h1{font-size:1.6rem;}
 }
 </style>
 </head>
@@ -425,6 +465,7 @@ body{background:#f5f7fb;color:#222;}
 </body>
 </html>
 """
+
 
 HOME_HTML = """
 <div class="row g-3 mb-4">
