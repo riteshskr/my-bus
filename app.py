@@ -866,9 +866,13 @@ def seats(sid):
     """, (sid,))
     stations_data = cur.fetchall()
 
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
+    station_to_order = {
+        r['station_name'].strip().lower(): r['station_order']
+        for r in stations_data
+    }
+
+    fs_order = station_to_order.get(fs.strip().lower(), 1)
+    ts_order = station_to_order.get(ts.strip().lower(), 2)
 
     # ===== Booked Seats =====
     cur.execute("""
