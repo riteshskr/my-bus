@@ -1501,51 +1501,57 @@ def verify():
 @app.route("/search", methods=["POST"])
 @safe_db
 def search():
-    fs = request.form.get("from")
-    ts = request.form.get("to")
+    fs_input = request.form.get("from", "").strip()
+    ts_input = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
 
-    if not fs or not ts:
+    if not fs_input or not ts_input:
         return "Please select both From and To stations", 400
 
-    # Find routes that include both stations
+    # Convert input to lowercase for case-insensitive match
+    fs = fs_input.lower()
+    ts = ts_input.lower()
+
     conn, cur = get_db()
+
+    # Step 1: Find routes containing both stations
     cur.execute("""
-            SELECT DISTINCT route_id
-            FROM route_stations
-            WHERE station_name IN (%s, %s)
-        """, (fs, ts))
+        SELECT DISTINCT route_id
+        FROM route_stations
+        WHERE LOWER(station_name) = %s OR LOWER(station_name) = %s
+    """, (fs, ts))
+
     candidate_routes = [r["route_id"] for r in cur.fetchall()]
 
     if not candidate_routes:
         return render_template_string(BASE_HTML,
-                                      content="<h3 class='text-center mt-5 text-danger'>🚫 Route not found</h3>")
+                                      content=f"<h3 class='text-center mt-5 text-danger'>🚫 Route not found for {fs_input} → {ts_input}</h3>")
 
-    # ===== Step 2: Filter routes by station order =====
+    # Step 2: Filter routes by station order
     cur.execute("""
-            SELECT r.id, r.route_name,
-                   rs_from.station_order AS from_order,
-                   rs_to.station_order AS to_order,
-                   string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
-            FROM routes r
-            JOIN route_stations rs_from ON rs_from.route_id = r.id
-            JOIN route_stations rs_to   ON rs_to.route_id = r.id
-            JOIN route_stations rs ON rs.route_id = r.id
-            WHERE r.id = ANY(%s)
-              AND rs_from.station_name = %s
-              AND rs_to.station_name = %s
-              AND rs_from.station_order < rs_to.station_order
-            GROUP BY r.id, r.route_name, rs_from.station_order, rs_to.station_order
-            ORDER BY rs_from.station_order
-        """, (candidate_routes, fs, ts))
+        SELECT r.id, r.route_name,
+               rs_from.station_order AS from_order,
+               rs_to.station_order AS to_order,
+               string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+        FROM routes r
+        JOIN route_stations rs_from ON rs_from.route_id = r.id
+        JOIN route_stations rs_to   ON rs_to.route_id = r.id
+        JOIN route_stations rs ON rs.route_id = r.id
+        WHERE r.id = ANY(%s)
+          AND LOWER(rs_from.station_name) = %s
+          AND LOWER(rs_to.station_name) = %s
+          AND rs_from.station_order < rs_to.station_order
+        GROUP BY r.id, r.route_name, rs_from.station_order, rs_to.station_order
+        ORDER BY rs_from.station_order
+    """, (candidate_routes, fs, ts))
 
     valid_routes = cur.fetchall()
 
     if not valid_routes:
         return render_template_string(BASE_HTML,
-                                      content="<h3 class='text-center mt-5 text-danger'>🚫 Route not found</h3>")
+                                      content=f"<h3 class='text-center mt-5 text-danger'>🚫 Route not found in order for {fs_input} → {ts_input}</h3>")
 
-    # ===== Generate HTML for valid routes =====
+    # Step 3: Generate HTML
     html = "<h3 class='text-center mt-5'>🚌 Available Routes</h3><div class='row g-4 mt-3'>"
     for r in valid_routes:
         html += f"""
@@ -1556,7 +1562,7 @@ def search():
                     <a href="/buses/{r['id']}" class="btn btn-primary w-100">View Buses</a>
                 </div>
             </div>
-            """
+        """
     html += "</div>"
 
     return render_template_string(BASE_HTML, content=html)
