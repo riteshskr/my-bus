@@ -947,6 +947,7 @@ def seat_page(schedule_id):
                 passenger_name: passengerName,
                 mobile: mobile,
                 date: '{today}'
+                counter_id: {{ session.get("user_id") if session.get("role")=="counter" else 'null' }}
             }})
         }});
         const result = await response.json();
@@ -1008,6 +1009,9 @@ def book():
             status = "confirmed"
 
         # ===== INSERT BOOKING =====
+        counter_id = data.get('counter_id')
+        if counter_id in (None, 'null', ''):
+            counter_id = None
         cur.execute("""
         INSERT INTO seat_bookings
         (
