@@ -848,209 +848,119 @@ def select(sid):
     return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
 
-@app.route("/seats/<int:sid>")
+@app.route("/seats/<int:schedule_id>")
 @safe_db
-def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
-
+def seat_page(schedule_id):
     conn, cur = get_db()
 
-    # ===== Station Order =====
+    # Schedule details, route info, bus info
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.bus_lat, s.bus_lon
+        FROM schedules s
+        JOIN routes r ON s.route_id = r.id
+        WHERE s.id = %s
+    """, (schedule_id,))
+    schedule = cur.fetchone()
+
+    if not schedule:
+        return "Schedule not found", 404
+
+    # Route stations
     cur.execute("""
         SELECT station_name, station_order
-        FROM route_stations
-        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
+        FROM route_stations WHERE route_id=%s
         ORDER BY station_order
-    """, (sid,))
-    stations_data = cur.fetchall()
+    """, (schedule['route_id'],))
+    stations = cur.fetchall()
+    stations_map = {r['station_name']: r['station_order'] for r in stations}
 
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
-
-    # ===== Booked Seats =====
+    # Booked seats for today
+    today = date.today().isoformat()
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
-        WHERE schedule_id=%s
-          AND travel_date=%s
-          AND status='confirmed'
-    """, (sid, d))
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """, (schedule_id, today))
+    booked = cur.fetchall()
 
     booked_seats = set()
-    for r in cur.fetchall():
-        bfs = station_to_order.get(r["from_station"], 0)
-        bts = station_to_order.get(r["to_station"], 0)
-        if not (ts_order <= bfs or fs_order >= bts):
-            booked_seats.add(r["seat_number"])
+    for r in booked:
+        booked_seats.add(r['seat_number'])
 
-    # ===== Seat Buttons =====
-    seat_buttons = ""
     total_seats = 40
-    available = total_seats - len(booked_seats)
+    seat_buttons_html = ""
 
+    # Generate seat buttons with color coding
     for i in range(1, total_seats + 1):
         if i in booked_seats:
-            seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
+            seat_buttons_html += f'<button class="btn btn-danger" disabled>X</button>'
         else:
-            seat_buttons += f'''
-            <button class="btn btn-success seat"
-                    onclick="bookSeat({i}, this)">
-                {i}
-            </button>'''
+            seat_buttons_html += f'<button class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
 
-    # ===== Bus + Map =====
-    cur.execute("""
-        SELECT current_lat, current_lng, route_id
-        FROM schedules WHERE id=%s
-    """, (sid,))
-    bus = cur.fetchone()
+    # Google Maps iframe for live bus location
+    bus_lat = schedule['bus_lat'] or 0
+    bus_lon = schedule['bus_lon'] or 0
+    map_iframe = f"""
+    <iframe
+        width="100%"
+        height="300"
+        frameborder="0" style="border:0"
+        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&hl=es;z=14&output=embed"
+        allowfullscreen>
+    </iframe>
+    """
 
-    lat = float(bus["current_lat"] or 27.2)
-    lng = float(bus["current_lng"] or 75.0)
+    # Complete HTML
+    html_content = f"""
+    <div class="container" style="max-width:900px;margin:auto;">
+        <h2 style="margin-top:20px;">Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
 
-    cur.execute("""
-        SELECT lat, lng, station_name
-        FROM route_stations
-        WHERE route_id=%s
-        ORDER BY station_order
-    """, (bus["route_id"],))
-    import json
-    stations_json = json.dumps(cur.fetchall(), ensure_ascii=False)
+        <!-- Live Bus Location -->
+        <div style="margin-top:30px;">
+            <h5>Bus Live Location</h5>
+            {map_iframe}
+        </div>
 
-    role = session.get("role", "user")
-    user_id = session.get("user_id", 0)
-    counter_no = session.get("counter_no", None)
+        <!-- Seat Selection -->
+        <div style="margin-top:40px;">
+            <h5>Select Your Seat</h5>
+            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:15px;">
+                {seat_buttons_html}
+            </div>
+        </div>
+    </div>
 
-    # ================= HTML =================
-    html = f"""
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+    async function bookSeat(seatNumber){{
+        const passengerName = prompt("Enter Passenger Name:");
+        if(!passengerName) return;
+        const mobile = prompt("Enter Mobile Number:");
+        if(!mobile) return;
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
-<style>
-#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;}}
-</style>
-
-<div class="text-center mb-3">
-    <h3>🚌 {fs} → {ts}</h3>
-    <h5>📅 {d}</h5>
-    <span class="badge bg-success">Available {available}</span>
-</div>
-
-<div id="seat-map"></div>
-
-<div class="text-center mb-4">
-    {seat_buttons}
-</div>
-
-<script>
-const sid = {sid};
-let bookingLock = false;
-
-// ===== MAP =====
-const map = L.map("seat-map").setView([{lat},{lng}], 9);
-L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
-
-const busIcon = L.divIcon({{
-    html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
-    className: 'bus-icon',
-    iconSize: [40,40]
-}});
-let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
-// ===== STATIONS + ROUTE =====
-const stations = {stations_json};
-let routePts = [];
-stations.forEach(s => {{
-    let la = parseFloat(s.lat), ln = parseFloat(s.lng);
-    if(!isNaN(la) && !isNaN(ln)) routePts.push([la, ln]);
-}});
-if(routePts.length>1){{
-    let poly = L.polyline(routePts, {{color:'blue'}}).addTo(map);
-    map.fitBounds(poly.getBounds());
-}}
-
-
-const socket = io();
-socket.on("seat_update", d => {{
-    if(d.sid == sid) markSeatBooked(d.seat);
-}});
-
-function markSeatBooked(seat){{
-    let btn = document.querySelectorAll(".seat")[seat-1];
-    if(btn){{
-        btn.disabled = true;
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X";
+        const response = await fetch('/book', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{
+                schedule_id: {schedule_id},
+                seat_number: seatNumber,
+                passenger_name: passengerName,
+                mobile: mobile,
+                date: '{today}'
+            }})
+        }});
+        const result = await response.json();
+        if(result.ok){{
+            alert("Seat Booked Successfully!");
+            location.reload();
+        }} else {{
+            alert("Error: " + result.error);
+        }}
     }}
-}}
+    </script>
+    """
 
-// ===== BOOK SEAT =====
-async function bookSeat(seat, btn){{
-    if(bookingLock) return;
-
-    let name = prompt("Passenger Name");
-    if(!name) return;
-
-    let mobile = prompt("Mobile Number");
-    if(!mobile) return;
-
-    let payment = "online";  // default
-    let fare = 0;          // default
-
-    let role = "{role}";
-
-    if(role !== "user"){{
-        fare = prompt("Enter fare");
-        payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
-    }}
-
-    bookingLock = true;
-    btn.disabled = true;
-
-    let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: payment,
-        fare: fare,   
-        booked_by_type: role,
-        booked_by_id: {user_id},
-        counter_id: {counter_no if counter_no else 'null'}
-    }};
-
-    let res = await fetch("/book", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify(payload)
-    }});
-
-    let data = await res.json();
-
-    if(data.ok){{
-        markSeatBooked(seat);
-        alert("Seat Booked ✅ ("+payment.toUpperCase()+")");
-    }}else{{
-        alert(data.error);
-        btn.disabled = false;
-    }}
-
-    bookingLock = false;
-}}
-</script>
-"""
-
-    return render_template_string(BASE_HTML, content=html)
+    return render_template_string(BASE_HTML, content=html_content)
 
 
 @app.route("/book", methods=["POST"])
