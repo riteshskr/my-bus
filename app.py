@@ -893,13 +893,16 @@ def seat_page(schedule_id):
     # Generate seat buttons with color coding
     for i in range(1, total_seats + 1):
         if i in booked_seats:
-            seat_buttons_html += f'<button class="btn btn-danger" disabled>X</button>'
+            seat_buttons_html += f'<button class="btn btn-danger m-1" disabled>{i}</button>'
         else:
             seat_buttons_html += f'<button class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
 
     # Google Maps iframe for live bus location
     bus_lat = schedule['current_lat'] or 0
     bus_lon = schedule['current_lng'] or 0
+    counter_js = "null"
+    if session.get("role") == "counter":
+        counter_js = session.get("user_id")
     map_iframe = f"""
     <iframe
         width="100%"
@@ -932,6 +935,7 @@ def seat_page(schedule_id):
     </div>
 
     <script>
+    
     async function bookSeat(seatNumber){{
         const passengerName = prompt("Enter Passenger Name:");
         if(!passengerName) return;
@@ -941,14 +945,14 @@ def seat_page(schedule_id):
         const response = await fetch('/book', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({{
+            body: JSON.stringify({
                 schedule_id: {schedule_id},
                 seat_number: seatNumber,
                 passenger_name: passengerName,
                 mobile: mobile,
-                date: '{today}'
-                counter_id: {{ session.get("user_id") if session.get("role")=="counter" else 'null' }}
-            }})
+                date: "{today}",
+                counter_id: {counter_js}
+            })
         }});
         const result = await response.json();
         if(result.ok){{
