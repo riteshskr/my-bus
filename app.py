@@ -898,8 +898,8 @@ def seat_page(schedule_id):
             seat_buttons_html += f'<button class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
 
     # Google Maps iframe for live bus location
-    bus_lat = schedule['bus_lat'] or 0
-    bus_lon = schedule['bus_lon'] or 0
+    bus_lat = schedule['current_lat'] or 0
+    bus_lon = schedule['current_lng'] or 0
     map_iframe = f"""
     <iframe
         width="100%"
