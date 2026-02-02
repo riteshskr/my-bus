@@ -1501,46 +1501,63 @@ def verify():
 @app.route("/search", methods=["POST"])
 @safe_db
 def search():
-    from_station = request.form.get("from")
-    to_station = request.form.get("to")
-    travel_date = request.form.get("date")
+    fs = request.form.get("from")
+    ts = request.form.get("to")
+    travel_date = request.form.get("date", date.today().isoformat())
 
-    if not from_station or not to_station or not travel_date:
-        return "Please fill all fields", 400
+    if not fs or not ts:
+        return "Please select both From and To stations", 400
 
     # Find routes that include both stations
     conn, cur = get_db()
     cur.execute("""
-        SELECT DISTINCT r.id, r.route_name
-        FROM routes r
-        JOIN route_stations rs1 ON r.id = rs1.route_id
-        JOIN route_stations rs2 ON r.id = rs2.route_id
-        WHERE rs1.station_name = %s AND rs2.station_name = %s
-    """, (from_station, to_station))
+            SELECT DISTINCT route_id
+            FROM route_stations
+            WHERE station_name IN (%s, %s)
+        """, (fs, ts))
+    candidate_routes = [r["route_id"] for r in cur.fetchall()]
 
-    route_ids = [r['id'] for r in cur.fetchall()]
+    if not candidate_routes:
+        return render_template_string(BASE_HTML,
+                                      content="<h3 class='text-center mt-5 text-danger'>🚫 Route not found</h3>")
 
-    if not route_ids:
-        return f"कोई route नहीं मिला {from_station} → {to_station}", 404
-
-    # ✅ Routes की पूरी जानकारी fetch करें
+    # ===== Step 2: Filter routes by station order =====
     cur.execute("""
-            SELECT id, route_name, distance_km
-            FROM routes
-            WHERE id = ANY(%s)
-        """, (route_ids,))
+            SELECT r.id, r.route_name,
+                   rs_from.station_order AS from_order,
+                   rs_to.station_order AS to_order,
+                   string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+            FROM routes r
+            JOIN route_stations rs_from ON rs_from.route_id = r.id
+            JOIN route_stations rs_to   ON rs_to.route_id = r.id
+            JOIN route_stations rs ON rs.route_id = r.id
+            WHERE r.id = ANY(%s)
+              AND rs_from.station_name = %s
+              AND rs_to.station_name = %s
+              AND rs_from.station_order < rs_to.station_order
+            GROUP BY r.id, r.route_name, rs_from.station_order, rs_to.station_order
+            ORDER BY rs_from.station_order
+        """, (candidate_routes, fs, ts))
 
-    routes = cur.fetchall()
+    valid_routes = cur.fetchall()
 
-    # HTML में दिखाएँ
-    html = f"<h3>Routes from {from_station} → {to_station}:</h3>"
-    for r in routes:
+    if not valid_routes:
+        return render_template_string(BASE_HTML,
+                                      content="<h3 class='text-center mt-5 text-danger'>🚫 Route not found</h3>")
+
+    # ===== Generate HTML for valid routes =====
+    html = "<h3 class='text-center mt-5'>🚌 Available Routes</h3><div class='row g-4 mt-3'>"
+    for r in valid_routes:
         html += f"""
-            <div class='card mb-3 p-3'>
-                <h5>🛣️ {r['route_name']} ({r['distance_km']} km)</h5>
-                <a href='/buses/{r['id']}' class='btn btn-primary btn-sm'>View Buses</a>
+            <div class="col-md-6">
+                <div class="card shadow-lg p-3">
+                    <h4 class="fw-bold">{r['route_name']}</h4>
+                    <p>📍 {r['stations']}</p>
+                    <a href="/buses/{r['id']}" class="btn btn-primary w-100">View Buses</a>
+                </div>
             </div>
             """
+    html += "</div>"
 
     return render_template_string(BASE_HTML, content=html)
 
