@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 import mysql.connector
 import atexit
 import razorpay
-import psycopg2
+#import psycopg2
 razor_client = razorpay.Client(auth=(
     os.getenv("RAZORPAY_KEY_ID"),
     os.getenv("RAZORPAY_KEY_SECRET")
