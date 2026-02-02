@@ -526,7 +526,7 @@ def home():
     cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
     stations = [r["station_name"] for r in cur.fetchall()]
 
-    return render_template_string(BASE_HTML, stations=stations, routes=routes)
+    return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
 
 @app.route("/dashboard")
 def dashboard():
