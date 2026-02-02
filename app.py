@@ -702,10 +702,10 @@ def buses(rid):
                         <div class="bus-info mt-2">
                             <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
                             <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
+                        <div class="d-flex justify-content-end gap-2 mt-3 flex-wrap w-100">
+                         <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-grow-1 flex-md-grow-0">🗺️ Live GPS</a>
+                        <a href="/select/{{ bus.id }}" class="btn btn-success flex-grow-1 flex-md-grow-0">🎫 Book Seat</a>
                         </div>
-                        <a href="/live-bus/{{ bus.id }}" class="btn btn-primary float-end mt-2">🗺️ Live GPS</a>
-                        <a href="/select/{{ bus.id }}" class="btn btn-success float-end mt-2">🎫 Book Seat</a>
-                    </div>
                     {% endfor %}
                 {% else %}
                     <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
