@@ -611,7 +611,7 @@ def dashboard():
 #@safe_db
 def buses(rid):
     conn, cur = get_db()
-
+    travel_date = session.get("date", date.today().isoformat())
     # Route details + stations
     cur.execute("""
         SELECT r.route_name, r.distance_km, 
@@ -628,19 +628,21 @@ def buses(rid):
 
     # All buses of this route
     cur.execute("""
-        SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
-               s.current_lat, s.current_lng,
-               COALESCE(bk.count, 0) as booked_count
-        FROM schedules s 
-        LEFT JOIN (
-            SELECT schedule_id, COUNT(*) as count 
-            FROM seat_bookings 
-            WHERE travel_date = CURRENT_DATE AND status='confirmed'
-            GROUP BY schedule_id
-        ) bk ON s.id = bk.schedule_id
-        WHERE s.route_id = %s 
-        ORDER BY s.departure_time
-    """, (rid,))
+            SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
+                   s.current_lat, s.current_lng,
+                   COALESCE(bk.count, 0) as booked_count
+            FROM schedules s 
+            LEFT JOIN (
+                SELECT schedule_id, COUNT(*) as count 
+                FROM seat_bookings 
+                WHERE travel_date::date = %s
+                  AND status='confirmed'
+                GROUP BY schedule_id
+            ) bk ON s.id = bk.schedule_id
+            WHERE s.route_id = %s 
+            ORDER BY s.departure_time
+        """, (travel_date, rid))
+
     buses_data = cur.fetchall()
 
     # Full HTML inline
@@ -845,15 +847,15 @@ def select(sid):
     if not fs or not ts or not d:
         return redirect("/")
 
-    return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+    return redirect(f"/seats/{sid}")
 
 
 @app.route("/seats/<int:sid>")
 @safe_db
 def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
+    fs = session.get("from")
+    ts = session.get("to")
+    d = session.get("date", date.today().isoformat())
 
     conn, cur = get_db()
 
