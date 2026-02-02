@@ -1551,7 +1551,6 @@ def search():
     if not fs_input or not ts_input:
         return "Please select both From and To stations", 400
 
-    # Convert input to lowercase for case-insensitive match
     fs = fs_input.lower()
     ts = ts_input.lower()
 
@@ -1567,48 +1566,34 @@ def search():
     candidate_routes = [r["route_id"] for r in cur.fetchall()]
 
     if not candidate_routes:
-        return render_template_string(BASE_HTML,
-                                      content=f"<h3 class='text-center mt-5 text-danger'>🚫 Route not found for {fs_input} → {ts_input}</h3>")
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No buses for {fs_input} → {ts_input}</h3>"
+        )
 
-    # Step 2: Filter routes by station order
+    # Step 2: Check correct order
     cur.execute("""
-        SELECT r.id, r.route_name,
-               rs_from.station_order AS from_order,
-               rs_to.station_order AS to_order,
-               string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+        SELECT r.id
         FROM routes r
         JOIN route_stations rs_from ON rs_from.route_id = r.id
         JOIN route_stations rs_to   ON rs_to.route_id = r.id
-        JOIN route_stations rs ON rs.route_id = r.id
         WHERE r.id = ANY(%s)
           AND LOWER(rs_from.station_name) = %s
           AND LOWER(rs_to.station_name) = %s
           AND rs_from.station_order < rs_to.station_order
-        GROUP BY r.id, r.route_name, rs_from.station_order, rs_to.station_order
-        ORDER BY rs_from.station_order
+        LIMIT 1
     """, (candidate_routes, fs, ts))
 
-    valid_routes = cur.fetchall()
+    route = cur.fetchone()
 
-    if not valid_routes:
-        return render_template_string(BASE_HTML,
-                                      content=f"<h3 class='text-center mt-5 text-danger'>🚫 Route not found in order for {fs_input} → {ts_input}</h3>")
+    if not route:
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No valid route for {fs_input} → {ts_input}</h3>"
+        )
 
-    # Step 3: Generate HTML
-    html = "<h3 class='text-center mt-5'>🚌 Available Routes</h3><div class='row g-4 mt-3'>"
-    for r in valid_routes:
-        html += f"""
-            <div class="col-md-6">
-                <div class="card shadow-lg p-3">
-                    <h4 class="fw-bold">{r['route_name']}</h4>
-                    <p>📍 {r['stations']}</p>
-                    <a href="/buses/{r['id']}" class="btn btn-primary w-100">View Buses</a>
-                </div>
-            </div>
-        """
-    html += "</div>"
-
-    return render_template_string(BASE_HTML, content=html)
+    # 🔥 DIRECT REDIRECT
+    return redirect(f"/buses/{route['id']}")
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
