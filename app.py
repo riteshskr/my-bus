@@ -883,7 +883,6 @@ def seats(sid):
     for r in cur.fetchall():
         bfs = station_to_order.get(r["from_station"], 0)
         bts = station_to_order.get(r["to_station"], 0)
-        # Seat blocked only if overlap
         if not (ts_order <= bfs or fs_order >= bts):
             booked_seats.add(r["seat_number"])
 
@@ -894,10 +893,11 @@ def seats(sid):
 
     for i in range(1, total_seats + 1):
         if i in booked_seats:
-            seat_buttons += '<button class="seat booked" disabled>X</button>'
+            seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
         else:
             seat_buttons += f'''
-            <button class="seat available" onclick="bookSeat({i}, this)">
+            <button class="btn btn-success seat"
+                    onclick="bookSeat({i}, this)">
                 {i}
             </button>'''
 
@@ -934,21 +934,7 @@ def seats(sid):
 
 <style>
 #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{
-    width:52px;
-    height:52px;
-    margin:5px;
-    border-radius:12px;
-    border:none;
-    font-weight:bold;
-    font-size:16px;
-    cursor:pointer;
-    color:white;
-    transition:.2s;
-}}
-.seat.available{{ background:#2ecc71; }}  /* Green */
-.seat.booked{{ background:#e74c3c; cursor:not-allowed; }}  /* Red */
-.seat.selected{{ background:#f1c40f; color:black; }}  /* Yellow */
+.seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;}}
 </style>
 
 <div class="text-center mb-3">
@@ -977,7 +963,6 @@ const busIcon = L.divIcon({{
     iconSize: [40,40]
 }});
 let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
-
 // ===== STATIONS + ROUTE =====
 const stations = {stations_json};
 let routePts = [];
@@ -990,7 +975,7 @@ if(routePts.length>1){{
     map.fitBounds(poly.getBounds());
 }}
 
-// ===== SOCKET LIVE UPDATE =====
+
 const socket = io();
 socket.on("seat_update", d => {{
     if(d.sid == sid) markSeatBooked(d.seat);
@@ -1000,8 +985,8 @@ function markSeatBooked(seat){{
     let btn = document.querySelectorAll(".seat")[seat-1];
     if(btn){{
         btn.disabled = true;
-        btn.classList.remove("available");
-        btn.classList.add("booked");
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-danger");
         btn.innerText = "X";
     }}
 }}
@@ -1017,7 +1002,8 @@ async function bookSeat(seat, btn){{
     if(!mobile) return;
 
     let payment = "online";  // default
-    let fare = 0;          
+    let fare = 0;          // default
+
     let role = "{role}";
 
     if(role !== "user"){{
