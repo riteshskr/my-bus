@@ -303,153 +303,85 @@ BASE_HTML = """
 
 <style>
 :root {
-    --primary: #4F46E5;
-    --primary-dark: #4338CA;
+    --primary: #4F46E5; --primary-dark: #4338CA;
     --secondary: #F97316;
     --gradient-main: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
     --gradient-text: linear-gradient(to right, #4F46E5, #EC4899);
-    --text-main: #111827;
-    --text-light: #6B7280;
-    --bg-body: #F3F4F6;
-    --white: #FFFFFF;
+    --text-main: #111827; --text-light: #6B7280;
+    --bg-body: #F3F4F6; --white: #FFFFFF;
     --shadow-float: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
     --radius: 16px;
 }
 
 *{margin:0;padding:0;box-sizing:border-box;}
-body{font-family:'Inter', sans-serif;color:var(--text-main);background-color:var(--bg-body);line-height:1.6;overflow-x:hidden;}
 
+body{font-family:'Inter', sans-serif;color:var(--text-main);background-color:var(--bg-body);line-height:1.6;overflow-x:hidden;}
 h1, h2, h3, h4 { font-family: 'Poppins', sans-serif; }
 a { text-decoration: none; color: inherit; }
 
 .btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px 32px;
-    border-radius: 50px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    border: none;
-    gap: 10px;
-    font-size: 1rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 14px 32px; border-radius: 50px; font-weight: 600;
+    cursor: pointer; transition: all 0.3s ease; border: none;
+    gap: 10px; font-size: 1rem;
 }
 
-.btn-primary {
-    background: var(--gradient-main);
-    color: var(--white);
-    box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
-}
+.btn-primary { background: var(--gradient-main); color: var(--white); box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(79, 70, 229, 0.6); }
 
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(79, 70, 229, 0.6);
-}
-
-/* Glassmorphism Header */
+/* ================= NAVBAR & HEADER ================= */
 header {
-    position: fixed;
-    top: 0; width: 100%;
-    background: rgba(255, 255, 255, 0.85);
-    backdrop-filter: blur(12px);
-    z-index: 1000;
-    border-bottom: 1px solid rgba(255,255,255,0.3);
+    position: fixed; top: 0; width: 100%;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(12px); z-index: 2000;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
 }
 
 nav {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    height: 80px;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 24px;
+    display: flex; justify-content: space-between; align-items: center;
+    height: 80px; max-width: 1200px; margin: 0 auto; padding: 0 24px;
 }
 
-.logo {
-    font-size: 1.8rem;
-    font-weight: 800;
-    color: var(--primary);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
+.logo { font-size: 1.8rem; font-weight: 800; color: var(--primary); display: flex; align-items: center; gap: 10px; }
 .nav-links { display: flex; gap: 40px; }
 .nav-links a { font-weight: 500; color: var(--text-main); position: relative; }
-.nav-links a::after {
-    content: ''; position: absolute; width: 0; height: 2px; bottom: -4px; left: 0;
-    background: var(--gradient-main); transition: width 0.3s;
-}
+.nav-links a::after { content: ''; position: absolute; width: 0; height: 2px; bottom: -4px; left: 0; background: var(--gradient-main); transition: width 0.3s; }
 .nav-links a:hover::after { width: 100%; }
 
+/* ================= HERO & SEARCH ================= */
 .hero {
-    position: relative;
-    height: 700px;
+    position: relative; height: 700px;
     background: linear-gradient(135deg, rgba(17, 24, 39, 0.85) 0%, rgba(79, 70, 229, 0.6) 100%),
                 url("https://picsum.photos/seed/bus/1920/1080") center/cover fixed;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
-    color: var(--white);
-    padding-top: 80px;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; color: var(--white); padding-top: 80px;
 }
-
 .hero-content { max-width: 900px; padding: 20px; z-index: 2; }
 .hero h1 { font-size: 3.5rem; line-height: 1.1; margin-bottom: 1.5rem; font-weight: 800; text-shadow: 0 2px 10px rgba(0,0,0,0.2); }
 .hero p { font-size: 1.25rem; margin-bottom: 2.5rem; opacity: 0.9; }
 
-/* Booking Widget */
 .booking-widget {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(20px);
-    border-radius: 24px;
-    padding: 2.5rem;
-    box-shadow: var(--shadow-float);
-    width: 100%;
-    max-width: 1100px;
-    margin: -80px auto 0;
-    position: relative;
-    z-index: 10;
+    background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+    border-radius: 24px; padding: 2.5rem; box-shadow: var(--shadow-float);
+    width: 100%; max-width: 1100px; margin: -80px auto 0;
+    position: relative; z-index: 1000;
     border: 1px solid rgba(255,255,255,0.5);
 }
 
-.booking-form {
-    display: grid;
-    grid-template-columns: 1.4fr 1.4fr 1fr auto;
-    gap: 20px;
-    align-items: end;
-}
-
+.booking-form { display: grid; grid-template-columns: 1.4fr 1.4fr 1fr auto; gap: 20px; align-items: end; }
 .input-group label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-light); margin-bottom: 8px; text-align: left;}
 .input-control { width: 100%; padding: 16px; border: 2px solid #E5E7EB; border-radius: 12px; font-size: 1rem; outline: none; transition: all 0.3s; background: #F9FAFB; }
 .input-control:focus { border-color: var(--primary); background: var(--white); box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); }
 
-/* Cards */
-.card {
-    background: var(--white);
-    border-radius: 20px;
-    overflow: hidden;
-    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1);
-    transition: all 0.4s ease;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-}
+/* ================= CARDS ================= */
+.card { background: var(--white); border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.1); transition: all 0.4s ease; position: relative; display: flex; flex-direction: column; }
 .card:hover { transform: translateY(-10px); box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2); }
 .card-img { height: 200px; width: 100%; object-fit: cover; transition: transform 0.6s ease; }
-.card:hover .card-img { transform: scale(1.1); overflow: hidden; }
-.card-body { padding: 25px; flex-grow: 1; display: flex; flex-direction: column; }
+.card:hover .card-img { transform: scale(1.1); }
 .card-img-wrapper { overflow: hidden; height: 220px; }
 
-/* Responsive */
-@media(max-width:768px){
-    nav { flex-direction: column; height: auto; padding: 15px; }
-    .booking-form { grid-template-columns: 1fr; }
-    .hero h1 { font-size: 2.2rem; }
-}
+/* ================= RESPONSIVE ================= */
+@media(max-width:768px){ nav { flex-direction: column; height: auto; padding: 15px; } .booking-form { grid-template-columns: 1fr; } .hero h1 { font-size: 2.2rem; } }
 </style>
 </head>
 <body>
@@ -459,82 +391,80 @@ nav {
     <a href="/" class="logo"><i class="fa-solid fa-bus-simple"></i> BusConnect</a>
     <div class="nav-links">
       <a href="/">Home</a>
+      <a href="/login">Login</a>
       <a href="/admin">Admin</a>
-      <a href="/counter">Counter</a>
-    </div>
-    <div>
-        <a href="/login" class="btn btn-primary" style="padding: 10px 20px; font-size: 0.9rem;">Login</a>
     </div>
   </nav>
 </header>
 
-{% if content %}
-<div style="padding: 120px 24px 40px; max-width: 1200px; margin: 0 auto;">
-    {{ content|safe }}
-</div>
-{% else %}
-<section class="hero">
-  <div class="hero-content">
-    <h1>Travel Comfortably,<br><span style="background: var(--gradient-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Anytime, Anywhere</span></h1>
-    <p>Discover routes with premium comfort and real-time tracking.</p>
-  </div>
-</section>
-{% endif %}
+<!-- ✅ FIXED CONTENT WRAPPER -->
+<main style="min-height: 100vh;">
+    <!-- अगर Content नहीं है तो Home Page दिखाएं -->
+    {% if not content %}
+    <section class="hero">
+      <div class="hero-content">
+        <h1>Travel Comfortably,<br><span style="background: var(--gradient-text); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Anytime, Anywhere</span></h1>
+        <p>Discover routes with premium comfort and real-time tracking.</p>
+      </div>
+    </section>
 
-<!-- Search Widget on Home -->
-{% if stations %}
-<div class="container">
-    <div class="booking-widget">
-        <form class="booking-form" action="/search" method="POST">
-            <div class="input-group">
-                <label>From</label>
-                <select name="from" class="input-control" required>
-                    <option value="" disabled selected>Select Station</option>
-                    {% for s in stations %}
-                    <option value="{{ s }}">{{ s }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="input-group">
-                <label>To</label>
-                <select name="to" class="input-control" required>
-                    <option value="" disabled selected>Select Station</option>
-                    {% for s in stations %}
-                    <option value="{{ s }}">{{ s }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="input-group">
-                <label>Date</label>
-                <input type="date" name="date" class="input-control" required value="{{ today }}">
-            </div>
-            <button type="submit" class="btn btn-primary">
-                Search <i class="fa-solid fa-arrow-right"></i>
-            </button>
-        </form>
-    </div>
-
-    <!-- Popular Routes Cards -->
-    <div style="margin-top: 60px; margin-bottom: 40px;">
-        <h2 style="text-align: center; margin-bottom: 30px; font-size: 2.5rem; font-weight: 700;">Popular Routes</h2>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px;">
-            {% for route in routes %}
-            <a href="/buses/{{ route.id }}" style="text-decoration: none; color: inherit;">
-                <div class="card">
-                    <div class="card-img-wrapper">
-                        <img src="https://picsum.photos/seed/{{ route.id }}/400/300" alt="Route" class="card-img">
-                    </div>
-                    <div class="card-body">
-                        <h3 style="font-size: 1.4rem; margin-bottom: 5px;">{{ route.route_name }}</h3>
-                        <p style="color: var(--text-light);"><i class="fa-solid fa-road"></i> {{ route.distance_km }} km</p>
-                    </div>
+    <!-- Search Box और Routes Cards के लिए Container -->
+    {% if stations %}
+    <div style="padding: 0 20px;">
+        <div class="booking-widget">
+            <form class="booking-form" action="/search" method="POST">
+                <div class="input-group">
+                    <label>From</label>
+                    <select name="from" class="input-control" required>
+                        <option value="" disabled selected>Select Station</option>
+                        {% for s in stations %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+                    </select>
                 </div>
-            </a>
-            {% endfor %}
+                <div class="input-group">
+                    <label>To</label>
+                    <select name="to" class="input-control" required>
+                        <option value="" disabled selected>Select Station</option>
+                        {% for s in stations %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Date</label>
+                    <input type="date" name="date" class="input-control" required value="{{ today }}">
+                </div>
+                <button type="submit" class="btn btn-primary">
+                    Search <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
+        </div>
+
+        <div style="max-width: 1200px; margin: 60px auto 40px;">
+            <h2 style="text-align: center; margin-bottom: 30px; font-size: 2.5rem; font-weight: 700;">Popular Routes</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px;">
+                {% for route in routes %}
+                <a href="/buses/{{ route.id }}" style="text-decoration: none; color: inherit;">
+                    <div class="card">
+                        <div class="card-img-wrapper">
+                            <img src="https://picsum.photos/seed/{{ route.id }}/400/300" alt="Route" class="card-img">
+                        </div>
+                        <div style="padding: 25px;">
+                            <h3 style="font-size: 1.4rem; margin-bottom: 5px;">{{ route.route_name }}</h3>
+                            <p style="color: #6B7280;"><i class="fa-solid fa-road"></i> {{ route.distance_km }} km</p>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
         </div>
     </div>
-</div>
-{% endif %}
+    {% endif %}
+
+    <!-- ✅ अगर Content है (जैसे Live Bus Page), तो Content दिखाएं -->
+    {% if content %}
+    <div style="padding: 100px 20px 40px; max-width: 1200px; margin: 0 auto;">
+        {{ content|safe }}
+    </div>
+    {% endif %}
+</main>
 
 </body>
 </html>
