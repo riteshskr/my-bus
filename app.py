@@ -1044,8 +1044,8 @@ def book():
 
         conn.commit()
         socketio.emit("seat_update", {
-            "sid": data['sid'],
-            "seat": data['seat']
+            "sid": data['schedule_id'],  # schedule_id को sid की जगह
+            "seat": data['seat_number']  # data['seat'] नहीं, data['seat_number']
         })
         return jsonify({"ok": True, "fare": fare})
 
