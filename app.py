@@ -973,49 +973,22 @@ def seat_page(schedule_id):
 def book():
     data = request.get_json()
 
-    # ===== Required fields =====
-    required = [
-        'sid', 'seat', 'name', 'mobile', 'date',
-        'from', 'to', 'payment_mode',
-        'booked_by_type', 'booked_by_id'
-    ]
-
-    for field in required:
-        if field not in data:
-            return jsonify({"ok": False, "error": f"Missing field: {field}"})
-
     conn, cur = get_db()
 
     try:
-        # ===== Check if seat already booked =====
         cur.execute("""
             SELECT id FROM seat_bookings
             WHERE schedule_id=%s 
             AND seat_number=%s 
             AND travel_date=%s
             AND status='confirmed'
-        """, (data['sid'], data['seat'], data['date']))
+        """, (data['schedule_id'], data['seat_number'], data['date']))
 
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        # ===== Temporary Fare =====
         fare = random.randint(250, 450)
 
-        # 👉 RAZORPAY IGNORE → ALWAYS CASH
-        role = data['booked_by_type']
-
-        if role == "user":
-            payment_mode = "online"
-            status = "confirmed"  # online payment ke baad confirm
-        else:
-            payment_mode = "cash"
-            status = "confirmed"
-
-        # ===== INSERT BOOKING =====
-        counter_id = data.get('counter_id')
-        if counter_id in (None, 'null', ''):
-            counter_id = None
         cur.execute("""
         INSERT INTO seat_bookings
         (
@@ -1033,36 +1006,21 @@ def book():
             booked_by_id,
             counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',1,%s)
         """, (
-            data['sid'],
-            data['seat'],
-            data['name'],
+            data['schedule_id'],
+            data['seat_number'],
+            data['passenger_name'],
             data['mobile'],
-            data['from'],
-            data['to'],
+            session.get("from"),
+            session.get("to"),
             data['date'],
             fare,
-            status,
-            payment_mode,
-            data['booked_by_type'],
-            data['booked_by_id'],
-            data.get('counter_id')  # optional
+            data.get('counter_id')
         ))
 
         conn.commit()
-
-        # ===== LIVE UPDATE =====
-        socketio.emit("seat_update", {
-            "sid": data['sid'],
-            "seat": data['seat']
-        })
-
-        return jsonify({
-            "ok": True,
-            "fare": fare,
-            "message": "Seat booked successfully (CASH MODE)"
-        })
+        return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
         conn.rollback()
@@ -1423,7 +1381,7 @@ def search():
         FROM routes r
         JOIN route_stations rs_from ON rs_from.route_id = r.id
         JOIN route_stations rs_to   ON rs_to.route_id = r.id
-        WHERE r.id = ANY(%s)
+        WHERE r.id = ANY(%s::int[])
           AND LOWER(rs_from.station_name) = %s
           AND LOWER(rs_to.station_name) = %s
           AND rs_from.station_order < rs_to.station_order
