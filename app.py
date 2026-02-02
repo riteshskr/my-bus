@@ -926,130 +926,131 @@ def seats(sid):
 
     # ================= HTML =================
     html = f"""
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+    #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
+    .seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;font-size:16px;}}
+    .seat.btn-success{{background-color:#198754 !important;color:#fff !important;}}
+    .seat.btn-danger{{background-color:#dc3545 !important;color:#fff !important;}}
+    .seat-container{{display:flex;flex-wrap:wrap;justify-content:center;}}
+    </style>
 
-<style>
-#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;}}
-</style>
+    <div class="text-center mb-3">
+        <h3>🚌 {fs} → {ts}</h3>
+        <h5>📅 {d}</h5>
+        <span class="badge bg-success">Available {available}</span>
+    </div>
 
-<div class="text-center mb-3">
-    <h3>🚌 {fs} → {ts}</h3>
-    <h5>📅 {d}</h5>
-    <span class="badge bg-success">Available {available}</span>
-</div>
+    <div id="seat-map"></div>
 
-<div id="seat-map"></div>
+    <div class="seat-container mb-4">
+        {seat_buttons}
+    </div>
 
-<div class="text-center mb-4">
-    {seat_buttons}
-</div>
+    <script>
+    const sid = {sid};
+    let bookingLock = false;
 
-<script>
-const sid = {sid};
-let bookingLock = false;
+    // ===== MAP =====
+    const map = L.map("seat-map").setView([{lat},{lng}], 9);
+    L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
 
-// ===== MAP =====
-const map = L.map("seat-map").setView([{lat},{lng}], 9);
-L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
+    const busIcon = L.divIcon({{
+        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+        className: 'bus-icon',
+        iconSize: [40,40]
+    }});
+    let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
-const busIcon = L.divIcon({{
-    html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
-    className: 'bus-icon',
-    iconSize: [40,40]
-}});
-let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
-// ===== STATIONS + ROUTE =====
-const stations = {stations_json};
-let routePts = [];
-stations.forEach(s => {{
-    let la = parseFloat(s.lat), ln = parseFloat(s.lng);
-    if(!isNaN(la) && !isNaN(ln)) routePts.push([la, ln]);
-}});
-if(routePts.length>1){{
-    let poly = L.polyline(routePts, {{color:'blue'}}).addTo(map);
-    map.fitBounds(poly.getBounds());
-}}
-
-
-const socket = io();
-socket.on("seat_update", d => {{
-    if(d.sid == sid) markSeatBooked(d.seat);
-}});
-
-function markSeatBooked(seat){{
-    let btn = document.querySelectorAll(".seat")[seat-1];
-    if(btn){{
-        btn.disabled = true;
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X";
-    }}
-}}
-
-// ===== BOOK SEAT =====
-async function bookSeat(seat, btn){{
-    if(bookingLock) return;
-
-    let name = prompt("Passenger Name");
-    if(!name) return;
-
-    let mobile = prompt("Mobile Number");
-    if(!mobile) return;
-
-    let payment = "online";  // default
-    let fare = 0;          // default
-
-    let role = "{role}";
-
-    if(role !== "user"){{
-        fare = prompt("Enter fare");
-        payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
+    // ===== STATIONS + ROUTE =====
+    const stations = {stations_json};
+    let routePts = [];
+    stations.forEach(s => {{
+        let la = parseFloat(s.lat), ln = parseFloat(s.lng);
+        if(!isNaN(la) && !isNaN(ln)) routePts.push([la, ln]);
+    }});
+    if(routePts.length>1){{
+        let poly = L.polyline(routePts, {{color:'blue'}}).addTo(map);
+        map.fitBounds(poly.getBounds());
     }}
 
-    bookingLock = true;
-    btn.disabled = true;
-
-    let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: payment,
-        fare: fare,   
-        booked_by_type: role,
-        booked_by_id: {user_id},
-        counter_id: {counter_no if counter_no else 'null'}
-    }};
-
-    let res = await fetch("/book", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify(payload)
+    // ===== SOCKET UPDATE =====
+    const socket = io();
+    socket.on("seat_update", d => {{
+        if(d.sid == sid) markSeatBooked(d.seat);
     }});
 
-    let data = await res.json();
-
-    if(data.ok){{
-        markSeatBooked(seat);
-        alert("Seat Booked ✅ ("+payment.toUpperCase()+")");
-    }}else{{
-        alert(data.error);
-        btn.disabled = false;
+    function markSeatBooked(seat){{
+        let btn = document.querySelectorAll(".seat")[seat-1];
+        if(btn){{
+            btn.disabled = true;
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.innerText = "X";
+        }}
     }}
 
-    bookingLock = false;
-}}
-</script>
-"""
+    // ===== BOOK SEAT =====
+    async function bookSeat(seat, btn){{
+        if(bookingLock) return;
 
+        let name = prompt("Passenger Name");
+        if(!name) return;
+
+        let mobile = prompt("Mobile Number");
+        if(!mobile) return;
+
+        let payment = "online";
+        let fare = 0;
+        let role = "{role}";
+
+        if(role !== "user"){{
+            fare = prompt("Enter fare");
+            payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
+        }}
+
+        bookingLock = true;
+        btn.disabled = true;
+
+        let payload = {{
+            sid: sid,
+            seat: seat,
+            name: name,
+            mobile: mobile,
+            date: "{d}",
+            from: "{fs}",
+            to: "{ts}",
+            payment_mode: payment,
+            fare: fare,   
+            booked_by_type: role,
+            booked_by_id: {user_id},
+            counter_id: {counter_no if counter_no else 'null'}
+        }};
+
+        let res = await fetch("/book", {{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body: JSON.stringify(payload)
+        }});
+
+        let data = await res.json();
+
+        if(data.ok){{
+            markSeatBooked(seat);
+            alert("Seat Booked ✅ ("+payment.toUpperCase()+")");
+        }}else{{
+            alert(data.error);
+            btn.disabled = false;
+        }}
+
+        bookingLock = false;
+    }}
+    </script>
+    """
     return render_template_string(BASE_HTML, content=html)
 
 
