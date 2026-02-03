@@ -984,7 +984,10 @@ def seat_page(sid):
             btn.innerText = "X" + data.seat;
         }}
     }});
-    
+     setInterval(()=>{{
+    fetch("/heartbeat");
+    }}, 30000);
+   
     // ===== Seat Booking =====
     function bookSeat(seatId){{
         let name = prompt("Passenger Name:");
@@ -1026,9 +1029,7 @@ def seat_page(sid):
             btn.disabled = false;
         }});
     }}
-    setInterval(function(){{
-       fetch("/heartbeat");
-   }}, 30000);
+   
 
     </script>
     """
