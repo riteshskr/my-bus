@@ -950,7 +950,7 @@ def seat_page(sid):
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
-        maxZoom: 19
+        maxZoom: 30
     }}).addTo(map);
 
     let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
