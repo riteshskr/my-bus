@@ -56,11 +56,17 @@ def shutdown_pool():
 
 # ================= DB CONTEXT =================
 def get_db():
-    if 'db_conn' not in g:
+    try:
+        if 'db_conn' not in g or g.db_conn.closed:
+            g.db_conn = pool.getconn()
+        if 'db_cur' not in g:
+            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+        return g.db_conn, g.db_cur
+    except:
+        pool.closeall()
         g.db_conn = pool.getconn()
-    if 'db_cur' not in g:
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-    return g.db_conn, g.db_cur
+        return g.db_conn, g.db_cur
 
 
 @app.teardown_appcontext
@@ -978,7 +984,7 @@ def seat_page(sid):
             btn.innerText = "X" + data.seat;
         }}
     }});
-
+    
     // ===== Seat Booking =====
     function bookSeat(seatId){{
         let name = prompt("Passenger Name:");
@@ -1020,10 +1026,18 @@ def seat_page(sid):
             btn.disabled = false;
         }});
     }}
+    setInterval(function(){
+       fetch("/heartbeat");
+   }, 30000);
+
     </script>
     """
 
     return render_template_string(BASE_HTML, content=html_content)
+
+@app.route("/heartbeat")
+def heartbeat():
+    return "ok"
 
 @app.route("/book", methods=["POST"])
 @safe_db
