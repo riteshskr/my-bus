@@ -907,9 +907,22 @@ def seat_page(sid):
         counter_js = session.get("user_id")
 
     map_iframe = f"""
-    <iframe width="100%" height="300"
-        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&z=14&output=embed">
-    </iframe>
+    <div style="
+        width:100%;
+        max-width:500px;
+        height:220px;
+        border:2px solid #333;
+        border-radius:12px;
+        overflow:hidden;
+        box-shadow:0 4px 10px rgba(0,0,0,0.2);
+    ">
+        <iframe
+            width="100%"
+            height="100%"
+            style="border:0;"
+            src="https://www.google.com/maps?q={bus_lat},{bus_lon}&z=14&output=embed">
+        </iframe>
+    </div>
     """
 
     html_content = f"""
