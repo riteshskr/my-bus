@@ -1005,13 +1005,12 @@ def seat_page(sid):
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{
-                sid: scheduleId,
-                seat: seatId,
-                name: name.trim(),
+                schedule_id: {sid},
+                seat_number: seatNumber,
+                passenger_name: passengerName,
                 mobile: mobile,
-                from: fromStation,
-                to: toStation,
-                date: travelDate
+                date: "{today}",
+                counter_id: {counter_js}
             }})
         }})
         .then(response => {{
@@ -1039,7 +1038,7 @@ def seat_page(sid):
     }}
     </script>
     """
-    
+
 
     return render_template_string(BASE_HTML, content=html_content)
 
