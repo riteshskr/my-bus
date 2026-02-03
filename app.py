@@ -1155,7 +1155,7 @@ def driver(sid):
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io({{ transports: ["websocket", "polling"] }});
+        const socket = io(window.location.origin);
         let watchId = null;
 
         function startGPS() {{
