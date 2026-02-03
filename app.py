@@ -899,8 +899,8 @@ def seat_page(sid):
             '''
 
     # ===== Leaflet Map =====
-    bus_lat = schedule['current_lat'] or 27.5
-    bus_lon = schedule['current_lng'] or 75.0
+    bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
+    bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
 
     counter_js = "null"
     if session.get("role") == "counter":
@@ -940,8 +940,32 @@ def seat_page(sid):
     const socket = io();
     const SID = {sid};
     const TODAY = "{today}";
+    const BUS_LAT = {bus_lat};
+    const BUS_LNG = {bus_lon};
+    const COUNTER_ID = {counter_js};
 
-    // ===== Seat Update Realtime =====
+    // ===== Leaflet Map Init =====
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 7);
+
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }}).addTo(map);
+
+    let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
+
+    // ===== Bus location update =====
+    socket.on("bus_location", data => {{
+        if(data.sid == SID){{
+            let lat = parseFloat(data.lat);
+            let lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat, lng]);
+            map.panTo([lat, lng]);
+        }}
+    }});
+
+    // ===== Seat update realtime =====
     socket.on("seat_update", function(data) {{
         if(SID != data.sid || TODAY != data.date) return;
 
@@ -951,25 +975,6 @@ def seat_page(sid):
             btn.classList.add("btn-danger");
             btn.disabled = true;
             btn.innerText = "X" + data.seat;
-        }}
-    }});
-
-    // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([{bus_lat}, {bus_lon}], 7);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-    subdomains: 'abcd',
-    maxZoom: 19
-}).addTo(map);
-
-    let busMarker = L.marker([{bus_lat}, {bus_lon}]).addTo(map);
-
-    socket.on("bus_location", data => {{
-        if(data.sid == SID){{
-            let lat = parseFloat(data.lat);
-            let lng = parseFloat(data.lng);
-            busMarker.setLatLng([lat, lng]);
-            map.panTo([lat, lng]);
         }}
     }});
 
@@ -995,7 +1000,7 @@ def seat_page(sid):
                 passenger_name: name,
                 mobile: mobile,
                 date: TODAY,
-                counter_id: {counter_js}
+                counter_id: COUNTER_ID
             }})
         }})
         .then(r => r.json())
