@@ -855,7 +855,7 @@ def select(sid):
 def seat_page(sid):
     conn, cur = get_db()
 
-    # Schedule details
+    # ===== Schedule details =====
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time, r.route_name,
                r.id as route_id, s.current_lat, s.current_lng
@@ -867,7 +867,7 @@ def seat_page(sid):
     if not schedule:
         return "Schedule not found", 404
 
-    # Route stations
+    # ===== Route stations =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -876,7 +876,7 @@ def seat_page(sid):
     """, (schedule['route_id'],))
     stations = cur.fetchall()
 
-    # Booked seats
+    # ===== Already booked seats =====
     today = date.today().isoformat()
     cur.execute("""
         SELECT seat_number
@@ -886,27 +886,48 @@ def seat_page(sid):
     booked = cur.fetchall()
     booked_seats = set(r['seat_number'] for r in booked)
 
-    # Seat buttons
+    # ===== Seat buttons =====
     seat_buttons = ""
-    for i in range(1, 41):
+    for i in range(1, 41):  # Total 40 seats
         if i in booked_seats:
-            seat_buttons += f'<button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>'
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
+            '''
         else:
-            seat_buttons += f'<button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>'
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
+            '''
 
-    # Map initial coordinates
-    bus_lat = schedule['current_lat'] or 27.2
-    bus_lng = schedule['current_lng'] or 74.2
+    # ===== Leaflet Map =====
+    bus_lat = schedule['current_lat'] or 27.5
+    bus_lon = schedule['current_lng'] or 75.0
 
-    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
+    counter_js = "null"
+    if session.get("role") == "counter":
+        counter_js = session.get("user_id")
 
+    map_div = """
+    <div id="map" style="
+        width:100%;
+        max-width:900px;
+        height:220px;
+        border-radius:12px;
+        overflow:hidden;
+        box-shadow:0 4px 10px rgba(0,0,0,0.2);
+    "></div>
+    """
+
+    # ===== Full HTML =====
     html_content = f"""
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <div class="container" style="max-width:900px;margin:auto;">
-        <h2>Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
 
         <h5>Live Location</h5>
-        <div id="map" style="height:300px;width:100%;border-radius:12px;overflow:hidden;"></div>
+        {map_div}
 
         <h5 style="margin-top:30px;">Select Seat</h5>
         <div style="display:flex;flex-wrap:wrap;gap:10px;">
@@ -915,90 +936,79 @@ def seat_page(sid):
     </div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
     <script>
-    // ====== Leaflet Map ======
-    const map = L.map('map').setView([{bus_lat}, {bus_lng}], 13);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap'
-    }}).addTo(map);
-
-    const busIcon = L.divIcon({{
-        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
-        className: 'bus-icon',
-        iconSize: [30,30]
-    }});
-
-    let busMarker = L.marker([{bus_lat}, {bus_lng}], {{icon: busIcon}}).addTo(map);
-
-    // ====== Socket ======
     const socket = io();
     const SID = {sid};
-    window.currentSid = {sid};
-    window.currentDate = "{today}";
+    const TODAY = "{today}";
 
-    socket.on('connect', () => {{ console.log("✅ Socket Connected"); }});
+    // ===== Seat Update Realtime =====
+    socket.on("seat_update", function(data) {{
+        if(SID != data.sid || TODAY != data.date) return;
 
-    socket.on('bus_location', data => {{
-        if(data.sid == SID){{
-            const lat = parseFloat(data.lat);
-            const lng = parseFloat(data.lng);
-            busMarker.setLatLng([lat,lng]);
-            map.panTo([lat,lng], {{animate:true}});
-        }}
-    }});
-
-    socket.on('seat_update', data => {{
-        if(data.sid != SID || data.date != window.currentDate) return;
         let btn = document.getElementById("seat-" + data.seat);
         if(btn){{
             btn.classList.remove("btn-success");
             btn.classList.add("btn-danger");
             btn.disabled = true;
-            btn.innerHTML = "X" + data.seat;
+            btn.innerText = "X" + data.seat;
         }}
     }});
 
-    // ====== Book Seat ======
-    function bookSeat(seatId){{
-        let name = prompt("Passenger name:");
-        if(!name || name.trim() === '') return;
+    // ===== Leaflet Map Init =====
+    const map = L.map('map').setView([{bus_lat}, {bus_lon}], 7);
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 18, attribution: '© OpenStreetMap'
+    }}).addTo(map);
 
-        let mobile = prompt("Mobile (10 digits):");
-        if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)) return;
+    let busMarker = L.marker([{bus_lat}, {bus_lon}]).addTo(map);
+
+    socket.on("bus_location", data => {{
+        if(data.sid == SID){{
+            let lat = parseFloat(data.lat);
+            let lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat, lng]);
+            map.panTo([lat, lng]);
+        }}
+    }});
+
+    // ===== Seat Booking =====
+    function bookSeat(seatId){{
+        let name = prompt("Passenger Name:");
+        if(!name) return;
+
+        let mobile = prompt("Mobile Number:");
+        if(!mobile) return;
 
         let btn = document.getElementById("seat-" + seatId);
-        let old = btn.innerHTML;
-        btn.innerHTML = "⏳ Booking...";
+        let oldText = btn.innerText;
+        btn.innerText = "⏳ Booking...";
         btn.disabled = true;
 
         fetch("/book", {{
-            method:"POST",
-            headers:{{"Content-Type":"application/json"}},
+            method: "POST",
+            headers: {{ "Content-Type":"application/json" }},
             body: JSON.stringify({{
                 schedule_id: SID,
                 seat_number: seatId,
                 passenger_name: name,
                 mobile: mobile,
-                date: "{today}",
+                date: TODAY,
                 counter_id: {counter_js}
             }})
         }})
         .then(r => r.json())
         .then(res => {{
             if(res.ok){{
-                alert("🎉 Seat booked!");
+                alert("Seat booked! Fare: ₹" + res.fare);
             }} else {{
-                alert("❌ " + res.msg);
-                btn.innerHTML = old;
+                alert(res.error || res.msg);
+                btn.innerText = oldText;
                 btn.disabled = false;
             }}
         }})
         .catch(err => {{
-            console.log(err);
-            btn.innerHTML = old;
+            console.error(err);
+            btn.innerText = oldText;
             btn.disabled = false;
         }});
     }}
