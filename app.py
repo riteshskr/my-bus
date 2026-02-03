@@ -956,9 +956,11 @@ def seat_page(sid):
 
     // ===== Leaflet Map Init =====
     const map = L.map('map').setView([{bus_lat}, {bus_lon}], 7);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 18, attribution: '© OpenStreetMap'
-    }}).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
 
     let busMarker = L.marker([{bus_lat}, {bus_lon}]).addTo(map);
 
