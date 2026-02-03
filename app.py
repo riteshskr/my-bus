@@ -850,28 +850,47 @@ def select(sid):
 
 @app.route("/seats/<int:sid>")
 @safe_db
-def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
-
+def seat_page(sid):
     conn, cur = get_db()
 
-    # Booked seats
+    # Schedule details, route info, bus info
     cur.execute("""
-        SELECT seat_number 
-        FROM seat_bookings 
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.current_lat, s.current_lng
+        FROM schedules s
+        JOIN routes r ON s.route_id = r.id
+        WHERE s.id = %s
+    """, (sid,))
+    schedule = cur.fetchone()
+
+    if not schedule:
+        return "Schedule not found", 404
+
+    # Route stations
+    cur.execute("""
+        SELECT station_name, station_order
+        FROM route_stations WHERE route_id=%s
+        ORDER BY station_order
+    """, (schedule['route_id'],))
+    stations = cur.fetchall()
+    stations_map = {r['station_name']: r['station_order'] for r in stations}
+
+    # Booked seats for today
+    today = date.today().isoformat()
+    cur.execute("""
+        SELECT seat_number, from_station, to_station
+        FROM seat_bookings
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """, (sid, d))
-    booked = [r["seat_number"] for r in cur.fetchall()]
+    """, (sid, today))
+    booked = cur.fetchall()
 
-    # Route info
-    cur.execute("SELECT route_id, bus_name FROM schedules WHERE id=%s", (sid,))
-    route_info = cur.fetchone() or {}
+    booked_seats = set()
+    for r in booked:
+        booked_seats.add(r['seat_number'])
 
-    close_db(conn)
-
+    total_seats = 40
     seat_buttons = ""
+
+    # Generate seat buttons with color coding
     for i in range(1, 41):
         if i in booked:
             seat_buttons += f'''
@@ -879,71 +898,63 @@ def seats(sid):
             '''
         else:
             seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i},'{fs}','{ts}','{d}',{sid})">
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i},{sid})">
                 {i}
             </button>
             '''
 
-    html = f"""
-    <div class="row text-center">
-        <div class="col-md-12">
-            <h4 class="mb-4">🚌 {route_info.get('bus_name', 'Bus')} | {fs} → {ts}</h4>
-            <p class="text-muted">📅 {d} | 💺 {40 - len(booked)} seats available</p>
-        </div>
-    </div>
+    # Google Maps iframe for live bus location
+    bus_lat = schedule['current_lat'] or 0
+    bus_lon = schedule['current_lng'] or 0
+    counter_js = "null"
+    if session.get("role") == "counter":
+        counter_js = session.get("user_id")
 
-    <!-- Live GPS Map -->
-    <div class="card bg-dark mb-4">
-        <div class="card-body">
-            <div id="map" style="height:300px;border-radius:10px"></div>
-        </div>
-    </div>
+    map_iframe = f"""
+    <iframe
+        width="100%"
+        height="300"
+        frameborder="0" style="border:0"
+        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&hl=es;z=14&output=embed"
+        allowfullscreen>
+    </iframe>
+    """
 
-    <!-- Seat Layout -->
-    <div class="card">
-        <div class="card-body p-3">
-            <h6 class="text-center mb-3">🪑 Seat Selection</h6>
-            <div class="bus-row justify-content-center">
+
+    # Complete HTML
+    html_content = f"""
+    <div class="container" style="max-width:900px;margin:auto;">
+        <h2 style="margin-top:20px;">Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
+
+        <!-- Live Bus Location -->
+        <div style="margin-top:30px;">
+            <h5>Bus Live Location</h5>
+            {map_iframe}
+        </div>
+        
+        <!-- Seat Selection -->
+        <div style="margin-top:40px;">
+            <h5>Select Your Seat</h5>
+            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:15px;">
                 {seat_buttons}
             </div>
         </div>
     </div>
 
     <script>
-    // 🔴 Current page context
-    window.currentSid = {sid};
-    window.currentDate = '{d}';
-    console.log('🎯 Seats page loaded:', window.currentSid, window.currentDate);
+     <!-- SOCKET -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-    // 🗺️ Initialize Map
-    window.map = L.map('map').setView([27.5, 75.0], 7);
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 18, attribution: '© OpenStreetMap'
-    }}).addTo(window.map);
+    <script>
+    const socket = io({{transports:["websocket","polling"]}});
+    const SID = {sid};
 
-    window.busMarker = L.marker([27.39, 75.14], {{
-        icon: L.divIcon({{
-            className: 'custom-div-icon text-primary',
-            html: '<div style=\\"font-size:30px\\">🚌</div>',
-            iconSize: [40,40], iconAnchor: [20,20]
-        }})
-    }}).addTo(window.map).bindPopup('Live Bus Location');
-
-    // 🚀 Real-time Socket Events
-    socket.on('connect', function() {{
-        console.log('✅ Socket Connected!');
+    socket.on("connect", () => {{
+        console.log("Socket connected");
     }});
 
-    socket.on('bus_location', function(data) {{
-        console.log('📡 GPS Update:', data);
-        if(data.lat && data.lng && window.map) {{
-            if(window.busMarker) {{
-                window.busMarker.setLatLng([data.lat, data.lng]);
-            }}
-        }}
-    }});
-
-    // 🔥 INSTANT Seat Update (Real-time)
+    /// 🔥 INSTANT Seat Update (Real-time)
     socket.on('seat_update', function(data) {{
         console.log('🔴 SEAT UPDATE RECEIVED:', data);
 
@@ -990,7 +1001,6 @@ def seats(sid):
         let originalText = seatBtn.innerHTML;
         seatBtn.innerHTML = '⏳ Booking...';
         seatBtn.disabled = true;
-
         fetch('/book', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
@@ -1029,7 +1039,9 @@ def seats(sid):
     }}
     </script>
     """
-    return render_template_string(BASE_HTML, content=html)
+    
+
+    return render_template_string(BASE_HTML, content=html_content)
 
 
 @app.route("/book", methods=["POST"])
