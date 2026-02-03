@@ -945,6 +945,8 @@ def seat_page(sid):
     <script>
      <!-- SOCKET -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+
 
     <script>
     const socket = io({{transports:["websocket","polling"]}});
@@ -1006,13 +1008,13 @@ def seat_page(sid):
             headers: {{'Content-Type': 'application/json'}},
             body: JSON.stringify({{
                 schedule_id: {sid},
-                seat_number: seatNumber,
-                passenger_name: passengerName,
+                seat_number: seatId,   // ✅
+                passenger_name: name,  // ✅
                 mobile: mobile,
                 date: "{today}",
                 counter_id: {counter_js}
             }})
-        }})
+            }})
         .then(response => {{
             console.log('📡 Response status:', response.status);
             return response.json();
@@ -1097,7 +1099,8 @@ def book():
         conn.commit()
         socketio.emit("seat_update", {
             "sid": data['schedule_id'],  # schedule_id को sid की जगह
-            "seat": data['seat_number']  # data['seat'] नहीं, data['seat_number']
+            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
+            "date": data['date']
         })
         return jsonify({"ok": True, "fare": fare})
 
