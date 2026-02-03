@@ -945,7 +945,7 @@ def seat_page(sid):
     const COUNTER_ID = {counter_js};
 
     // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 7);
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10);
 
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
