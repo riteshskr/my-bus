@@ -847,203 +847,148 @@ def select(sid):
 
     return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
-
 @app.route("/seats/<int:sid>")
 @safe_db
 def seat_page(sid):
     conn, cur = get_db()
 
-    # Schedule details, route info, bus info
+    # Schedule details
     cur.execute("""
-        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.current_lat, s.current_lng
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name,
+               r.id as route_id, s.current_lat, s.current_lng
         FROM schedules s
         JOIN routes r ON s.route_id = r.id
         WHERE s.id = %s
     """, (sid,))
     schedule = cur.fetchone()
-
     if not schedule:
         return "Schedule not found", 404
 
     # Route stations
     cur.execute("""
         SELECT station_name, station_order
-        FROM route_stations WHERE route_id=%s
+        FROM route_stations
+        WHERE route_id=%s
         ORDER BY station_order
     """, (schedule['route_id'],))
     stations = cur.fetchall()
-    stations_map = {r['station_name']: r['station_order'] for r in stations}
 
-    # Booked seats for today
+    # Booked seats
     today = date.today().isoformat()
     cur.execute("""
-        SELECT seat_number, from_station, to_station
+        SELECT seat_number
         FROM seat_bookings
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
     """, (sid, today))
     booked = cur.fetchall()
 
-    booked_seats = set()
-    for r in booked:
-        booked_seats.add(r['seat_number'])
+    booked_seats = set(r['seat_number'] for r in booked)
 
-    total_seats = 40
+    # Seat buttons
     seat_buttons = ""
-
-    # Generate seat buttons with color coding
     for i in range(1, 41):
-        if i in booked:
+        if i in booked_seats:
             seat_buttons += f'''
             <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
             '''
         else:
             seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i},{sid})">
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">
                 {i}
             </button>
             '''
 
-    # Google Maps iframe for live bus location
+    # Map
     bus_lat = schedule['current_lat'] or 0
     bus_lon = schedule['current_lng'] or 0
+
     counter_js = "null"
     if session.get("role") == "counter":
         counter_js = session.get("user_id")
 
     map_iframe = f"""
-    <iframe
-        width="100%"
-        height="300"
-        frameborder="0" style="border:0"
-        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&hl=es;z=14&output=embed"
-        allowfullscreen>
+    <iframe width="100%" height="300"
+        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&z=14&output=embed">
     </iframe>
     """
 
-
-    # Complete HTML
     html_content = f"""
     <div class="container" style="max-width:900px;margin:auto;">
-        <h2 style="margin-top:20px;">Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h2>Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
 
-        <!-- Live Bus Location -->
-        <div style="margin-top:30px;">
-            <h5>Bus Live Location</h5>
-            {map_iframe}
-        </div>
-        
-        <!-- Seat Selection -->
-        <div style="margin-top:40px;">
-            <h5>Select Your Seat</h5>
-            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:15px;">
-                {seat_buttons}
-            </div>
+        <h5>Live Location</h5>
+        {map_iframe}
+
+        <h5 style="margin-top:30px;">Select Seat</h5>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            {seat_buttons}
         </div>
     </div>
 
-    <script>
-     <!-- SOCKET -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-
-
-    <script>
-    const socket = io({{transports:["websocket","polling"]}});
+    const socket = io();
     const SID = {sid};
+    window.currentSid = {sid};
+    window.currentDate = "{today}";
 
-    socket.on("connect", () => {{
-        console.log("Socket connected");
-    }});
+    socket.on("seat_update", function(data) {{
+        if(window.currentSid != data.sid || window.currentDate != data.date) return;
 
-    /// 🔥 INSTANT Seat Update (Real-time)
-    socket.on('seat_update', function(data) {{
-        console.log('🔴 SEAT UPDATE RECEIVED:', data);
-
-        // Match current page
-        if(window.currentSid != data.sid || window.currentDate != data.date) {{
-            console.log('⏭️ Different bus/date, ignoring');
-            return;
-        }}
-
-        let seatBtn = document.getElementById('seat-' + data.seat);
-        if(seatBtn) {{
-            seatBtn.classList.remove('btn-success', 'btn-outline-success');
-            seatBtn.classList.add('btn-danger');
-            seatBtn.disabled = true;
-            seatBtn.innerHTML = '<i class="fas fa-user-check"></i> X' + data.seat;
-            console.log('✅ Seat ' + data.seat + ' turned RED instantly!');
-
-            // Visual feedback
-            seatBtn.style.transform = 'scale(1.1)';
-            setTimeout(() => seatBtn.style.transform = 'scale(1)', 200);
-        }} else {{
-            console.log('❌ Seat button not found:', data.seat);
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn) {{
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerHTML = "X" + data.seat;
         }}
     }});
 
-    // 🪑 Book Seat Function (Improved)
-    function bookSeat(seatId, fromStation, toStation, travelDate, scheduleId) {{
-        console.log('🎫 Booking seat:', seatId);
+    function bookSeat(seatId) {{
+        let name = prompt("Passenger name:");
+        if(!name) return;
 
-        let name = prompt('👤 Passenger Name:');
-        if(!name || name.trim() === '') {{
-            alert('❌ नाम भरें!');
-            return;
-        }}
+        let mobile = prompt("Mobile:");
+        if(!mobile) return;
 
-        let mobile = prompt('📱 Mobile Number:');
-        if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)) {{
-            alert('❌ Valid mobile number दें!');
-            return;
-        }}
+        let btn = document.getElementById("seat-" + seatId);
+        let old = btn.innerHTML;
+        btn.innerHTML = "⏳ Booking...";
+        btn.disabled = true;
 
-        // Show loading
-        let seatBtn = document.getElementById('seat-' + seatId);
-        let originalText = seatBtn.innerHTML;
-        seatBtn.innerHTML = '⏳ Booking...';
-        seatBtn.disabled = true;
-        fetch('/book', {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
+        fetch("/book", {{
+            method: "POST",
+            headers: {{"Content-Type":"application/json"}},
             body: JSON.stringify({{
                 schedule_id: {sid},
-                seat_number: seatId,   // ✅
-                passenger_name: name,  // ✅
+                seat_number: seatId,
+                passenger_name: name,
                 mobile: mobile,
                 date: "{today}",
                 counter_id: {counter_js}
             }})
-            }})
-        .then(response => {{
-            console.log('📡 Response status:', response.status);
-            return response.json();
         }})
-        .then(result => {{
-            console.log('📋 Booking result:', result);
-            if(result.ok) {{
-                alert('🎉 ' + result.msg);
-                // Socket update भी आएगा automatically
+        .then(r => r.json())
+        .then(res => {{
+            if(res.ok) {{
+                alert("Seat booked!");
             }} else {{
-                alert('❌ ' + result.msg);
-                // Re-enable button
-                seatBtn.innerHTML = originalText;
-                seatBtn.disabled = false;
+                alert(res.msg);
+                btn.innerHTML = old;
+                btn.disabled = false;
             }}
         }})
-        .catch(error => {{
-            console.error('❌ Fetch error:', error);
-            alert('❌ Network error! फिर कोशिश करें।');
-            seatBtn.innerHTML = originalText;
-            seatBtn.disabled = false;
+        .catch(err => {{
+            console.log(err);
+            btn.innerHTML = old;
+            btn.disabled = false;
         }});
     }}
     </script>
     """
 
-
     return render_template_string(BASE_HTML, content=html_content)
-
 
 @app.route("/book", methods=["POST"])
 @safe_db
