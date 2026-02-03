@@ -703,9 +703,12 @@ def buses(rid):
                             <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
                             <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
                         </div>
-                        <a href="/live-bus/{{ bus.id }}" class="btn btn-primary float-end mt-2">🗺️ Live GPS</a>
-                        <a href="/select/{{ bus.id }}" class="btn btn-success float-end mt-2">🎫 Book Seat</a>
-                    </div>
+
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
+                            <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
+                        </div>
+
                     {% endfor %}
                 {% else %}
                     <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
@@ -909,7 +912,7 @@ def seat_page(sid):
     map_iframe = f"""
     <div style="
         width:100%;
-        max-width:500px;
+        max-width:700px;
         height:220px;
         border:2px solid #333;
         border-radius:12px;
