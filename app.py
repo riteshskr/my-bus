@@ -898,19 +898,17 @@ def seat_page(sid):
             <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
             '''
 
-    # ===== Leaflet Map =====
+    # ===== Bus default location =====
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
+    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
 
-    counter_js = "null"
-    if session.get("role") == "counter":
-        counter_js = session.get("user_id")
-
+    # ===== Map div =====
     map_div = """
     <div id="map" style="
         width:100%;
         max-width:900px;
-        height:220px;
+        height:300px;
         border-radius:12px;
         overflow:hidden;
         box-shadow:0 4px 10px rgba(0,0,0,0.2);
@@ -921,6 +919,7 @@ def seat_page(sid):
     html_content = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <div class="container" style="max-width:900px;margin:auto;">
         <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
@@ -935,7 +934,6 @@ def seat_page(sid):
         </div>
     </div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
     const socket = io();
     const SID = {sid};
@@ -945,9 +943,9 @@ def seat_page(sid):
     const COUNTER_ID = {counter_js};
 
     // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10);
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 12); // zoom 12 = city/highway level
 
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 19
