@@ -912,7 +912,7 @@ def seat_page(sid):
     map_iframe = f"""
     <div style="
         width:100%;
-        max-width:700px;
+        max-width:900px;
         height:220px;
         border:2px solid #333;
         border-radius:12px;
