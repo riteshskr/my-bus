@@ -307,23 +307,26 @@ def gps(data):
 
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
-    # Save to DB
     try:
         with app.app_context():
             conn, cur = get_db()
             cur.execute("""
-                   UPDATE schedules 
-                   SET current_lat=%s, current_lng=%s
-                   WHERE id=%s
-               """, (lat, lng, sid))
+                UPDATE schedules 
+                SET current_lat=%s, current_lng=%s
+                WHERE id=%s
+            """, (lat, lng, sid))
             conn.commit()
     except:
         pass
 
-    emit("bus_location", {
-        "sid": sid, "lat": lat, "lng": lng, "speed": speed,
+    # 🔥 यही main fix है
+    socketio.emit("bus_location", {
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed,
         "timestamp": data.get('timestamp', '')
-    }, broadcast=True)
+    })
 
 
 # ================= HTML BASE =================
@@ -935,7 +938,7 @@ def seat_page(sid):
     </div>
 
     <script>
-    const socket = io();
+   const socket = io(window.location.origin);
     const SID = {sid};
     const TODAY = "{today}";
     const BUS_LAT = {bus_lat};
