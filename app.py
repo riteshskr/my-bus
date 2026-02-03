@@ -1281,10 +1281,15 @@ def live_bus(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-    const map = L.map('map').setView([{lat}, {lng}], {13 if bus.get('lat') else 10});
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap'
-    }}).addTo(map);
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], {{ 13 if bus.get('lat') else 10 }});
+
+// ✅ Carto clear streets + highways
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+</script>
 
     // ===== ROUTE POLYLINE =====
     const stations = {stations_json};
