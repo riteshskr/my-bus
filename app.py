@@ -884,49 +884,21 @@ def seat_page(sid):
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
     """, (sid, today))
     booked = cur.fetchall()
-
     booked_seats = set(r['seat_number'] for r in booked)
 
     # Seat buttons
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked_seats:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
-            '''
+            seat_buttons += f'<button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>'
         else:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">
-                {i}
-            </button>
-            '''
+            seat_buttons += f'<button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>'
 
-    # Map
-    bus_lat = schedule['current_lat'] or 0
-    bus_lon = schedule['current_lng'] or 0
+    # Map initial coordinates
+    bus_lat = schedule['current_lat'] or 27.2
+    bus_lng = schedule['current_lng'] or 74.2
 
-    counter_js = "null"
-    if session.get("role") == "counter":
-        counter_js = session.get("user_id")
-
-    map_iframe = f"""
-    <div style="
-        width:100%;
-        max-width:900px;
-        height:220px;
-        border:2px solid #333;
-        border-radius:12px;
-        overflow:hidden;
-        box-shadow:0 4px 10px rgba(0,0,0,0.2);
-    ">
-        <iframe
-            width="100%"
-            height="100%"
-            style="border:0;"
-            src="https://www.google.com/maps?q={bus_lat},{bus_lon}&z=14&output=embed">
-        </iframe>
-    </div>
-    """
+    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
 
     html_content = f"""
     <div class="container" style="max-width:900px;margin:auto;">
@@ -934,7 +906,7 @@ def seat_page(sid):
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
 
         <h5>Live Location</h5>
-        {map_iframe}
+        <div id="map" style="height:300px;width:100%;border-radius:12px;overflow:hidden;"></div>
 
         <h5 style="margin-top:30px;">Select Seat</h5>
         <div style="display:flex;flex-wrap:wrap;gap:10px;">
@@ -943,17 +915,45 @@ def seat_page(sid):
     </div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
     <script>
+    // ====== Leaflet Map ======
+    const map = L.map('map').setView([{bus_lat}, {bus_lng}], 13);
+    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        attribution: '© OpenStreetMap'
+    }}).addTo(map);
+
+    const busIcon = L.divIcon({{
+        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+        className: 'bus-icon',
+        iconSize: [30,30]
+    }});
+
+    let busMarker = L.marker([{bus_lat}, {bus_lng}], {{icon: busIcon}}).addTo(map);
+
+    // ====== Socket ======
     const socket = io();
     const SID = {sid};
     window.currentSid = {sid};
     window.currentDate = "{today}";
 
-    socket.on("seat_update", function(data) {{
-        if(window.currentSid != data.sid || window.currentDate != data.date) return;
+    socket.on('connect', () => {{ console.log("✅ Socket Connected"); }});
 
+    socket.on('bus_location', data => {{
+        if(data.sid == SID){{
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat,lng]);
+            map.panTo([lat,lng], {{animate:true}});
+        }}
+    }});
+
+    socket.on('seat_update', data => {{
+        if(data.sid != SID || data.date != window.currentDate) return;
         let btn = document.getElementById("seat-" + data.seat);
-        if(btn) {{
+        if(btn){{
             btn.classList.remove("btn-success");
             btn.classList.add("btn-danger");
             btn.disabled = true;
@@ -961,12 +961,13 @@ def seat_page(sid):
         }}
     }});
 
-    function bookSeat(seatId) {{
+    // ====== Book Seat ======
+    function bookSeat(seatId){{
         let name = prompt("Passenger name:");
-        if(!name) return;
+        if(!name || name.trim() === '') return;
 
-        let mobile = prompt("Mobile:");
-        if(!mobile) return;
+        let mobile = prompt("Mobile (10 digits):");
+        if(!mobile || !/^[6-9]\\d{{9}}$/.test(mobile)) return;
 
         let btn = document.getElementById("seat-" + seatId);
         let old = btn.innerHTML;
@@ -974,10 +975,10 @@ def seat_page(sid):
         btn.disabled = true;
 
         fetch("/book", {{
-            method: "POST",
-            headers: {{"Content-Type":"application/json"}},
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
             body: JSON.stringify({{
-                schedule_id: {sid},
+                schedule_id: SID,
                 seat_number: seatId,
                 passenger_name: name,
                 mobile: mobile,
@@ -987,10 +988,10 @@ def seat_page(sid):
         }})
         .then(r => r.json())
         .then(res => {{
-            if(res.ok) {{
-                alert("Seat booked!");
+            if(res.ok){{
+                alert("🎉 Seat booked!");
             }} else {{
-                alert(res.msg);
+                alert("❌ " + res.msg);
                 btn.innerHTML = old;
                 btn.disabled = false;
             }}
