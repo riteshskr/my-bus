@@ -946,7 +946,7 @@ def seat_page(sid):
     const COUNTER_ID = {counter_js};
 
     // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 12); // zoom 12 = city/highway level
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15); // zoom 15 = city/highway level
 
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -962,7 +962,7 @@ def seat_page(sid):
             let lat = parseFloat(data.lat);
             let lng = parseFloat(data.lng);
             busMarker.setLatLng([lat, lng]);
-            map.panTo([lat, lng]);
+            map.flyTo([lat,lng], map.getZoom());;
         }}
     }});
 
@@ -1289,7 +1289,7 @@ def live_bus(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-const map = L.map('map').setView([{{ lat }}, {{ lng }}], {{ 13 if bus.get('lat') else 10 }});
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
 
 // ✅ Carto clear streets + highways
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -1316,7 +1316,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'Blue',   // thick red polyline
+            color: 'blue',   // thick red polyline
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
@@ -1333,7 +1333,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
 
     // ===== SOCKET LIVE UPDATE =====
     const sid = {sid};
-    const socket = io({{transports:["websocket","polling"]}});
+   const socket = io(window.location.origin);
 
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
