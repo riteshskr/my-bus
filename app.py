@@ -1026,9 +1026,9 @@ def seat_page(sid):
             btn.disabled = false;
         }});
     }}
-    setInterval(function(){
+    setInterval(function(){{
        fetch("/heartbeat");
-   }, 30000);
+   }}, 30000);
 
     </script>
     """
