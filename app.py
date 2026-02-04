@@ -565,7 +565,7 @@ LOGIN_HTML = """
 @app.route("/")
 @safe_db
 def home():
-    if not session.get("user_logged_in"):
+    if "role" not in session:
         session.clear()
         session["role"] = "guest"
 
@@ -808,9 +808,6 @@ def login():
         try:
             conn, cur = get_db()
             # ✅ IMPORTANT
-            cur.execute("SELECT * FROM admins")
-            user = cur.fetchone()
-            print(user)
             cur.execute("""
                 SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
