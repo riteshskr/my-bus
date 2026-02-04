@@ -747,9 +747,9 @@ def create_counter():
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-        counter_no = request.form.get("counter_no")
 
-        if not username or not password or not counter_no:
+
+        if not username or not password :
             error = "सभी fields भरें"
         else:
             try:
@@ -758,7 +758,7 @@ def create_counter():
                     INSERT INTO admins (username, password, role)
                     VALUES (%s, %s, 'counter')
                     ON CONFLICT (username) DO NOTHING
-                """, (username, password, counter_no))
+                """, (username, password ))
                 conn.commit()
                 success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
             except Exception as e:
@@ -779,10 +779,7 @@ def create_counter():
                     <label class="form-label">Password</label>
                     <input type="password" name="password" class="form-control" required>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">Counter Number</label>
-                    <input type="number" name="counter_no" class="form-control" required>
-                </div>
+                
                 <button class="btn btn-success w-100">Create Counter</button>
             </form>
 
