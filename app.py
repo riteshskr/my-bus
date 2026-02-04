@@ -876,7 +876,7 @@ def counter():
 
     return render_template_string(
         BASE_HTML,
-        content=render_template_string(BASE_HTML, error=error)
+        content=render_template_string(LOGIN_HTML, error=error)
     )
 
 
