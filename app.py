@@ -51,53 +51,46 @@ pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20
 print("✅ Connection pool ready")
 
 
+@atexit.register
+def shutdown_pool():
+    pool.close()
+
 
 # ================= DB CONTEXT =================
 def get_db():
-    if 'db_conn' not in g:
-        g.db_conn = pool.getconn()      # connection pool से connection लें
+    try:
+        if 'db_conn' not in g or g.db_conn.closed:
+            g.db_conn = pool.getconn()
+        if 'db_cur' not in g:
+            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+        return g.db_conn, g.db_cur
+    except:
+        pool.closeall()
+        g.db_conn = pool.getconn()
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-    return g.db_conn, g.db_cur
+        return g.db_conn, g.db_cur
 
-# Request खत्म होने पर connection वापस pool में डालें
-def close_db(error=None):
-    conn = g.pop('db_conn', None)
-    cur = g.pop('db_cur', None)
-    if cur:
-        cur.close()
-    if conn:
-        conn.close()
-
-# ===== Close DB connection per request =====
 
 @app.teardown_appcontext
-def teardown_db(error=None):
-    conn = g.pop("db_conn", None)
-    cur = g.pop("db_cur", None)
+def close_db(error=None):
+    cur = g.pop('db_cur', None)
+    conn = g.pop('db_conn', None)
+
     if cur:
         cur.close()
     if conn:
-        conn.close()  # pool में वापस जाएगा
+        pool.putconn(conn)
 
 
 def safe_db(func):
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*a, **kw):
         try:
-            return func(*args, **kwargs)
+            return func(*a, **kw)
         finally:
-            close_db()
+            close_db()  # चाहे error आये या न आये
+
     return wrapper
-
-# ===== Shutdown pool on app exit =====
-import atexit
-@atexit.register
-def shutdown_pool():
-    pool.close()
-    print("✅ Connection pool closed")
-
-
-
 
 
 def admin_required(f):
@@ -323,21 +316,18 @@ def gps(data):
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
     try:
-        conn, cur = pool.getconn(), None
-        try:
-            cur = conn.cursor(row_factory=dict_row)
-            cur.execute(
-                "UPDATE schedules SET current_lat=%s, current_lng=%s WHERE id=%s",
-                (lat, lng, sid)
-            )
+        with app.app_context():
+            conn, cur = get_db()
+            cur.execute("""
+                UPDATE schedules 
+                SET current_lat=%s, current_lng=%s
+                WHERE id=%s
+            """, (lat, lng, sid))
             conn.commit()
-        finally:
-            if cur:
-                cur.close()
-            pool.putconn(conn)
-    except Exception as e:
-        print("GPS DB ERROR:", e)
+    except:
+        pass
 
+    # 🔥 यही main fix है
     socketio.emit("bus_location", {
         "sid": sid,
         "lat": lat,
@@ -1009,7 +999,7 @@ def seat_page(sid):
     const COUNTER_ID = {counter_js};
 
     // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15); // zoom 15 = city/highway level
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10); // zoom 15 = city/highway level
 
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -1383,12 +1373,15 @@ def live_bus(sid):
     <script>
 const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
 
-// ✅ Carto clear streets + highways
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; OpenStreetMap &copy; CARTO',
-    subdomains: 'abcd',
-    maxZoom: 19
-}).addTo(map);
+// ✅ Carto clear streets + 
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10); // zoom 15 = city/highway level
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }}).addTo(map);
+        let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
+
 </script>
 
     // ===== ROUTE POLYLINE =====
