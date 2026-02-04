@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import json
+
 load_dotenv()
 import setuptools
 import os, random
@@ -13,7 +14,8 @@ from psycopg.rows import dict_row
 import mysql.connector
 import atexit
 import razorpay
-#import psycopg2
+
+# import psycopg2
 razor_client = razorpay.Client(auth=(
     os.getenv("RAZORPAY_KEY_ID"),
     os.getenv("RAZORPAY_KEY_SECRET")
@@ -474,7 +476,6 @@ body{background:#f5f7fb;color:#222;}
 </html>
 """
 
-
 HOME_HTML = """
 <div class="row g-3 mb-4">
   <div class="col-md-4">
@@ -565,10 +566,6 @@ LOGIN_HTML = """
 @app.route("/")
 @safe_db
 def home():
-    if "role" not in session:
-        session.clear()
-        session["role"] = "guest"
-
     conn, cur = get_db()
 
     # Fetch all routes for route cards
@@ -580,6 +577,7 @@ def home():
     stations = [r["station_name"] for r in cur.fetchall()]
 
     return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
+
 
 @app.route("/dashboard")
 def dashboard():
@@ -620,7 +618,7 @@ def dashboard():
 
 
 @app.route("/buses/<int:rid>")
-#@safe_db
+# @safe_db
 def buses(rid):
     conn, cur = get_db()
 
@@ -752,8 +750,7 @@ def create_counter():
         username = request.form.get("username")
         password = request.form.get("password")
 
-
-        if not username or not password :
+        if not username or not password:
             error = "सभी fields भरें"
         else:
             try:
@@ -762,7 +759,7 @@ def create_counter():
                     INSERT INTO admins (username, password, role)
                     VALUES (%s, %s, 'counter')
                     ON CONFLICT (username) DO NOTHING
-                """, (username, password ))
+                """, (username, password))
                 conn.commit()
                 success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
             except Exception as e:
@@ -783,7 +780,7 @@ def create_counter():
                     <label class="form-label">Password</label>
                     <input type="password" name="password" class="form-control" required>
                 </div>
-                
+
                 <button class="btn btn-success w-100">Create Counter</button>
             </form>
 
@@ -808,6 +805,9 @@ def login():
         try:
             conn, cur = get_db()
             # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
             cur.execute("""
                 SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
@@ -834,6 +834,7 @@ def login():
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error)
     )
+
 
 # ******* counter ********
 @app.route("/counter", methods=["GET", "POST"])
@@ -883,12 +884,13 @@ def counter():
 def select(sid):
     fs = session.get("from")
     ts = session.get("to")
-    d  = session.get("date")
+    d = session.get("date")
 
     if not fs or not ts or not d:
         return redirect("/")
 
     return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+
 
 @app.route("/seats/<int:sid>")
 @safe_db
@@ -917,7 +919,7 @@ def seat_page(sid):
     stations = cur.fetchall()
 
     # ===== Already booked seats =====
-    today = session.get("date", date.today().isoformat())
+    today = date.today().isoformat()
     cur.execute("""
         SELECT seat_number
         FROM seat_bookings
@@ -939,8 +941,6 @@ def seat_page(sid):
             '''
 
     # ===== Bus default location =====
-    user_role = session.get("role", "guest")
-    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
     counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
@@ -956,13 +956,7 @@ def seat_page(sid):
         box-shadow:0 4px 10px rgba(0,0,0,0.2);
     "></div>
     """
-    # ===== Role color =====
-    role_color = {
-        "admin": "red",
-        "counter": "green",
-        "conductor": "blue",
-        "user": "orange"
-    }.get(user_role, "gray")
+
     # ===== Full HTML =====
     html_content = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -972,12 +966,7 @@ def seat_page(sid):
     <div class="container" style="max-width:900px;margin:auto;">
         <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
-        <h5>
-        Role:
-        <span style="color:{role_color};font-weight:bold;">
-            {user_role.upper()}
-        </span>
-    </h5>
+
         <h5>Live Location</h5>
         {map_div}
 
@@ -1031,7 +1020,7 @@ def seat_page(sid):
      setInterval(()=>{{
     fetch("/heartbeat");
     }}, 30000);
-   
+
     // ===== Seat Booking =====
     function bookSeat(seatId){{
         let name = prompt("Passenger Name:");
@@ -1039,26 +1028,12 @@ def seat_page(sid):
 
         let mobile = prompt("Mobile Number:");
         if(!mobile) return;
-        
+
         let btn = document.getElementById("seat-" + seatId);
         let oldText = btn.innerText;
         btn.innerText = "⏳ Booking...";
         btn.disabled = true;
-        let fare = null;
-        let payment_mode = "cash";
-        if(COUNTER_ID !== null){{
-            fare = prompt("Fare amount:");
-            if(!fare || isNaN(fare)){{
-                alert("Invalid fare");
-            return;
-            }}
 
-         payment_mode = prompt("Payment mode: cash / online", "cash");
-        if(payment_mode !== "cash" && payment_mode !== "online"){{
-            alert("Only cash or online allowed");
-            return;
-            }}
-        }}
         fetch("/book", {{
             method: "POST",
             headers: {{ "Content-Type":"application/json" }},
@@ -1068,8 +1043,6 @@ def seat_page(sid):
                 passenger_name: name,
                 mobile: mobile,
                 date: TODAY,
-                fare: fare,
-                payment_mode: payment_mode,
                 counter_id: COUNTER_ID
             }})
         }})
@@ -1089,16 +1062,18 @@ def seat_page(sid):
             btn.disabled = false;
         }});
     }}
-   
+
 
     </script>
     """
 
     return render_template_string(BASE_HTML, content=html_content)
 
+
 @app.route("/heartbeat")
 def heartbeat():
     return "ok"
+
 
 @app.route("/book", methods=["POST"])
 @safe_db
@@ -1119,40 +1094,38 @@ def book():
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        user_role = session.get("role", "user")
-
-        if user_role == "counter":
-            fare = int(data.get("fare", 0))
-            payment_mode = data.get("payment_mode", "cash")
-        else:
-            fare = random.randint(250, 450)
-            payment_mode = "cash"
+        fare = random.randint(250, 450)
 
         cur.execute("""
         INSERT INTO seat_bookings
         (
-         schedule_id, seat_number, passenger_name, mobile,
-         from_station, to_station, travel_date,
-         fare, status, payment_mode,
-         booked_by_type, booked_by_id, counter_id
+            schedule_id,
+            seat_number,
+            passenger_name,
+            mobile,
+            from_station,
+            to_station,
+            travel_date,
+            fare,
+            status,
+            payment_mode,
+            booked_by_type,
+            booked_by_id,
+            counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
-        %s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',1,%s)
         """, (
-            int(data['schedule_id']),
-            int(data['seat_number']),
+            data['schedule_id'],
+            data['seat_number'],
             data['passenger_name'],
             data['mobile'],
             session.get("from"),
             session.get("to"),
             data['date'],
-            int(fare),
-            'confirmed',  # status
-            payment_mode,  # payment_mode
-            user_role,  # booked_by_type
-            int(session.get("user_id", 0)),
-            int(data.get("counter_id") or 0)
+            fare,
+            data.get('counter_id')
         ))
+
         conn.commit()
         socketio.emit("seat_update", {
             "sid": data['schedule_id'],  # schedule_id को sid की जगह
@@ -1487,6 +1460,8 @@ def verify():
     })
 
     return jsonify({"ok": True})
+
+
 @app.route("/search", methods=["POST"])
 @safe_db
 def search():
@@ -1542,6 +1517,7 @@ def search():
 
     # 🔥 DIRECT REDIRECT
     return redirect(f"/buses/{route['id']}")
+
 
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
