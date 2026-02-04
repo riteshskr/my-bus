@@ -51,10 +51,6 @@ pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20
 print("✅ Connection pool ready")
 
 
-@atexit.register
-def shutdown_pool():
-    pool.close()
-
 
 # ================= DB CONTEXT =================
 def get_db():
@@ -74,10 +70,15 @@ def close_db(error=None):
 
 # ===== Close DB connection per request =====
 
-@atexit.register
-def shutdown_pool():
-    pool.close()  # closeall नहीं
-    print("✅ Connection pool closed")
+@app.teardown_appcontext
+def teardown_db(error=None):
+    conn = g.pop("db_conn", None)
+    cur = g.pop("db_cur", None)
+    if cur:
+        cur.close()
+    if conn:
+        conn.close()  # pool में वापस जाएगा
+
 
 def safe_db(func):
     @wraps(func)
@@ -96,15 +97,7 @@ def shutdown_pool():
     print("✅ Connection pool closed")
 
 
-def safe_db(func):
-    @wraps(func)
-    def wrapper(*a, **kw):
-        try:
-            return func(*a, **kw)
-        finally:
-            close_db()  # चाहे error आये या न आये
 
-    return wrapper
 
 
 def admin_required(f):
@@ -330,18 +323,21 @@ def gps(data):
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
     try:
-        with app.app_context():
-            conn, cur = get_db()
-            cur.execute("""
-                UPDATE schedules 
-                SET current_lat=%s, current_lng=%s
-                WHERE id=%s
-            """, (lat, lng, sid))
+        conn, cur = pool.getconn(), None
+        try:
+            cur = conn.cursor(row_factory=dict_row)
+            cur.execute(
+                "UPDATE schedules SET current_lat=%s, current_lng=%s WHERE id=%s",
+                (lat, lng, sid)
+            )
             conn.commit()
-    except:
-        pass
+        finally:
+            if cur:
+                cur.close()
+            pool.putconn(conn)
+    except Exception as e:
+        print("GPS DB ERROR:", e)
 
-    # 🔥 यही main fix है
     socketio.emit("bus_location", {
         "sid": sid,
         "lat": lat,
