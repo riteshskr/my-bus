@@ -1145,7 +1145,7 @@ def book():
             booked_by_id,
             counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',0,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'%s','%s','%s',%s,%s)
         """, (
             data['schedule_id'],
             data['seat_number'],
