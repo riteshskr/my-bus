@@ -755,8 +755,8 @@ def create_counter():
             try:
                 conn, cur = get_db()
                 cur.execute("""
-                    INSERT INTO admins (username, password, role, counter_no)
-                    VALUES (%s, %s, 'counter', %s)
+                    INSERT INTO admins (username, password, role)
+                    VALUES (%s, %s, 'counter')
                     ON CONFLICT (username) DO NOTHING
                 """, (username, password, counter_no))
                 conn.commit()
