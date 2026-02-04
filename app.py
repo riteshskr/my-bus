@@ -565,7 +565,10 @@ LOGIN_HTML = """
 @app.route("/")
 @safe_db
 def home():
-    session.clear()
+    if not session.get("user_logged_in"):
+        session.clear()
+        session["role"] = "guest"
+
     conn, cur = get_db()
 
     # Fetch all routes for route cards
