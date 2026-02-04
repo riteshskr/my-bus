@@ -917,7 +917,7 @@ def seat_page(sid):
     stations = cur.fetchall()
 
     # ===== Already booked seats =====
-    today = date.today().isoformat()
+    today = session.get("date", date.today().isoformat())
     cur.execute("""
         SELECT seat_number
         FROM seat_bookings
@@ -1122,7 +1122,7 @@ def book():
             booked_by_id,
             counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',1,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',0,%s)
         """, (
             data['schedule_id'],
             data['seat_number'],
