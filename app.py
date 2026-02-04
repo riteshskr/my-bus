@@ -1131,37 +1131,28 @@ def book():
         cur.execute("""
         INSERT INTO seat_bookings
         (
-            schedule_id,
-            seat_number,
-            passenger_name,
-            mobile,
-            from_station,
-            to_station,
-            travel_date,
-            fare,
-            status,
-            payment_mode,
-            booked_by_type,
-            booked_by_id,
-            counter_id
+         schedule_id, seat_number, passenger_name, mobile,
+         from_station, to_station, travel_date,
+         fare, status, payment_mode,
+         booked_by_type, booked_by_id, counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'%s','%s','%s',%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s)
         """, (
-            data['schedule_id'],
-            data['seat_number'],
+            int(data['schedule_id']),
+            int(data['seat_number']),
             data['passenger_name'],
             data['mobile'],
             session.get("from"),
             session.get("to"),
             data['date'],
-            fare,
-            'confirmed',
-            payment_mode,
-            user_role,
-            session.get("user_id", 0),
-            data.get('counter_id')
+            int(fare),
+            'confirmed',  # status
+            payment_mode,  # payment_mode
+            user_role,  # booked_by_type
+            int(session.get("user_id", 0)),
+            int(data.get("counter_id") or 0)
         ))
-
         conn.commit()
         socketio.emit("seat_update", {
             "sid": data['schedule_id'],  # schedule_id को sid की जगह
