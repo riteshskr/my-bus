@@ -1155,6 +1155,7 @@ def book():
             session.get("to"),
             data['date'],
             fare,
+            'confirmed',
             payment_mode,
             user_role,
             session.get("user_id", 0),
