@@ -837,12 +837,46 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error)
     )
 
+# ******* counter ********
+@app.route("/counter", methods=["GET", "POST"])
+def counter():
+    error = ""
 
-@app.route("/admin")
-def admin():
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
     return render_template_string(
         BASE_HTML,
-        content="<h2 class='text-center mt-5'>Welcome Admin 🎉</h2>"
+        content=render_template_string(BASE_HTML, error=error)
     )
 
 
