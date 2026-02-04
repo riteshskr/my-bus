@@ -566,6 +566,10 @@ LOGIN_HTML = """
 @app.route("/")
 @safe_db
 def home():
+    if "role" not in session:
+        session.clear()
+        session["role"] = "guest"
+
     conn, cur = get_db()
 
     # Fetch all routes for route cards
@@ -805,9 +809,6 @@ def login():
         try:
             conn, cur = get_db()
             # ✅ IMPORTANT
-            cur.execute("SELECT * FROM admins")
-            user = cur.fetchone()
-            print(user)
             cur.execute("""
                 SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
@@ -919,7 +920,7 @@ def seat_page(sid):
     stations = cur.fetchall()
 
     # ===== Already booked seats =====
-    today = date.today().isoformat()
+    today = session.get("date", date.today().isoformat())
     cur.execute("""
         SELECT seat_number
         FROM seat_bookings
@@ -941,6 +942,8 @@ def seat_page(sid):
             '''
 
     # ===== Bus default location =====
+    user_role = session.get("role", "guest")
+    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
     counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
@@ -956,7 +959,13 @@ def seat_page(sid):
         box-shadow:0 4px 10px rgba(0,0,0,0.2);
     "></div>
     """
-
+    # ===== Role color =====
+    role_color = {
+        "admin": "red",
+        "counter": "green",
+        "conductor": "blue",
+        "user": "orange"
+    }.get(user_role, "gray")
     # ===== Full HTML =====
     html_content = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -966,7 +975,12 @@ def seat_page(sid):
     <div class="container" style="max-width:900px;margin:auto;">
         <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
-
+        <h5>
+        Role:
+        <span style="color:{role_color};font-weight:bold;">
+            {user_role.upper()}
+        </span>
+    </h5>
         <h5>Live Location</h5>
         {map_div}
 
@@ -1033,7 +1047,21 @@ def seat_page(sid):
         let oldText = btn.innerText;
         btn.innerText = "⏳ Booking...";
         btn.disabled = true;
+        let fare = null;
+        let payment_mode = "cash";
+        if(COUNTER_ID !== null){{
+            fare = prompt("Fare amount:");
+            if(!fare || isNaN(fare)){{
+                alert("Invalid fare");
+            return;
+            }}
 
+         payment_mode = prompt("Payment mode: cash / online", "cash");
+        if(payment_mode !== "cash" && payment_mode !== "online"){{
+            alert("Only cash or online allowed");
+            return;
+            }}
+        }}
         fetch("/book", {{
             method: "POST",
             headers: {{ "Content-Type":"application/json" }},
@@ -1043,6 +1071,8 @@ def seat_page(sid):
                 passenger_name: name,
                 mobile: mobile,
                 date: TODAY,
+                fare: fare,
+                payment_mode: payment_mode,
                 counter_id: COUNTER_ID
             }})
         }})
@@ -1094,38 +1124,40 @@ def book():
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        fare = random.randint(250, 450)
+        user_role = session.get("role", "user")
+
+        if user_role == "counter":
+            fare = int(data.get("fare", 0))
+            payment_mode = data.get("payment_mode", "cash")
+        else:
+            fare = random.randint(250, 450)
+            payment_mode = "cash"
 
         cur.execute("""
         INSERT INTO seat_bookings
         (
-            schedule_id,
-            seat_number,
-            passenger_name,
-            mobile,
-            from_station,
-            to_station,
-            travel_date,
-            fare,
-            status,
-            payment_mode,
-            booked_by_type,
-            booked_by_id,
-            counter_id
+         schedule_id, seat_number, passenger_name, mobile,
+         from_station, to_station, travel_date,
+         fare, status, payment_mode,
+         booked_by_type, booked_by_id, counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'confirmed','cash','user',1,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s)
         """, (
-            data['schedule_id'],
-            data['seat_number'],
+            int(data['schedule_id']),
+            int(data['seat_number']),
             data['passenger_name'],
             data['mobile'],
             session.get("from"),
             session.get("to"),
             data['date'],
-            fare,
-            data.get('counter_id')
+            int(fare),
+            'confirmed',  # status
+            payment_mode,  # payment_mode
+            user_role,  # booked_by_type
+            int(session.get("user_id", 0)),
+            int(data.get("counter_id") or 0)
         ))
-
         conn.commit()
         socketio.emit("seat_update", {
             "sid": data['schedule_id'],  # schedule_id को sid की जगह
