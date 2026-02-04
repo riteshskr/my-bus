@@ -443,8 +443,7 @@ body{background:#f5f7fb;color:#222;}
 <div class="navbar">
   <div class="logo">🚌 My Bus AI</div>
   <div>
-    <a href="/login">User Login</a>
-    <a href="/admin">Admin</a>
+    <a href="/login">Admin login</a>
     <a href="/counter">Counter</a>
   </div>
 </div>
