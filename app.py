@@ -58,28 +58,46 @@ def shutdown_pool():
 
 # ================= DB CONTEXT =================
 def get_db():
-    try:
-        if 'db_conn' not in g or g.db_conn.closed:
-            g.db_conn = pool.getconn()
-        if 'db_cur' not in g:
-            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-        return g.db_conn, g.db_cur
-    except:
-        pool.closeall()
+    """
+    g.db_conn में connection रखें।
+    अगर मौजूद नहीं है तो pool से ले आएं।
+    """
+    if 'db_conn' not in g:
         g.db_conn = pool.getconn()
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-        return g.db_conn, g.db_cur
+    return g.db_conn, g.db_cur
 
-
-@app.teardown_appcontext
+# ===== Close DB connection per request =====
 def close_db(error=None):
-    cur = g.pop('db_cur', None)
+    """
+    Request खत्म होने पर connection pool में वापस डालें।
+    """
     conn = g.pop('db_conn', None)
-
+    cur = g.pop('db_cur', None)
     if cur:
         cur.close()
     if conn:
-        pool.putconn(conn)
+        conn.close()
+
+
+@app.teardown_appcontext
+from functools import wraps
+
+def safe_db(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        finally:
+            close_db()
+    return wrapper
+
+# ===== Shutdown pool on app exit =====
+import atexit
+@atexit.register
+def shutdown_pool():
+    pool.close()
+    print("✅ Connection pool closed")
 
 
 def safe_db(func):
