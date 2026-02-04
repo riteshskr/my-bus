@@ -29,12 +29,12 @@ Compress(app)
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading", logger=True, engineio_logger=True, ping_timeout=60)
 
-# PostgreSQL connection pool
+# PostgreSQL connection pool setup
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL environment variable is missing!")
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
+pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=20, timeout=20)
 
 @atexit.register
 def shutdown_pool():
@@ -42,18 +42,18 @@ def shutdown_pool():
 
 # ================= DB Helper Functions =================
 def get_db():
-    """Get or create a database connection and cursor."""
-    if 'db_conn' not in g or g.db_conn.closed:
+    if 'db_conn' not in g:
+        g.db_conn = pool.getconn()
+    # Check if connection is closed
+    if hasattr(g.db_conn, 'closed') and g.db_conn.closed:
         g.db_conn = pool.getconn()
     if 'db_cur' not in g:
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
     return g.db_conn, g.db_cur
 
 def close_db(error=None):
-    """Close and release the connection and cursor."""
     cur = g.pop('db_cur', None)
     conn = g.pop('db_conn', None)
-
     if cur:
         try:
             cur.close()
@@ -70,7 +70,6 @@ def teardown(error):
     close_db()
 
 def safe_db(func):
-    """Decorator to ensure DB connection is managed properly."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
@@ -103,7 +102,6 @@ def init_db():
                 face_image BYTEA NOT NULL
             );
         """)
-        # बाकी टेबल्स भी इसी तरह...
         cur.execute("""
             CREATE TABLE IF NOT EXISTS face_logs (
                 id SERIAL PRIMARY KEY,
@@ -288,109 +286,56 @@ def gps(data):
         "timestamp": data.get('timestamp', '')
     })
 
+# ================= HTML Templates =================
 BASE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>My Bus AI - Book Your Journey</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
-
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
 body{background:#f5f7fb;color:#222;}
-
-/* Navbar */
 .navbar{
-  position:fixed;
-  top:0;left:0;width:100%;
+  position:fixed;top:0;left:0;width:100%;
   background:white;
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:15px 8%;
-  box-shadow:0 5px 20px rgba(0,0,0,.1);
-  z-index:1000;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:15px 8%;box-shadow:0 5px 20px rgba(0,0,0,.1);z-index:1000;
 }
 .logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
 .navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
-
-/* Hero */
 .hero{
   height:100vh;
-  background:
-    linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
-    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
-  background-size:cover;
-  background-position:center;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  text-align:center;
-  color:white;
-  padding-top:70px;
+  background:linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
+  url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
+  background-size:cover; background-position:center;
+  display:flex; align-items:center; justify-content:center;
+  text-align:center; color:white; padding-top:70px;
 }
-
-/* Search Box */
 .search-box{
-  background:white;
-  padding:20px;
-  border-radius:15px;
-  display:flex;
-  gap:10px;
+  background:white; padding:20px; border-radius:15px; display:flex; gap:10px;
 }
 .search-box input{
-  padding:12px;
-  border:none;
-  border-radius:8px;
-  outline:none;
+  padding:12px; border:none; border-radius:8px; outline:none;
 }
 .search-box button{
-  padding:12px 30px;
-  border:none;
-  border-radius:10px;
-  background:#ff512f;
-  color:white;
-  font-weight:600;
-  cursor:pointer;
+  padding:12px 30px; border:none; border-radius:10px; background:#ff512f; color:white; font-weight:600; cursor:pointer;
 }
-
-/* Cards */
 .card{
-  background:white;
-  border-radius:15px;
-  box-shadow:0 10px 25px rgba(0,0,0,.1);
-  padding:20px;
-  margin-bottom:20px;
+  background:white; border-radius:15px; box-shadow:0 10px 25px rgba(0,0,0,.1); padding:20px; margin-bottom:20px;
 }
-
-/* ---------- Mobile Fixes ---------- */
 @media(max-width:768px){
-
-  .navbar{
-    flex-direction:column;
-    gap:10px;
-    padding:10px 20px;
-  }
-
-  .search-box{
-    flex-direction:column;
-    width:100%;
-  }
-
-  .search-box input,
-  .search-box button{
-    width:100%;
-  }
-
+  .navbar{flex-direction:column; gap:10px; padding:10px 20px;}
+  .search-box{flex-direction:column; width:100%;}
+  .search-box input, .search-box button{width:100%;}
   .hero h1{font-size:1.6rem;}
 }
 </style>
 </head>
 <body>
-
 <div class="navbar">
   <div class="logo">🚌 My Bus AI</div>
   <div>
@@ -404,7 +349,6 @@ body{background:#f5f7fb;color:#222;}
   <div>
     <h1>India’s Smart Bus Platform</h1>
     <p>Book | Track | Face Boarding | Live Seats</p>
-
     <form class="search-box" action="/search" method="POST">
       <input name="from" placeholder="From" required>
       <input name="to" placeholder="To" required>
@@ -420,55 +364,8 @@ body{background:#f5f7fb;color:#222;}
     {{ content|safe }}
 </div>
 {% endif %}
-
 </body>
 </html>
-"""
-
-HOME_HTML = """
-<div class="row g-3 mb-4">
-  <div class="col-md-4">
-    <select class="form-select" id="from">
-      <option selected disabled>From</option>
-      <option>Delhi</option>
-      <option>Mumbai</option>
-      <option>Bengaluru</option>
-      <option>Jaipur</option>
-    </select>
-  </div>
-
-  <div class="col-md-4">
-    <select class="form-select" id="to">
-      <option selected disabled>To</option>
-      <option>Jaipur</option>
-      <option>Pune</option>
-      <option>Chennai</option>
-      <option>Hyderabad</option>
-    </select>
-  </div>
-
-  <div class="col-md-3">
-    <input type="date" class="form-control" id="date">
-  </div>
-
-  <div class="col-md-1 d-grid">
-    <button class="btn btn-danger" onclick="searchBus()">Search</button>
-  </div>
-</div>
-
-<script>
-function searchBus(){
-  let f = document.getElementById("from").value;
-  let t = document.getElementById("to").value;
-  let d = document.getElementById("date").value;
-
-  if(!f || !t || !d){
-    alert("Please fill all fields");
-    return;
-  }
-  alert("Searching buses from " + f + " to " + t + " on " + d);
-}
-</script>
 """
 
 # ===== login html =======
@@ -477,40 +374,24 @@ LOGIN_HTML = """
   <div class="col-md-4">
     <div class="card shadow-lg border-0 rounded-4">
       <div class="card-body p-4">
-
         <h3 class="text-center mb-4">Admin Login</h3>
-
-       <form method="POST" autocomplete="on">
-       <!-- Hidden fields (Chrome autofill रोकने के लिए) -->
+        <form method="POST" autocomplete="on">
           <input type="text" style="display:none">
           <input type="password" style="display:none">
-
-          <input type="text" name="username"
-                 class="form-control mb-3"
-                 placeholder="Username" required>
-
-          <input type="password" name="password"
-                 class="form-control mb-3"
-                 placeholder="Password" required>
-
-          <button class="btn btn-success w-100">
-            Login
-          </button>
+          <input type="text" name="username" class="form-control mb-3" placeholder="Username" required>
+          <input type="password" name="password" class="form-control mb-3" placeholder="Password" required>
+          <button class="btn btn-success w-100">Login</button>
         </form>
-
         {% if error %}
-          <div class="text-danger text-center mt-3">
-            {{ error }}
-          </div>
+          <div class="text-danger text-center mt-3">{{ error }}</div>
         {% endif %}
-
       </div>
     </div>
   </div>
 </div>
 """
 
-# ===== Main Route =====
+# ================== Main Routes ==================
 @app.route("/")
 @safe_db
 def home():
@@ -524,15 +405,11 @@ def home():
     stations = [r["station_name"] for r in cur.fetchall()]
     return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
 
-
 @app.route("/dashboard")
 def dashboard():
     if not session.get("user_logged_in"):
         return redirect("/login")
-
     role = session.get("role", "user")
-
-    # Admin को extra links
     admin_links = ""
     if role.lower() == "admin":
         admin_links = """
@@ -541,30 +418,24 @@ def dashboard():
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
             <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
-
         </div>
         """
-
     return render_template_string(
         BASE_HTML,
         content=f"""
         <div class="text-center mt-5">
             <h2>Welcome 🎉</h2>
             <h4>Role: <b>{role.upper()}</b></h4>
-
             <div class="mt-4">
                 <a href="/" class="btn btn-primary">🏠 Home</a>
                 <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
             </div>
-
             {admin_links}
         </div>
         """
     )
 
-
 @app.route("/buses/<int:rid>")
-# @safe_db
 def buses(rid):
     conn, cur = get_db()
 
@@ -578,7 +449,6 @@ def buses(rid):
         GROUP BY r.id, r.route_name, r.distance_km
     """, (rid,))
     route = cur.fetchone()
-
     if not route:
         return "Route not found", 404
 
@@ -599,17 +469,15 @@ def buses(rid):
     """, (rid,))
     buses_data = cur.fetchall()
 
-    # Full HTML inline
     html = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>🚌 {{ route.route_name }} - Premium Booking</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet"/>
     <style>
     body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
     header { text-align:center; padding:60px 20px 40px; }
@@ -633,16 +501,13 @@ def buses(rid):
     </style>
     </head>
     <body>
-
     <div class="circle circle1"></div>
     <div class="circle circle2"></div>
     <div class="circle circle3"></div>
-
     <header>
         <h1>🚌 {{ route.route_name }} - Premium Booking</h1>
         <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} km</p>
     </header>
-
     <div class="container mt-5">
         <div class="row justify-content-center">
             <div class="col-md-6">
@@ -659,12 +524,11 @@ def buses(rid):
                             <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
                             <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
                         </div>
-
                         <div class="d-flex flex-wrap gap-2 mt-2">
                             <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
                             <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
                         </div>
-
+                    </div>
                     {% endfor %}
                 {% else %}
                     <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
@@ -672,18 +536,15 @@ def buses(rid):
             </div>
         </div>
     </div>
-
     <footer>
         &copy; 2026 MyBus. All Rights Reserved.
     </footer>
-
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     </body>
     </html>
-        """
+    """
 
     return render_template_string(html, route=route, buses=buses_data)
-
 
 # **** create counter ******
 @app.route("/create-counter", methods=["GET", "POST"])
@@ -716,7 +577,6 @@ def create_counter():
     <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
         <div class="card-body">
             <h4 class="card-title text-center mb-4">➕ Create New Counter</h4>
-
             <form method="POST">
                 <div class="mb-3">
                     <label class="form-label">Username</label>
@@ -726,10 +586,8 @@ def create_counter():
                     <label class="form-label">Password</label>
                     <input type="password" name="password" class="form-control" required>
                 </div>
-
                 <button class="btn btn-success w-100">Create Counter</button>
             </form>
-
             {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
             {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
         </div>
@@ -737,7 +595,6 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=form_html)
-
 
 # ******* login ********
 @app.route("/login", methods=["GET", "POST"])
@@ -747,80 +604,60 @@ def login():
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-
         try:
             conn, cur = get_db()
-            # ✅ IMPORTANT
             cur.execute("""
                 SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
             """, (username, password))
-
             user = cur.fetchone()
 
             if user:
-                session.clear()  # ✅ clean old session
+                session.clear()
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
-                session["role"] = user["role"]  # admin / office / conductor
+                session["role"] = user["role"]
                 return redirect("/dashboard")
             else:
                 error = "गलत यूज़रनेम या पासवर्ड"
-
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print("LOGIN ERROR:", e)
             error = "सर्वर में समस्या"
 
-    return render_template_string(
-        BASE_HTML,
-        content=render_template_string(LOGIN_HTML, error=error)
-    )
+    return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
 
-
-# ******* counter ********
+# ******* counter login (same as above) *****
 @app.route("/counter", methods=["GET", "POST"])
 def counter():
     error = ""
-
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-
         try:
             conn, cur = get_db()
-            # ✅ IMPORTANT
             cur.execute("SELECT * FROM admins")
             user = cur.fetchone()
-            print(user)
             cur.execute("""
                 SELECT id, role FROM admins
                 WHERE username=%s AND password=%s
             """, (username, password))
-
             user = cur.fetchone()
 
             if user:
-                session.clear()  # ✅ clean old session
+                session.clear()
                 session["user_logged_in"] = True
                 session["user_id"] = user["id"]
-                session["role"] = user["role"]  # admin / office / conductor
+                session["role"] = user["role"]
                 return redirect("/dashboard")
             else:
                 error = "गलत यूज़रनेम या पासवर्ड"
-
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print("LOGIN ERROR:", e)
             error = "सर्वर में समस्या"
 
-    return render_template_string(
-        BASE_HTML,
-        content=render_template_string(LOGIN_HTML, error=error)
-    )
-
+    return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
 
 @app.route("/select/<int:sid>")
 @safe_db
@@ -828,19 +665,16 @@ def select(sid):
     fs = session.get("from")
     ts = session.get("to")
     d = session.get("date")
-
     if not fs or not ts or not d:
         return redirect("/")
-
     return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
-
 
 @app.route("/seats/<int:sid>")
 @safe_db
 def seat_page(sid):
     conn, cur = get_db()
 
-    # ===== Schedule details =====
+    # Schedule details
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time, r.route_name,
                r.id as route_id, s.current_lat, s.current_lng
@@ -852,7 +686,7 @@ def seat_page(sid):
     if not schedule:
         return "Schedule not found", 404
 
-    # ===== Route stations =====
+    # Route stations
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -861,7 +695,7 @@ def seat_page(sid):
     """, (schedule['route_id'],))
     stations = cur.fetchall()
 
-    # ===== Already booked seats =====
+    # Booked seats
     today = session.get("date", date.today().isoformat())
     cur.execute("""
         SELECT seat_number
@@ -871,181 +705,145 @@ def seat_page(sid):
     booked = cur.fetchall()
     booked_seats = set(r['seat_number'] for r in booked)
 
-    # ===== Seat buttons =====
+    # Seat buttons
     seat_buttons = ""
-    for i in range(1, 41):  # Total 40 seats
+    for i in range(1, 41):
         if i in booked_seats:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
-            '''
+            seat_buttons += f'<button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>'
         else:
-            seat_buttons += f'''
-            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
-            '''
+            seat_buttons += f'<button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>'
 
-    # ===== Bus default location =====
+    # Map location
     user_role = session.get("role", "guest")
     counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
     counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
 
-    # ===== Map div =====
+    # HTML content
     map_div = """
-    <div id="map" style="
-        width:100%;
-        max-width:900px;
-        height:300px;
-        border-radius:12px;
-        overflow:hidden;
-        box-shadow:0 4px 10px rgba(0,0,0,0.2);
-    "></div>
+    <div id="map" style="width:100%; max-width:900px; height:300px; border-radius:12px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.2);"></div>
     """
-    # ===== Role color =====
+
     role_color = {
         "admin": "red",
         "counter": "green",
         "conductor": "blue",
         "user": "orange"
     }.get(user_role, "gray")
-    # ===== Full HTML =====
+
     html_content = f"""
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-    <div class="container" style="max-width:900px;margin:auto;">
-        <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
-        <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
-        <h5>
-        Role:
-        <span style="color:{role_color};font-weight:bold;">
-            {user_role.upper()}
-        </span>
-    </h5>
-        <h5>Live Location</h5>
-        {map_div}
+<div class="container" style="max-width:900px;margin:auto;">
+<h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+<h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
+<h5>Role:
+<span style="color:{role_color};font-weight:bold;">{user_role.upper()}</span></h5>
+{map_div}
+<h5 style="margin-top:30px;">Select Seat</h5>
+<div style="display:flex;flex-wrap:wrap;gap:10px;">
+{seat_buttons}
+</div>
+</div>
 
-        <h5 style="margin-top:30px;">Select Seat</h5>
-        <div style="display:flex;flex-wrap:wrap;gap:10px;">
-            {seat_buttons}
-        </div>
-    </div>
+<script>
+const socket = io(window.location.origin);
+const SID = {sid};
+const TODAY = "{today}";
+const BUS_LAT = {bus_lat};
+const BUS_LNG = {bus_lon};
+const COUNTER_ID = {counter_js};
 
-    <script>
-   const socket = io(window.location.origin);
-    const SID = {sid};
-    const TODAY = "{today}";
-    const BUS_LAT = {bus_lat};
-    const BUS_LNG = {bus_lon};
-    const COUNTER_ID = {counter_js};
+// Map init
+const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10);
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19
+}}).addTo(map);
+let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
 
-    // ===== Leaflet Map Init =====
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10); // zoom 15 = city/highway level
+// Live location update
+socket.on('bus_location', data => {{
+    if(data.sid == SID){{
+        const lat = parseFloat(data.lat);
+        const lng = parseFloat(data.lng);
+        busMarker.setLatLng([lat,lng]);
+        if(routeLine) map.panTo([lat,lng], {{animate:true}});
+    }}
+}});
 
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-    }}).addTo(map);
+// Seat booking
+function bookSeat(seatId){{
+    let name = prompt("Passenger Name:");
+    if(!name) return;
+    let mobile = prompt("Mobile Number:");
+    if(!mobile) return;
+    let btn = document.getElementById("seat-" + seatId);
+    let oldText = btn.innerText;
+    btn.innerText = "⏳ Booking...";
+    btn.disabled = true;
+    let fare = null;
+    let payment_mode = "cash";
 
-    let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
-
-    // ===== Bus location update =====
-    socket.on("bus_location", data => {{
-        if(data.sid == SID){{
-            let lat = parseFloat(data.lat);
-            let lng = parseFloat(data.lng);
-            busMarker.setLatLng([lat, lng]);
-            map.flyTo([lat,lng], map.getZoom());;
-        }}
-    }});
-
-    // ===== Seat update realtime =====
-    socket.on("seat_update", function(data) {{
-        if(SID != data.sid || TODAY != data.date) return;
-
-        let btn = document.getElementById("seat-" + data.seat);
-        if(btn){{
-            btn.classList.remove("btn-success");
-            btn.classList.add("btn-danger");
-            btn.disabled = true;
-            btn.innerText = "X" + data.seat;
-        }}
-    }});
-     setInterval(()=>{{
-    fetch("/heartbeat");
-    }}, 30000);
-
-    // ===== Seat Booking =====
-    function bookSeat(seatId){{
-        let name = prompt("Passenger Name:");
-        if(!name) return;
-
-        let mobile = prompt("Mobile Number:");
-        if(!mobile) return;
-
-        let btn = document.getElementById("seat-" + seatId);
-        let oldText = btn.innerText;
-        btn.innerText = "⏳ Booking...";
-        btn.disabled = true;
-        let fare = null;
-        let payment_mode = "cash";
-        if(COUNTER_ID !== null){{
-            fare = prompt("Fare amount:");
-            if(!fare || isNaN(fare)){{
-                alert("Invalid fare");
-            return;
-            }}
-
-         payment_mode = prompt("Payment mode: cash / online", "cash");
-        if(payment_mode !== "cash" && payment_mode !== "online"){{
-            alert("Only cash or online allowed");
-            return;
-            }}
-        }}
-        fetch("/book", {{
-            method: "POST",
-            headers: {{ "Content-Type":"application/json" }},
-            body: JSON.stringify({{
-                schedule_id: SID,
-                seat_number: seatId,
-                passenger_name: name,
-                mobile: mobile,
-                date: TODAY,
-                fare: fare,
-                payment_mode: payment_mode,
-                counter_id: COUNTER_ID
-            }})
-        }})
-        .then(r => r.json())
-        .then(res => {{
-            if(res.ok){{
-                alert("Seat booked! Fare: ₹" + res.fare);
-            }} else {{
-                alert(res.error || res.msg);
-                btn.innerText = oldText;
-                btn.disabled = false;
-            }}
-        }})
-        .catch(err => {{
-            console.error(err);
+    if(COUNTER_ID !== null){{
+        fare = prompt("Fare amount:");
+        if(!fare || isNaN(fare)){{
+            alert("Invalid fare");
             btn.innerText = oldText;
             btn.disabled = false;
-        }});
+            return;
+        }}
+        payment_mode = prompt("Payment mode: cash / online", "cash");
+        if(payment_mode !== "cash" && payment_mode !== "online"){{
+            alert("Only cash or online allowed");
+            btn.innerText = oldText;
+            btn.disabled = false;
+            return;
+        }}
     }}
 
-
-    </script>
-    """
+    fetch("/book", {{
+        method: "POST",
+        headers: {{ "Content-Type":"application/json" }},
+        body: JSON.stringify({{
+            schedule_id: SID,
+            seat_number: seatId,
+            passenger_name: name,
+            mobile: mobile,
+            date: TODAY,
+            fare: fare,
+            payment_mode: payment_mode,
+            counter_id: COUNTER_ID
+        }})
+    }})
+    .then(r => r.json())
+    .then(res => {{
+        if(res.ok){{
+            alert("Seat booked! Fare: ₹" + res.fare);
+        }} else {{
+            alert(res.error || res.msg);
+            btn.innerText = oldText;
+            btn.disabled = false;
+        }}
+    }})
+    .catch(err => {{
+        console.error(err);
+        btn.innerText = oldText;
+        btn.disabled = false;
+    }});
+}}
+</script>
+"""
 
     return render_template_string(BASE_HTML, content=html_content)
-
 
 @app.route("/heartbeat")
 def heartbeat():
     return "ok"
-
 
 @app.route("/book", methods=["POST"])
 @safe_db
@@ -1053,21 +851,16 @@ def book():
     data = request.get_json()
 
     conn, cur = get_db()
-
     try:
+        # Check seat availability
         cur.execute("""
             SELECT id FROM seat_bookings
-            WHERE schedule_id=%s 
-            AND seat_number=%s 
-            AND travel_date=%s
-            AND status='confirmed'
+            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s AND status='confirmed'
         """, (data['schedule_id'], data['seat_number'], data['date']))
-
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
         user_role = session.get("role", "user")
-
         if user_role == "counter":
             fare = int(data.get("fare", 0))
             payment_mode = data.get("payment_mode", "cash")
@@ -1075,16 +868,14 @@ def book():
             fare = random.randint(250, 450)
             payment_mode = "cash"
 
+        # Insert booking
         cur.execute("""
-        INSERT INTO seat_bookings
-        (
-         schedule_id, seat_number, passenger_name, mobile,
-         from_station, to_station, travel_date,
-         fare, status, payment_mode,
-         booked_by_type, booked_by_id, counter_id
-        )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
-        %s,%s,%s,%s,%s)
+        INSERT INTO seat_bookings (
+            schedule_id, seat_number, passenger_name, mobile,
+            from_station, to_station, travel_date,
+            fare, status, payment_mode,
+            booked_by_type, booked_by_id, counter_id
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             int(data['schedule_id']),
             int(data['seat_number']),
@@ -1094,24 +885,25 @@ def book():
             session.get("to"),
             data['date'],
             int(fare),
-            'confirmed',  # status
-            payment_mode,  # payment_mode
-            user_role,  # booked_by_type
+            'confirmed',
+            payment_mode,
+            user_role,
             int(session.get("user_id", 0)),
             int(data.get("counter_id") or 0)
         ))
         conn.commit()
+
+        # Emit seat update
         socketio.emit("seat_update", {
-            "sid": data['schedule_id'],  # schedule_id को sid की जगह
-            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
+            "sid": data['schedule_id'],
+            "seat": data['seat_number'],
             "date": data['date']
         })
-        return jsonify({"ok": True, "fare": fare})
 
+        return jsonify({"ok": True, "fare": fare})
     except Exception as e:
         conn.rollback()
         return jsonify({"ok": False, "error": str(e)})
-
 
 @app.route("/driver/<int:sid>")
 def driver(sid):
@@ -1119,144 +911,81 @@ def driver(sid):
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Bus {sid} GPS</title>
-
-    <style>
-        body {{
-            background-color: #f0f0f0;
-            padding: 40px;
-            text-align: center;
-            font-family: sans-serif;
-            margin: 0;
-        }}
-        h2 {{
-            color: #333;
-        }}
-        .btn-gps {{
-            padding: 15px 30px;
-            font-size: 18px;
-            border: none;
-            border-radius: 10px;
-            background-color: #28a745;
-            color: white;
-            cursor: pointer;
-            font-weight: bold;
-        }}
-        .btn-stop {{
-            padding: 15px 30px;
-            font-size: 18px;
-            border: none;
-            border-radius: 10px;
-            background-color: #dc3545;
-            color: white;
-            cursor: pointer;
-            font-weight: bold;
-            margin-left: 10px;
-        }}
-        #status {{
-            font-size: 18px;
-            margin-top: 25px;
-            color: #333;
-            font-family: monospace;
-            padding: 15px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }}
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Bus {sid} GPS</title>
+<style>
+body{{ background-color:#f0f0f0; padding:40px; text-align:center; font-family:sans-serif; margin:0; }}
+h2{{ color:#333; }}
+.btn-gps{{ padding:15px 30px; font-size:18px; border:none; border-radius:10px; background-color:#28a745; color:white; cursor:pointer; font-weight:bold; }}
+.btn-stop{{ padding:15px 30px; font-size:18px; border:none; border-radius:10px; background-color:#dc3545; color:white; cursor:pointer; font-weight:bold; margin-left:10px; }}
+#status{{ font-size:18px; margin-top:25px; color:#333; font-family:monospace; padding:15px; background:white; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }}
+</style>
 </head>
-
 <body>
+<h2>🚗 Driver GPS – Bus {sid}</h2>
+<button id="startBtn" class="btn-gps" onclick="startGPS()">🚀 GPS शुरू करें</button>
+<button id="stopBtn" class="btn-stop" onclick="stopGPS()" disabled>🛑 GPS बंद करें</button>
+<div id="status">GPS बंद है</div>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const socket = io(window.location.origin);
+let watchId = null;
 
-    <h2>🚗 Driver GPS – Bus {sid}</h2>
-
-    <button id="startBtn" class="btn-gps" onclick="startGPS()">🚀 GPS शुरू करें</button>
-    <button id="stopBtn" class="btn-stop" onclick="stopGPS()" disabled>🛑 GPS बंद करें</button>
-
-    <div id="status">GPS बंद है</div>
-
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-        const socket = io(window.location.origin);
-        let watchId = null;
-
-        function startGPS() {{
-            const startBtn = document.getElementById("startBtn");
-            const stopBtn = document.getElementById("stopBtn");
-            const status = document.getElementById("status");
-
-            // ✅ GPS support check
-            if (!navigator.geolocation) {{
-                status.innerHTML = "❌ इस ब्राउज़र में GPS सपोर्ट नहीं है";
-                return;
-            }}
-
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            startBtn.innerHTML = "⏳ GPS चालू हो रहा है...";
-            status.innerHTML = "📡 GPS खोज रहे हैं...";
-
-            watchId = navigator.geolocation.watchPosition(
-                function (pos) {{
-                    const lat = pos.coords.latitude.toFixed(6);
-                    const lng = pos.coords.longitude.toFixed(6);
-
-                    const data = {{
-                        sid: {sid},
-                        lat: lat,
-                        lng: lng
-                    }};
-
-                    socket.emit("driver_gps", data);
-
-                    status.innerHTML = "✅ LIVE GPS<br>Latitude: " + lat + "<br>Longitude: " + lng;
-                    startBtn.innerHTML = "🚗 Live GPS चल रहा है";
-                }},
-                function (err) {{
-                    status.innerHTML = "❌ GPS Error: " + err.message;
-                    startBtn.disabled = false;
-                    stopBtn.disabled = true;
-                    startBtn.innerHTML = "🔄 GPS फिर शुरू करें";
-                }},
-                {{
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 5000
-                }}
-            );
-        }}
-
-        function stopGPS() {{
-            const startBtn = document.getElementById("startBtn");
-            const stopBtn = document.getElementById("stopBtn");
-            const status = document.getElementById("status");
-
-            if (watchId !== null) {{
-                navigator.geolocation.clearWatch(watchId);
-                watchId = null;
-            }}
-
-            socket.emit("driver_gps_stop", {{ sid: {sid} }});
-
+function startGPS() {{
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const status = document.getElementById("status");
+    if (!navigator.geolocation) {{
+        status.innerHTML = "❌ इस ब्राउज़र में GPS सपोर्ट नहीं है";
+        return;
+    }}
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    startBtn.innerHTML = "⏳ GPS चालू हो रहा है...";
+    status.innerHTML = "📡 GPS खोज रहे हैं...";
+    watchId = navigator.geolocation.watchPosition(
+        function (pos) {{
+            const lat = pos.coords.latitude.toFixed(6);
+            const lng = pos.coords.longitude.toFixed(6);
+            const data = {{ sid: {sid}, lat: lat, lng: lng }};
+            socket.emit("driver_gps", data);
+            status.innerHTML = "✅ LIVE GPS<br>Latitude: " + lat + "<br>Longitude: " + lng;
+            startBtn.innerHTML = "🚗 Live GPS चल रहा है";
+        }},
+        function (err) {{
+            status.innerHTML = "❌ GPS Error: " + err.message;
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            startBtn.innerHTML = "🚀 GPS शुरू करें";
-            status.innerHTML = "🛑 GPS बंद कर दिया गया";
-        }}
-    </script>
+            startBtn.innerHTML = "🔄 GPS फिर शुरू करें";
+        }},
+        {{ enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }}
+    );
+}}
 
+function stopGPS() {{
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const status = document.getElementById("status");
+    if (watchId !== null) {{
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+    }}
+    socket.emit("driver_gps_stop", {{ sid: {sid} }});
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    startBtn.innerHTML = "🚀 GPS शुरू करें";
+    status.innerHTML = "🛑 GPS बंद कर दिया गया";
+}}
+</script>
 </body>
 </html>
 """
-
 
 @app.route("/live-bus/<int:sid>")
 @safe_db
 def live_bus(sid):
     conn, cur = get_db()
-
     # Bus + Route info
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time,
@@ -1267,14 +996,12 @@ def live_bus(sid):
         WHERE s.id = %s
     """, (sid,))
     bus = cur.fetchone()
-
     if not bus:
         return "Bus not found", 404
 
     lat = float(bus.get('lat', 27.2))
     lng = float(bus.get('lng', 74.2))
-
-    # Route Stations for Polyline
+    # Route Stations for polyline
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
@@ -1282,9 +1009,8 @@ def live_bus(sid):
         ORDER BY station_order
     """, (bus['route_id'],))
     stations = cur.fetchall()
-
     import json
-    stations_json = json.dumps(stations)  # ✅ Python side JSON
+    stations_json = json.dumps(stations)
 
     content = f'''
     <style>
@@ -1293,7 +1019,6 @@ def live_bus(sid):
     @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
     .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;}}
     </style>
-
     <div class="text-center mb-5">
         <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
         <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
@@ -1301,71 +1026,51 @@ def live_bus(sid):
             {"🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..."}
         </div>
     </div>
-
     <div class="row g-4">
         <div class="col-lg-12">
             <div id="map" class="rounded-4"></div>
         </div>
     </div>
-
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
     <script>
-const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
-
-// ✅ Carto clear streets + 
-    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10); // zoom 15 = city/highway level
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+    const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 19
     }}).addTo(map);
-        let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
-
-</script>
-
-    // ===== ROUTE POLYLINE =====
+    let busMarker = L.marker([{{ lat }}, {{ lng }}]).addTo(map);
     const stations = {stations_json};
     let routePoints = [];
-
     stations.forEach(st => {{
         const lat = parseFloat(st.lat);
         const lng = parseFloat(st.lng);
         if(!isNaN(lat) && !isNaN(lng)){{
             routePoints.push([lat,lng]);
-            // Station markers
             L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
         }}
     }});
-
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'blue',   // thick red polyline
+            color: 'blue',
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
         map.fitBounds(routeLine.getBounds());
     }}
-
-    // ===== BUS ICON =====
     const busIcon = L.divIcon({{
         html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
         className: 'bus-icon',
         iconSize: [60,60]
     }});
     let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
-
-    // ===== SOCKET LIVE UPDATE =====
     const sid = {sid};
-   const socket = io(window.location.origin);
-
+    const socket = io(window.location.origin);
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
     }});
-
     socket.on('bus_location', data => {{
         if(data.sid == sid){{
             const lat = parseFloat(data.lat);
@@ -1376,21 +1081,15 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}
     }});
     </script>
     '''
-
     return render_template_string(BASE_HTML, content=content)
-
 
 @app.route("/create-payment", methods=["POST"])
 def create_payment():
     RAZORPAY_ENABLED = os.getenv("RAZORPAY_ENABLED", "false").lower() == "true"
     if not RAZORPAY_ENABLED:
-        return jsonify({
-            "ok": False,
-            "error": "Payment gateway not configured"
-        }), 400
+        return jsonify({"ok": False, "error": "Payment gateway not configured"}), 400
 
     data = request.get_json()
-
     order = razor_client.order.create({
         "amount": int(data['fare']) * 100,
         "currency": "INR",
@@ -1404,22 +1103,22 @@ def create_payment():
         "key": os.getenv("RAZORPAY_KEY_ID")
     })
 
-
 @app.route("/verify-payment", methods=["POST"])
 @safe_db
 def verify():
     data = request.get_json()
-
     conn, cur = get_db()
 
-    # ✅ If Razorpay enabled → verify
     RAZORPAY_ENABLED = os.getenv("RAZORPAY_ENABLED", "false").lower() == "true"
+    # Razorpay client setup
+    razor_client_local = razorpay.Client(auth=(
+        os.getenv("RAZORPAY_KEY_ID"),
+        os.getenv("RAZORPAY_KEY_SECRET")
+    ))
 
-    # Razorpay क्लाइंट सेटअप
-    razor_client = razorpay.Client(auth=("your_key_id", "your_key_secret"))
     if RAZORPAY_ENABLED:
         try:
-            razor_client.utility.verify_payment_signature({
+            razor_client_local.utility.verify_payment_signature({
                 'razorpay_order_id': data['order_id'],
                 'razorpay_payment_id': data['payment_id'],
                 'razorpay_signature': data['signature']
@@ -1427,13 +1126,12 @@ def verify():
         except:
             return jsonify({"ok": False, "error": "Invalid payment"}), 400
 
-    # ✅ Common confirm logic
+    # Confirm booking
     cur.execute("""
         UPDATE seat_bookings
         SET status='confirmed'
         WHERE schedule_id=%s AND seat_number=%s
     """, (data['sid'], data['seat']))
-
     conn.commit()
 
     socketio.emit("seat_update", {
@@ -1443,16 +1141,17 @@ def verify():
 
     return jsonify({"ok": True})
 
-
 @app.route("/search", methods=["POST"])
 @safe_db
 def search():
     fs_input = request.form.get("from", "").strip()
     ts_input = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
+
     session["from"] = fs_input
     session["to"] = ts_input
     session["date"] = travel_date
+
     if not fs_input or not ts_input:
         return "Please select both From and To stations", 400
 
@@ -1461,13 +1160,12 @@ def search():
 
     conn, cur = get_db()
 
-    # Step 1: Find routes containing both stations
+    # Find routes containing both stations
     cur.execute("""
         SELECT DISTINCT route_id
         FROM route_stations
         WHERE LOWER(station_name) = %s OR LOWER(station_name) = %s
     """, (fs, ts))
-
     candidate_routes = [r["route_id"] for r in cur.fetchall()]
 
     if not candidate_routes:
@@ -1476,7 +1174,7 @@ def search():
             content=f"<h3 class='text-center mt-5 text-danger'>🚫 No buses for {fs_input} → {ts_input}</h3>"
         )
 
-    # Step 2: Check correct order
+    # Check correct order
     cur.execute("""
         SELECT r.id
         FROM routes r
@@ -1488,7 +1186,6 @@ def search():
           AND rs_from.station_order < rs_to.station_order
         LIMIT 1
     """, (candidate_routes, fs, ts))
-
     route = cur.fetchone()
 
     if not route:
@@ -1497,10 +1194,8 @@ def search():
             content=f"<h3 class='text-center mt-5 text-danger'>🚫 No valid route for {fs_input} → {ts_input}</h3>"
         )
 
-    # 🔥 DIRECT REDIRECT
+    # Redirect to buses for the route
     return redirect(f"/buses/{route['id']}")
-
-
 
 # ================= RUN SERVER =================
 if __name__ == "__main__":
