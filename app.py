@@ -938,6 +938,8 @@ def seat_page(sid):
             '''
 
     # ===== Bus default location =====
+    user_role = session.get("role", "guest")
+    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
     counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
@@ -953,7 +955,13 @@ def seat_page(sid):
         box-shadow:0 4px 10px rgba(0,0,0,0.2);
     "></div>
     """
-
+    # ===== Role color =====
+    role_color = {
+        "admin": "red",
+        "counter": "green",
+        "conductor": "blue",
+        "user": "orange"
+    }.get(user_role, "gray")
     # ===== Full HTML =====
     html_content = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -963,7 +971,12 @@ def seat_page(sid):
     <div class="container" style="max-width:900px;margin:auto;">
         <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
-
+        <h5>
+        Role:
+        <span style="color:{role_color};font-weight:bold;">
+            {user_role.upper()}
+        </span>
+    </h5>
         <h5>Live Location</h5>
         {map_div}
 
