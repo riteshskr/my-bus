@@ -1039,12 +1039,26 @@ def seat_page(sid):
 
         let mobile = prompt("Mobile Number:");
         if(!mobile) return;
-
+        
         let btn = document.getElementById("seat-" + seatId);
         let oldText = btn.innerText;
         btn.innerText = "⏳ Booking...";
         btn.disabled = true;
+        let fare = null;
+        let payment_mode = "cash";
+        if(COUNTER_ID !== null){{
+            fare = prompt("Fare amount:");
+            if(!fare || isNaN(fare)){{
+                alert("Invalid fare");
+            return;
+            }}
 
+         payment_mode = prompt("Payment mode: cash / online", "cash");
+        if(payment_mode !== "cash" && payment_mode !== "online"){{
+            alert("Only cash or online allowed");
+            return;
+            }}
+        }}
         fetch("/book", {{
             method: "POST",
             headers: {{ "Content-Type":"application/json" }},
@@ -1054,6 +1068,8 @@ def seat_page(sid):
                 passenger_name: name,
                 mobile: mobile,
                 date: TODAY,
+                fare: fare,
+                payment_mode: payment_mode,
                 counter_id: COUNTER_ID
             }})
         }})
@@ -1103,7 +1119,14 @@ def book():
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        fare = random.randint(250, 450)
+        user_role = session.get("role", "user")
+
+        if user_role == "counter":
+            fare = int(data.get("fare", 0))
+            payment_mode = data.get("payment_mode", "cash")
+        else:
+            fare = random.randint(250, 450)
+            payment_mode = "cash"
 
         cur.execute("""
         INSERT INTO seat_bookings
@@ -1132,6 +1155,9 @@ def book():
             session.get("to"),
             data['date'],
             fare,
+            payment_mode,
+            user_role,
+            session.get("user_id", 0),
             data.get('counter_id')
         ))
 
