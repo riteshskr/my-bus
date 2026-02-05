@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import os
 import json
-from datetime import date
+from datetime import date, datetime
 from functools import wraps
 from contextlib import contextmanager
 from flask import Flask, request, jsonify, render_template_string, redirect, session
@@ -115,17 +115,17 @@ def init_db():
         conn = pool.getconn()
         cur = conn.cursor()
 
-        # टेबल्स बनाना
-        cur.execute("""
+        # सभी टेबल्स बनाना
+        tables = [
+            """
             CREATE TABLE IF NOT EXISTS faces (
                 id SERIAL PRIMARY KEY,
                 bus_id INT NOT NULL,
                 face_data BYTEA NOT NULL,
                 face_image BYTEA NOT NULL
-            );
-        """)
-
-        cur.execute("""
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS face_logs (
                 id SERIAL PRIMARY KEY,
                 face_id INT NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
@@ -133,10 +133,9 @@ def init_db():
                 entry_time TIMESTAMP NOT NULL,
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION
-            );
-        """)
-
-        cur.execute("""
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS admins (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(50) UNIQUE,
@@ -144,9 +143,8 @@ def init_db():
                 role VARCHAR(20) DEFAULT 'admin',
                 counter_no INTEGER DEFAULT 0
             )
-        """)
-
-        cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS payments (
                 id SERIAL PRIMARY KEY,
                 schedule_id INT,
@@ -157,17 +155,15 @@ def init_db():
                 status VARCHAR(20),
                 created_at TIMESTAMP DEFAULT NOW()
             )
-        """)
-
-        cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS routes (
                 id SERIAL PRIMARY KEY, 
                 route_name VARCHAR(100) UNIQUE, 
                 distance_km INT
             )
-        """)
-
-        cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS schedules (
                 id SERIAL PRIMARY KEY, 
                 route_id INT REFERENCES routes(id), 
@@ -175,11 +171,11 @@ def init_db():
                 departure_time TIME, 
                 current_lat DOUBLE PRECISION,
                 current_lng DOUBLE PRECISION,
-                total_seats INT DEFAULT 40
+                total_seats INT DEFAULT 40,
+                last_gps_update TIMESTAMP
             )
-        """)
-
-        cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS seat_bookings (
                 id SERIAL PRIMARY KEY,
                 schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
@@ -199,9 +195,8 @@ def init_db():
                 payment_id VARCHAR(100),
                 created_at TIMESTAMP DEFAULT NOW()
             )
-        """)
-
-        cur.execute("""
+            """,
+            """
             CREATE TABLE IF NOT EXISTS route_stations (
                 id SERIAL PRIMARY KEY, 
                 route_id INT REFERENCES routes(id), 
@@ -210,55 +205,50 @@ def init_db():
                 lat DOUBLE PRECISION DEFAULT 27.2,
                 lng DOUBLE PRECISION DEFAULT 75.2
             )
-        """)
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS gps_logs (
+                id SERIAL PRIMARY KEY,
+                schedule_id INT NOT NULL,
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                speed DOUBLE PRECISION DEFAULT 0,
+                accuracy DOUBLE PRECISION,
+                timestamp TIMESTAMP DEFAULT NOW()
+            )
+            """
+        ]
+
+        for table_sql in tables:
+            cur.execute(table_sql)
 
         conn.commit()
 
         # डिफ़ॉल्ट डेटा इनसेट करना
         cur.execute("SELECT COUNT(*) FROM admins")
-        count = cur.fetchone()[0]
-        if count == 0:
+        if cur.fetchone()[0] == 0:
             cur.execute("""
                 INSERT INTO admins (username, password, role, counter_no)
                 VALUES('admin', 'admin123', 'admin', 1)
-                ON CONFLICT DO NOTHING;
+                ON CONFLICT DO NOTHING
             """)
 
         cur.execute("SELECT COUNT(*) FROM routes")
-        count = cur.fetchone()[0]
-        if count == 0:
-            routes = [
-                (1, 'बीकानेर → जयपुर', 336),
-                (2, 'बीकानेर → जोधपुर', 252),
-                (3, 'जयपुर → जोधपुर', 330)
-            ]
+        if cur.fetchone()[0] == 0:
+            routes = [(1, 'बीकानेर → जयपुर', 336), (2, 'बीकानेर → जोधपुर', 252), (3, 'जयपुर → जोधपुर', 330)]
             for r in routes:
-                cur.execute(
-                    "INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                    r
-                )
+                cur.execute("INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", r)
 
-            schedules = [
-                (1, 1, 'Volvo AC Sleeper', '08:00'),
-                (2, 1, 'Semi Sleeper AC', '10:30'),
-                (3, 2, 'Volvo AC Seater', '09:00'),
-                (4, 3, 'Deluxe AC', '07:30')
-            ]
+            schedules = [(1, 1, 'Volvo AC Sleeper', '08:00'), (2, 1, 'Semi Sleeper AC', '10:30'),
+                         (3, 2, 'Volvo AC Seater', '09:00'), (4, 3, 'Deluxe AC', '07:30')]
             for s in schedules:
                 cur.execute("""
                     INSERT INTO schedules (id, route_id, bus_name, departure_time, total_seats)
-                    VALUES (%s,%s,%s,%s::time,40)
-                    ON CONFLICT DO NOTHING
+                    VALUES (%s,%s,%s,%s::time,40) ON CONFLICT DO NOTHING
                 """, s)
 
-            stations = [
-                (1, 'बीकानेर', 1),
-                (1, 'जयपुर', 2),
-                (2, 'बीकानेर', 1),
-                (2, 'जोधपुर', 2),
-                (3, 'जयपुर', 1),
-                (3, 'जोधपुर', 2)
-            ]
+            stations = [(1, 'बीकानेर', 1), (1, 'जयपुर', 2), (2, 'बीकानेर', 1),
+                        (2, 'जोधपुर', 2), (3, 'जयपुर', 1), (3, 'जोधपुर', 2)]
             for st in stations:
                 cur.execute("""
                     INSERT INTO route_stations (route_id,station_name,station_order)
@@ -305,6 +295,7 @@ def gps(data):
     lat = float(data.get('lat', 27.5))
     lng = float(data.get('lng', 75.0))
     speed = float(data.get('speed', 0))
+    accuracy = data.get('accuracy', 0)
 
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
@@ -312,9 +303,19 @@ def gps(data):
     try:
         conn = pool.getconn()
         cur = conn.cursor(row_factory=dict_row)
+
+        # मुख्य टेबल अपडेट
         cur.execute("""
-            UPDATE schedules SET current_lat=%s, current_lng=%s WHERE id=%s
+            UPDATE schedules SET current_lat=%s, current_lng=%s, last_gps_update=NOW() 
+            WHERE id=%s
         """, (lat, lng, sid))
+
+        # GPS लॉग सेव करें
+        cur.execute("""
+            INSERT INTO gps_logs (schedule_id, latitude, longitude, speed, accuracy)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (sid, lat, lng, speed, accuracy))
+
         conn.commit()
         cur.close()
     except Exception as e:
@@ -336,7 +337,7 @@ def gps(data):
         "lat": lat,
         "lng": lng,
         "speed": speed,
-        "timestamp": data.get('timestamp', '')
+        "timestamp": datetime.now().isoformat()
     })
 
 
@@ -422,7 +423,6 @@ body{background:#f5f7fb;color:#222;}
 </html>
 """
 
-# ===== login html =======
 LOGIN_HTML = """
 <div class="row justify-content-center mt-5">
   <div class="col-md-4">
@@ -498,7 +498,6 @@ def dashboard():
 @safe_db
 def buses(rid):
     with get_db() as (conn, cur):
-        # Route details + stations
         cur.execute("""
             SELECT r.route_name, r.distance_km, 
                    string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
@@ -511,7 +510,6 @@ def buses(rid):
         if not route:
             return "मार्ग नहीं मिला", 404
 
-        # All buses of this route
         cur.execute("""
             SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
                    s.current_lat, s.current_lng,
@@ -606,7 +604,6 @@ def buses(rid):
     return render_template_string(html, route=route, buses=buses_data)
 
 
-# **** create counter ******
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
 @safe_db
@@ -654,7 +651,6 @@ def create_counter():
     return render_template_string(BASE_HTML, content=form_html)
 
 
-# ******* login ********
 @app.route("/login", methods=["GET", "POST"])
 @safe_db
 def login():
@@ -683,7 +679,6 @@ def login():
     return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
 
 
-# ******* counter login (same as above) *****
 @app.route("/counter", methods=["GET", "POST"])
 @safe_db
 def counter():
@@ -725,7 +720,6 @@ def select(sid):
 @safe_db
 def seat_page(sid):
     with get_db() as (conn, cur):
-        # Schedule details
         cur.execute("""
             SELECT s.id, s.bus_name, s.departure_time, r.route_name,
                    r.id as route_id, s.current_lat, s.current_lng
@@ -737,7 +731,6 @@ def seat_page(sid):
         if not schedule:
             return "कार्यक्रम नहीं मिला", 404
 
-        # Route stations
         cur.execute("""
             SELECT station_name, station_order
             FROM route_stations
@@ -746,7 +739,6 @@ def seat_page(sid):
         """, (schedule['route_id'],))
         stations = cur.fetchall()
 
-        # Booked seats
         today = session.get("date", date.today().isoformat())
         cur.execute("""
             SELECT seat_number
@@ -756,7 +748,6 @@ def seat_page(sid):
         booked = cur.fetchall()
         booked_seats = set(r['seat_number'] for r in booked)
 
-    # Seat buttons
     seat_buttons = ""
     for i in range(1, 41):
         if i in booked_seats:
@@ -764,14 +755,11 @@ def seat_page(sid):
         else:
             seat_buttons += f'<button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>'
 
-    # Map location
     user_role = session.get("role", "guest")
-    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
     counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
 
-    # HTML content
     map_div = """
     <div id="map" style="width:100%; max-width:900px; height:300px; border-radius:12px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.2);"></div>
     """
@@ -808,7 +796,6 @@ const BUS_LAT = {bus_lat};
 const BUS_LNG = {bus_lon};
 const COUNTER_ID = {counter_js};
 
-// Map init
 const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10);
 L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -818,7 +805,6 @@ L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}
 let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
 let routeLine = null;
 
-// Live location update
 socket.on('bus_location', data => {{
     if(data.sid == SID){{
         const lat = parseFloat(data.lat);
@@ -828,7 +814,6 @@ socket.on('bus_location', data => {{
     }}
 }});
 
-// Seat booking
 function bookSeat(seatId){{
     let name = prompt("यात्री का नाम:");
     if(!name) return;
@@ -908,7 +893,6 @@ def book():
     data = request.get_json()
 
     with get_db() as (conn, cur):
-        # Check seat availability
         cur.execute("""
             SELECT id FROM seat_bookings
             WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s AND status='confirmed'
@@ -924,7 +908,6 @@ def book():
             fare = random.randint(250, 450)
             payment_mode = "cash"
 
-        # Insert booking
         cur.execute("""
         INSERT INTO seat_bookings (
             schedule_id, seat_number, passenger_name, mobile,
@@ -949,7 +932,6 @@ def book():
         ))
         conn.commit()
 
-    # Emit seat update (outside DB context)
     socketio.emit("seat_update", {
         "sid": data['schedule_id'],
         "seat": data['seat_number'],
@@ -959,93 +941,670 @@ def book():
     return jsonify({"ok": True, "fare": fare})
 
 
+# ================= BACKGROUND GPS SOLUTION =================
+
 @app.route("/driver/<int:sid>")
 def driver(sid):
+    """ड्राइवर GPS पेज - बैकग्राउंड में काम करने के लिए Service Worker के साथ"""
     return f"""
 <!DOCTYPE html>
 <html lang="hi">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>बस {sid} जीपीएस</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="theme-color" content="#28a745"/>
+<title>बस {sid} - ड्राइवर GPS</title>
+<link rel="manifest" href="/manifest.json?id={sid}">
 <style>
-body{{ background-color:#f0f0f0; padding:40px; text-align:center; font-family:sans-serif; margin:0; }}
-h2{{ color:#333; }}
-.btn-gps{{ padding:15px 30px; font-size:18px; border:none; border-radius:10px; background-color:#28a745; color:white; cursor:pointer; font-weight:bold; }}
-.btn-stop{{ padding:15px 30px; font-size:18px; border:none; border-radius:10px; background-color:#dc3545; color:white; cursor:pointer; font-weight:bold; margin-left:10px; }}
-#status{{ font-size:18px; margin-top:25px; color:#333; font-family:monospace; padding:15px; background:white; border-radius:8px; box-shadow:0 2px 10px rgba(0,0,0,0.1); }}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{ 
+    font-family: 'Segoe UI', sans-serif; 
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh; 
+    color: white;
+    overflow-x: hidden;
+}}
+.container {{
+    max-width: 100%;
+    padding: 20px;
+    text-align: center;
+}}
+.status-card {{
+    background: rgba(255,255,255,0.95);
+    color: #333;
+    border-radius: 20px;
+    padding: 25px;
+    margin: 20px 0;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}}
+.gps-indicator {{
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    margin: 20px auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    transition: all 0.3s;
+}}
+.gps-active {{
+    background: #28a745;
+    animation: pulse 2s infinite;
+    box-shadow: 0 0 30px #28a745;
+}}
+.gps-inactive {{
+    background: #dc3545;
+}}
+@keyframes pulse {{
+    0%, 100% {{ transform: scale(1); }}
+    50% {{ transform: scale(1.1); }}
+}}
+.btn {{
+    width: 100%;
+    padding: 18px;
+    margin: 10px 0;
+    border: none;
+    border-radius: 15px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.3s;
+    text-transform: uppercase;
+}}
+.btn-start {{
+    background: linear-gradient(45deg, #28a745, #20c997);
+    color: white;
+    box-shadow: 0 5px 20px rgba(40, 167, 69, 0.4);
+}}
+.btn-stop {{
+    background: linear-gradient(45deg, #dc3545, #f093fb);
+    color: white;
+    box-shadow: 0 5px 20px rgba(220, 53, 69, 0.4);
+}}
+.btn:disabled {{
+    opacity: 0.6;
+    cursor: not-allowed;
+}}
+.stats-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin: 20px 0;
+}}
+.stat-box {{
+    background: rgba(255,255,255,0.1);
+    padding: 15px;
+    border-radius: 12px;
+    backdrop-filter: blur(10px);
+}}
+.stat-value {{
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffd700;
+}}
+.stat-label {{
+    font-size: 12px;
+    opacity: 0.9;
+    margin-top: 5px;
+}}
+#log {{
+    background: rgba(0,0,0,0.3);
+    padding: 15px;
+    border-radius: 10px;
+    font-family: monospace;
+    font-size: 12px;
+    max-height: 150px;
+    overflow-y: auto;
+    text-align: left;
+    margin-top: 15px;
+}}
+.wakelock-indicator {{
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: rgba(0,0,0,0.7);
+    padding: 8px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    display: none;
+}}
+.wakelock-active {{
+    display: block !important;
+    background: #28a745 !important;
+}}
 </style>
 </head>
 <body>
-<h2>🚗 ड्राइवर जीपीएस – बस {sid}</h2>
-<button id="startBtn" class="btn-gps" onclick="startGPS()">🚀 जीपीएस शुरू करें</button>
-<button id="stopBtn" class="btn-stop" onclick="stopGPS()" disabled>🛑 जीपीएस बंद करें</button>
-<div id="status">जीपीएस बंद है</div>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-<script>
-const socket = io(window.location.origin);
-let watchId = null;
+<div class="wakelock-indicator" id="wakelockIndicator">
+    🔒 स्क्रीन लॉक रोका गया
+</div>
 
-function startGPS() {{
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const status = document.getElementById("status");
-    if (!navigator.geolocation) {{
-        status.innerHTML = "❌ इस ब्राउज़र में जीपीएस सपोर्ट नहीं है";
-        return;
+<div class="container">
+    <h1>🚌 बस {sid}</h1>
+    <p style="opacity: 0.9;">ड्राइवर GPS ट्रैकिंग</p>
+
+    <div class="status-card">
+        <div class="gps-indicator gps-inactive" id="gpsIndicator">📍</div>
+        <h2 id="statusText">GPS बंद है</h2>
+        <p id="subStatus" style="color: #666; margin-top: 10px;">स्टार्ट बटन दबाएं</p>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-value" id="lat">--</div>
+                <div class="stat-label">अक्षांश (Latitude)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="lng">--</div>
+                <div class="stat-label">देशांतर (Longitude)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="speed">0</div>
+                <div class="stat-label">गति (km/h)</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="accuracy">--</div>
+                <div class="stat-label">सटीकता (m)</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <div id="queueStatus" style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                ऑनलाइन मोड
+            </div>
+        </div>
+    </div>
+
+    <button id="startBtn" class="btn btn-start" onclick="startTracking()">
+        🚀 GPS ट्रैकिंग शुरू करें
+    </button>
+
+    <button id="stopBtn" class="btn btn-stop" onclick="stopTracking()" disabled>
+        🛑 ट्रैकिंग बंद करें
+    </button>
+
+    <div id="log"></div>
+</div>
+
+<script>
+const BUS_ID = {sid};
+const API_BASE = window.location.origin;
+
+// ग्लोबल वेरिएबल्स
+let watchId = null;
+let isTracking = false;
+let wakeLock = null;
+let gpsQueue = [];
+let lastSentTime = 0;
+const SEND_INTERVAL = 5000; // हर 5 सेकंड में भेजें
+const BACKUP_INTERVAL = 10000; // बैकअप हर 10 सेकंड
+
+// Service Worker रजिस्टर करें
+if ('serviceWorker' in navigator) {{
+    navigator.serviceWorker.register('/sw.js')
+        .then(reg => console.log('SW registered:', reg))
+        .catch(err => console.log('SW registration failed:', err));
+}}
+
+// Wake Lock API - स्क्रीन को चालू रखें
+async function requestWakeLock() {{
+    try {{
+        if ('wakeLock' in navigator) {{
+            wakeLock = await navigator.wakeLock.request('screen');
+            document.getElementById('wakelockIndicator').classList.add('wakelock-active');
+            log('स्क्रीन लॉक सक्रिय');
+
+            wakeLock.addEventListener('release', () => {{
+                log('स्क्रीन लॉक रिलीज़ हो गया');
+                document.getElementById('wakelockIndicator').classList.remove('wakelock-active');
+            }});
+        }}
+    }} catch (err) {{
+        log('Wake Lock त्रुटि: ' + err.message);
     }}
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-    startBtn.innerHTML = "⏳ जीपीएस चालू हो रहा है...";
-    status.innerHTML = "📡 जीपीएस खोज रहे हैं...";
+}}
+
+function releaseWakeLock() {{
+    if (wakeLock) {{
+        wakeLock.release();
+        wakeLock = null;
+    }}
+}}
+
+// Visibility API - बैकग्राउंड में भी काम करें
+document.addEventListener('visibilitychange', () => {{
+    if (document.hidden && isTracking) {{
+        log('बैकग्राउंड मोड सक्रिय');
+        // बैकग्राउंड में भी GPS जारी रखें
+        if (watchId === null) {{
+            restartGPS();
+        }}
+    }} else {{
+        log('फोरग्राउंड मोड');
+    }}
+}});
+
+function restartGPS() {{
+    if (watchId !== null) {{
+        navigator.geolocation.clearWatch(watchId);
+    }}
     watchId = navigator.geolocation.watchPosition(
-        function (pos) {{
-            const lat = pos.coords.latitude.toFixed(6);
-            const lng = pos.coords.longitude.toFixed(6);
-            const data = {{ sid: {sid}, lat: lat, lng: lng }};
-            socket.emit("driver_gps", data);
-            status.innerHTML = "✅ LIVE जीपीएस<br>अक्षांश: " + lat + "<br>देशांतर: " + lng;
-            startBtn.innerHTML = "🚗 लाइव जीपीएस चल रहा है";
-        }},
-        function (err) {{
-            status.innerHTML = "❌ जीपीएस त्रुटि: " + err.message;
-            startBtn.disabled = false;
-            stopBtn.disabled = true;
-            startBtn.innerHTML = "🔄 जीपीएस फिर शुरू करें";
-        }},
-        {{ enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }}
+        handlePosition,
+        handleError,
+        {{
+            enableHighAccuracy: true,
+            timeout: 20000,
+            maximumAge: 0,
+            distanceFilter: 10
+        }}
     );
 }}
 
-function stopGPS() {{
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const status = document.getElementById("status");
+function log(msg) {{
+    const logDiv = document.getElementById('log');
+    const time = new Date().toLocaleTimeString('hi-IN');
+    logDiv.innerHTML = `[${{time}}] ${{msg}}<br>` + logDiv.innerHTML;
+    console.log(msg);
+}}
+
+function updateUI(lat, lng, speed, accuracy) {{
+    document.getElementById('lat').textContent = lat.toFixed(5);
+    document.getElementById('lng').textContent = lng.toFixed(5);
+    document.getElementById('speed').textContent = speed ? speed.toFixed(1) : '0';
+    document.getElementById('accuracy').textContent = accuracy ? accuracy.toFixed(0) : '--';
+}}
+
+function setStatus(active, text, subtext) {{
+    const indicator = document.getElementById('gpsIndicator');
+    const statusText = document.getElementById('statusText');
+    const subStatus = document.getElementById('subStatus');
+
+    if (active) {{
+        indicator.className = 'gps-indicator gps-active';
+        statusText.textContent = text || 'LIVE ट्रैकिंग';
+        statusText.style.color = '#28a745';
+    }} else {{
+        indicator.className = 'gps-indicator gps-inactive';
+        statusText.textContent = text || 'GPS बंद है';
+        statusText.style.color = '#dc3545';
+    }}
+    if (subtext) subStatus.textContent = subtext;
+}}
+
+// GPS पोजीशन हैंडलर
+function handlePosition(position) {{
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    const speed = position.coords.speed ? position.coords.speed * 3.6 : 0; // m/s to km/h
+    const accuracy = position.coords.accuracy;
+    const timestamp = new Date().toISOString();
+
+    updateUI(lat, lng, speed, accuracy);
+
+    const data = {{
+        sid: BUS_ID,
+        lat: lat,
+        lng: lng,
+        speed: speed,
+        accuracy: accuracy,
+        timestamp: timestamp
+    }};
+
+    // क्यू में डालें
+    gpsQueue.push(data);
+
+    // तुरंत भेजने की कोशिश
+    sendGPSData();
+}}
+
+function handleError(error) {{
+    let msg = '';
+    switch(error.code) {{
+        case error.PERMISSION_DENIED:
+            msg = "GPS अनुमति अस्वीकृत";
+            break;
+        case error.POSITION_UNAVAILABLE:
+            msg = "लोकेशन उपलब्ध नहीं";
+            break;
+        case error.TIMEOUT:
+            msg = "GPS टाइमआउट";
+            break;
+        default:
+            msg = "GPS त्रुटि: " + error.message;
+    }}
+    log(msg);
+    setStatus(false, 'त्रुटि', msg);
+}}
+
+// GPS डेटा भेजें (ऑनलाइन/ऑफलाइन दोनों मोड में)
+async function sendGPSData() {{
+    if (gpsQueue.length === 0) return;
+
+    const now = Date.now();
+    if (now - lastSentTime < SEND_INTERVAL && navigator.onLine) return;
+
+    const dataToSend = [...gpsQueue];
+    gpsQueue = [];
+
+    // Service Worker को मैसेज भेजें (बैकग्राउंड के लिए)
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {{
+        navigator.serviceWorker.controller.postMessage({{
+            type: 'GPS_DATA',
+            data: dataToSend,
+            apiBase: API_BASE
+        }});
+    }}
+
+    // मुख्य थ्रेड में भी भेजें (तुरंत अपडेट के लिए)
+    if (navigator.onLine) {{
+        try {{
+            const response = await fetch(API_BASE + '/api/gps-batch', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{locations: dataToSend}})
+            }});
+
+            if (response.ok) {{
+                lastSentTime = now;
+                document.getElementById('queueStatus').textContent = 
+                    `✅ ${{dataToSend.length}} लोकेशन सिंक हुए`;
+                log('डेटा सिंक सफल');
+            }} else {{
+                throw new Error('Server error');
+            }}
+        }} catch (err) {{
+            // फेल होने पर वापस क्यू में डालें
+            gpsQueue.unshift(...dataToSend);
+            document.getElementById('queueStatus').textContent = 
+                `⏳ ${{gpsQueue.length}} लोकेशन क्यू में`;
+            log('सिंक फेल, क्यू में सेव किया');
+        }}
+    }} else {{
+        gpsQueue.unshift(...dataToSend);
+        document.getElementById('queueStatus').textContent = 
+            `📴 ऑफलाइन - ${{gpsQueue.length}} सेव`;
+        log('ऑफलाइन मोड - डेटा सेव किया');
+    }}
+}}
+
+// ट्रैकिंग शुरू करें
+async function startTracking() {{
+    if (!navigator.geolocation) {{
+        alert('इस डिवाइस में GPS सपोर्ट नहीं है');
+        return;
+    }}
+
+    isTracking = true;
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+
+    // Wake Lock लें
+    await requestWakeLock();
+
+    // GPS शुरू करें
+    restartGPS();
+
+    // बैकग्राउंड सिंक इंटरवल
+    window.syncInterval = setInterval(() => {{
+        if (gpsQueue.length > 0) {{
+            sendGPSData();
+        }}
+    }}, BACKUP_INTERVAL);
+
+    setStatus(true, 'LIVE ट्रैकिंग', 'GPS सक्रिय');
+    log('ट्रैकिंग शुरू हुई');
+
+    // ब्राउज़र नोटिफिकेशन
+    if ('Notification' in window && Notification.permission === 'granted') {{
+        new Notification('GPS ट्रैकिंग शुरू', {{
+            body: 'बस ' + BUS_ID + ' की ट्रैकिंग चालू है',
+            icon: '🚌'
+        }});
+    }}
+}}
+
+// ट्रैकिंग बंद करें
+function stopTracking() {{
+    isTracking = false;
+
     if (watchId !== null) {{
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
     }}
-    socket.emit("driver_gps_stop", {{ sid: {sid} }});
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    startBtn.innerHTML = "🚀 जीपीएस शुरू करें";
-    status.innerHTML = "🛑 जीपीएस बंद कर दिया गया";
+
+    if (window.syncInterval) {{
+        clearInterval(window.syncInterval);
+    }}
+
+    releaseWakeLock();
+
+    // बचा हुआ डेटा भेजें
+    if (gpsQueue.length > 0) {{
+        sendGPSData();
+    }}
+
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+
+    setStatus(false, 'GPS बंद', 'ट्रैकिंग रोक दी गई');
+    log('ट्रैकिंग बंद हुई');
 }}
+
+// पेज लोड पर नोटिफिकेशन अनुमति लें
+if ('Notification' in window && Notification.permission === 'default') {{
+    Notification.requestPermission();
+}}
+
+// पेज अनलोड से पहले बचा हुआ डेटा भेजें
+window.addEventListener('beforeunload', (e) => {{
+    if (isTracking && gpsQueue.length > 0) {{
+        sendGPSData();
+    }}
+}});
+
+// ऑनलाइन/ऑफलाइन हैंडलर
+window.addEventListener('online', () => {{
+    log('इंटरनेट वापस आ गया');
+    if (gpsQueue.length > 0) sendGPSData();
+}});
+
+window.addEventListener('offline', () => {{
+    log('इंटरनेट गया');
+}});
+
+// Service Worker से मैसेज सुनें
+navigator.serviceWorker?.addEventListener('message', (event) => {{
+    if (event.data.type === 'SYNC_COMPLETE') {{
+        log('बैकग्राउंड सिंक पूरा');
+    }}
+}});
 </script>
 </body>
 </html>
 """
 
 
+@app.route("/manifest.json")
+def manifest():
+    """PWA Manifest - होम स्क्रीन पर ऐप की तरह इंस्टॉल करें"""
+    bus_id = request.args.get('id', '1')
+    return jsonify({
+        "name": f"बस ट्रैकर {bus_id}",
+        "short_name": f"बस {bus_id}",
+        "start_url": f"/driver/{bus_id}",
+        "display": "standalone",
+        "background_color": "#28a745",
+        "theme_color": "#28a745",
+        "orientation": "portrait",
+        "icons": [
+            {
+                "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>",
+                "sizes": "192x192",
+                "type": "image/svg+xml"
+            }
+        ]
+    })
+
+
+@app.route("/sw.js")
+def service_worker():
+    """Service Worker - बैकग्राउंड में GPS डेटा सिंक करें"""
+    return """
+self.addEventListener('install', (event) => {
+    console.log('Service Worker installing...');
+    self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+    console.log('Service Worker activating...');
+    event.waitUntil(clients.claim());
+});
+
+// GPS डेटा क्यू
+let gpsQueue = [];
+let isSyncing = false;
+
+self.addEventListener('message', (event) => {
+    if (event.data.type === 'GPS_DATA') {
+        const data = event.data.data;
+        const apiBase = event.data.apiBase;
+
+        // क्यू में जोड़ें
+        gpsQueue.push(...data);
+
+        // तुरंत सिंक करें
+        syncGPSData(apiBase);
+    }
+});
+
+// बैकग्राउंड सिंक
+async function syncGPSData(apiBase) {
+    if (isSyncing || gpsQueue.length === 0) return;
+
+    isSyncing = true;
+    const dataToSend = [...gpsQueue];
+    gpsQueue = [];
+
+    try {
+        const response = await fetch(apiBase + '/api/gps-batch', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({locations: dataToSend})
+        });
+
+        if (response.ok) {
+            // क्लाइंट को बताएं
+            const clients = await self.clients.matchAll();
+            clients.forEach(client => {
+                client.postMessage({
+                    type: 'SYNC_COMPLETE',
+                    count: dataToSend.length
+                });
+            });
+        } else {
+            throw new Error('Server error');
+        }
+    } catch (err) {
+        // फेल होने पर वापस क्यू में डालें
+        gpsQueue.unshift(...dataToSend);
+        console.log('Sync failed, queued:', gpsQueue.length);
+    } finally {
+        isSyncing = false;
+
+        // अगर और डेटा है तो फिर से कोशिश करें
+        if (gpsQueue.length > 0) {
+            setTimeout(() => syncGPSData(apiBase), 5000);
+        }
+    }
+}
+
+// Periodic Background Sync (अगर सपोर्टेड हो)
+self.addEventListener('periodicsync', (event) => {
+    if (event.tag === 'gps-sync') {
+        event.waitUntil(syncGPSData(self.location.origin));
+    }
+});
+
+// Fetch इंटरसेप्ट - ऑफलाइन सपोर्ट
+self.addEventListener('fetch', (event) => {
+    // GPS API कॉल्स को नेटवर्क-ओनली रखें
+    if (event.request.url.includes('/api/gps')) {
+        event.respondWith(fetch(event.request).catch(() => {
+            return new Response(JSON.stringify({queued: true}), {
+                headers: {'Content-Type': 'application/json'}
+            });
+        }));
+    }
+});
+""", 200, {'Content-Type': 'application/javascript'}
+
+
+@app.route("/api/gps-batch", methods=["POST"])
+@safe_db
+def gps_batch():
+    """बैच में GPS डेटा रिसीव करें - बैकग्राउंड सिंक के लिए"""
+    data = request.get_json()
+    locations = data.get('locations', [])
+
+    if not locations:
+        return jsonify({"ok": False, "error": "No data"}), 400
+
+    success_count = 0
+
+    with get_db() as (conn, cur):
+        for loc in locations:
+            try:
+                sid = loc.get('sid')
+                lat = float(loc.get('lat', 0))
+                lng = float(loc.get('lng', 0))
+                speed = float(loc.get('speed', 0))
+                accuracy = float(loc.get('accuracy', 0))
+
+                # मुख्य टेबल अपडेट
+                cur.execute("""
+                    UPDATE schedules 
+                    SET current_lat=%s, current_lng=%s, last_gps_update=NOW() 
+                    WHERE id=%s
+                """, (lat, lng, sid))
+
+                # GPS लॉग सेव करें
+                cur.execute("""
+                    INSERT INTO gps_logs (schedule_id, latitude, longitude, speed, accuracy)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (sid, lat, lng, speed, accuracy))
+
+                # SocketIO पर ब्रॉडकास्ट
+                socketio.emit("bus_location", {
+                    "sid": sid,
+                    "lat": lat,
+                    "lng": lng,
+                    "speed": speed,
+                    "timestamp": loc.get('timestamp', datetime.now().isoformat())
+                })
+
+                success_count += 1
+            except Exception as e:
+                print(f"Error processing GPS data: {e}")
+                continue
+
+        conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "processed": success_count,
+        "total": len(locations)
+    })
+
+
 @app.route("/live-bus/<int:sid>")
 @safe_db
 def live_bus(sid):
     with get_db() as (conn, cur):
-        # Bus + Route info
         cur.execute("""
             SELECT s.id, s.bus_name, s.departure_time,
                    r.id as route_id, r.route_name, r.distance_km,
-                   s.current_lat as lat, s.current_lng as lng
+                   s.current_lat as lat, s.current_lng as lng,
+                   s.last_gps_update
             FROM schedules s 
             JOIN routes r ON s.route_id = r.id 
             WHERE s.id = %s
@@ -1057,7 +1616,14 @@ def live_bus(sid):
         lat = float(bus.get('lat', 27.2))
         lng = float(bus.get('lng', 74.2))
 
-        # Route Stations for polyline
+        # GPS अपडेट का समय
+        last_update = bus.get('last_gps_update')
+        is_live = False
+        if last_update:
+            from datetime import datetime
+            time_diff = (datetime.now() - last_update).total_seconds()
+            is_live = time_diff < 300  # 5 मिनट से कerma पुराना न हो
+
         cur.execute("""
             SELECT lat, lng, station_name
             FROM route_stations
@@ -1072,22 +1638,37 @@ def live_bus(sid):
     content = f'''
     <style>
     #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
-    .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
-    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
-    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;}}
+    .live-indicator{{animation:pulse 2s infinite;width:20px;height:20px;background:#28a745;border-radius:50%;display:inline-block;margin-right:10px;}}
+    .offline-indicator{{width:20px;height:20px;background:#dc3545;border-radius:50%;display:inline-block;margin-right:10px;}}
+    @keyframes pulse{{0%,100%{{transform:scale(1);opacity:1;}}50%{{transform:scale(1.2);opacity:0.7;}}}}
+    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;border-radius:15px;margin-bottom:20px;}}
+    .last-update{{font-size:12px;color:#666;}}
     </style>
-    <div class="text-center mb-5">
-        <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
-        <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}किमी)</h5>
-        <div class="h6 {'text-success' if bus.get('lat') else 'text-warning'} mb-3">
-            {"🟢 लाइव जीपीएस" if bus.get('lat') else "📡 जीपीएस का इंतज़ार..."}
+
+    <div class="stats-card">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h2 class="mb-1">🚌 {bus['bus_name']}</h2>
+                <p class="text-muted mb-0">{bus['route_name']} ({bus['distance_km']}किमी)</p>
+            </div>
+            <div class="text-end">
+                <span class="{'live-indicator' if is_live else 'offline-indicator'}"></span>
+                <span class="fw-bold {'text-success' if is_live else 'text-danger'}">
+                    {'🟢 LIVE' if is_live else '⚪ ऑफलाइन'}
+                </span>
+                <div class="last-update mt-1">
+                    अंतिम अपडेट: {last_update.strftime('%H:%M:%S') if last_update else 'कभी नहीं'}
+                </div>
+            </div>
         </div>
     </div>
-    <div class="row g-4">
-        <div class="col-lg-12">
-            <div id="map" class="rounded-4"></div>
-        </div>
+
+    <div id="map" class="rounded-4"></div>
+
+    <div class="alert alert-info mt-3" id="connectionStatus">
+        📡 कनेक्टिंग...
     </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
@@ -1109,28 +1690,34 @@ def live_bus(sid):
         }}
     }});
 
-    let routeLine = null;
     if(routePoints.length > 1){{
-        routeLine = L.polyline(routePoints, {{
+        L.polyline(routePoints, {{
             color: 'blue',
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
-        map.fitBounds(routeLine.getBounds());
+        map.fitBounds(L.polyline(routePoints).getBounds());
     }}
 
     const busIcon = L.divIcon({{
-        html: '<div class="live-bus"></div>',
+        html: '<div style="animation:pulse 2s infinite;width:30px;height:30px;background:#28a745;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #28a745;display:flex;align-items:center;justify-content:center;">🚌</div>',
         className: 'bus-icon',
         iconSize: [30,30]
     }});
 
-    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
+    let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
     const sid = {sid};
     const socket = io(window.location.origin);
+    const statusDiv = document.getElementById('connectionStatus');
 
     socket.on('connect', () => {{
-        console.log('✅ सॉकेट कनेक्टेड');
+        statusDiv.className = 'alert alert-success mt-3';
+        statusDiv.innerHTML = '✅ लाइव कनेक्टेड - रीयल-टाइम अपडेट';
+    }});
+
+    socket.on('disconnect', () => {{
+        statusDiv.className = 'alert alert-warning mt-3';
+        statusDiv.innerHTML = '⚠️ डिस्कनेक्टेड - पुनः कनेक्ट हो रहा है...';
     }});
 
     socket.on('bus_location', data => {{
@@ -1139,6 +1726,11 @@ def live_bus(sid):
             const lng = parseFloat(data.lng);
             busMarker.setLatLng([lat,lng]);
             map.panTo([lat,lng], {{animate:true}});
+
+            // स्पीड अपडेट
+            if(data.speed) {{
+                statusDiv.innerHTML = `🚌 गति: ${{data.speed.toFixed(1)}} km/h | अपडेट: ${{new Date().toLocaleTimeString('hi-IN')}}`;
+            }}
         }}
     }});
     </script>
@@ -1185,7 +1777,6 @@ def verify():
             return jsonify({"ok": False, "error": "अमान्य भुगतान"}), 400
 
     with get_db() as (conn, cur):
-        # Confirm booking
         cur.execute("""
             UPDATE seat_bookings
             SET status='confirmed'
@@ -1219,7 +1810,6 @@ def search():
     ts = ts_input.lower()
 
     with get_db() as (conn, cur):
-        # Find routes containing both stations
         cur.execute("""
             SELECT DISTINCT route_id
             FROM route_stations
@@ -1233,7 +1823,6 @@ def search():
                 content=f"<h3 class='text-center mt-5 text-danger'>🚫 {fs_input} → {ts_input} के लिए कोई बस नहीं</h3>"
             )
 
-        # Check correct order
         cur.execute("""
             SELECT r.id
             FROM routes r
@@ -1264,5 +1853,5 @@ def logout():
 
 # ================= RUN SERVER =================
 if __name__ == "__main__":
-    print("🚀 बस बुकिंग ऐप शुरू हो रहा है... (लाइव अपडेट 100% काम कर रहे हैं)")
+    print("🚀 बस बुकिंग ऐप शुरू हो रहा है... (बैकग्राउंड GPS सहित)")
     socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
