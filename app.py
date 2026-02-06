@@ -1,1857 +1,1535 @@
+# ================= KAYA RENDER OPTIMIZED VERSION - FIXED =================
 from dotenv import load_dotenv
 import os
 import json
-from datetime import date, datetime
+import time
+import hashlib
+from datetime import date, datetime, timedelta
 from functools import wraps
 from contextlib import contextmanager
-from flask import Flask, request, jsonify, render_template_string, redirect, session
-from flask_socketio import SocketIO, emit
+from flask import Flask, request, jsonify, render_template_string, redirect, session, g
 from flask_compress import Compress
-from psycopg_pool import ConnectionPool
-from psycopg.rows import dict_row
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
+import psycopg2
+from psycopg2 import pool, extras
 import atexit
-import razorpay
 import random
 import traceback
+import uuid
+import logging
+
+# Kaya Render के लिए WebSockets बंद करें
+# Socket.IO को हटाएं क्योंकि free tier support नहीं करता
 
 load_dotenv()
 
-# Razorpay setup
-razor_client = None
-if os.getenv("RAZORPAY_KEY_ID") and os.getenv("RAZORPAY_KEY_SECRET"):
-    razor_client = razorpay.Client(auth=(
-        os.getenv("RAZORPAY_KEY_ID"),
-        os.getenv("RAZORPAY_KEY_SECRET")
-    ))
 
-# Flask app setup
+# Configuration for Kaya Render
+class Config:
+    SECRET_KEY = os.getenv("SECRET_KEY", "kaya-render-secret-key-123")
+    DATABASE_URL = os.getenv("DATABASE_URL")
+
+    # Kaya के limitations के अनुसार settings
+    MAX_DB_CONNECTIONS = 5  # Free tier के लिए कम connections
+    GPS_BATCH_SIZE = 10  # Smaller batches for limited RAM
+
+    # WebSockets disabled for Kaya
+    WEBSOCKETS_ENABLED = False
+
+    # Rate limiting - use in-memory storage
+    RATE_LIMITS = "100 per hour"
+
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Kaya Render के लिए memory-efficient connection pool
+connection_pool = None
+
+
+def create_kaya_pool():
+    """Kaya Render के limitations के लिए optimized pool"""
+    global connection_pool
+    try:
+        connection_pool = psycopg2.pool.SimpleConnectionPool(
+            2,  # Minimum connections
+            Config.MAX_DB_CONNECTIONS,  # Max connections
+            Config.DATABASE_URL
+        )
+        logger.info("✅ Kaya-optimized database pool created")
+        return connection_pool
+    except Exception as e:
+        logger.error(f"❌ Pool creation failed: {e}")
+        # Fallback to direct connection
+        return None
+
+
+# Flask app setup for Kaya
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
+app.secret_key = Config.SECRET_KEY
 Compress(app)
+CORS(app)
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
-                    logger=True, engineio_logger=True, ping_timeout=60)
+# Memory-based rate limiter (Redis not available in free tier)
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=[Config.RATE_LIMITS],
+    storage_uri="memory://"  # In-memory storage
+)
 
-# PostgreSQL connection pool setup
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise Exception("DATABASE_URL environment variable is missing!")
-
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=2, max_size=10, timeout=30)
+# Initialize connection pool
+create_kaya_pool()
 
 
 @atexit.register
-def shutdown_pool():
+def cleanup_pool():
+    """Cleanup connection pool on exit"""
+    if connection_pool:
+        connection_pool.closeall()
+        logger.info("✅ Connection pool closed")
+
+
+# ================= DATABASE HELPERS FOR KAYA =================
+def get_db_connection():
+    """Get database connection - simplified for Kaya"""
     try:
-        pool.close()
-        print("✅ Connection pool closed")
+        if connection_pool:
+            conn = connection_pool.getconn()
+        else:
+            # Fallback to direct connection
+            conn = psycopg2.connect(Config.DATABASE_URL)
+
+        conn.autocommit = False
+        return conn
     except Exception as e:
-        print(f"⚠️ Error closing pool: {e}")
+        logger.error(f"DB Connection Error: {e}")
+        raise
 
 
-# ================= DB Helper Functions =================
+def release_db_connection(conn):
+    """Release connection back to pool"""
+    try:
+        if connection_pool:
+            connection_pool.putconn(conn)
+        else:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Error releasing connection: {e}")
+
+
 @contextmanager
-def get_db():
-    """Thread-safe database connection context manager"""
+def db_cursor():
+    """Context manager for database operations"""
     conn = None
     cur = None
     try:
-        conn = pool.getconn()
-        cur = conn.cursor(row_factory=dict_row)
-        yield conn, cur
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        yield cur
+        conn.commit()
     except Exception as e:
         if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
-        raise e
+            conn.rollback()
+        logger.error(f"Database error: {e}")
+        raise
     finally:
         if cur:
-            try:
-                cur.close()
-            except:
-                pass
+            cur.close()
         if conn:
-            try:
-                pool.putconn(conn)
-            except Exception as e:
-                print(f"⚠️ Error returning connection to pool: {e}")
+            release_db_connection(conn)
 
 
 def safe_db(func):
-    """Decorator for database operations with automatic cleanup"""
+    """Decorator for database operations"""
 
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            print(f"❌ Database error in {func.__name__}: {str(e)}")
-            traceback.print_exc()
-            return jsonify({"error": "Database error occurred"}), 500
+            logger.error(f"Error in {func.__name__}: {e}")
+            return jsonify({"error": "Service unavailable"}), 503
 
     return wrapper
 
 
-# ================= Admin Role Decorator =================
-def admin_required(f):
-    @wraps(f)
-    def wrap(*a, **k):
-        if not session.get("user_logged_in"):
-            return redirect("/login")
-        if session.get("role") != "admin":
-            return "Access Denied", 403
-        return f(*a, **k)
-
-    return wrap
-
-
-# ================= DB Initialization =================
-def init_db():
-    conn = None
-    cur = None
+# ================= INITIALIZE DATABASE =================
+def init_database():
+    """Initialize database with required tables"""
     try:
-        conn = pool.getconn()
-        cur = conn.cursor()
+        with db_cursor() as cur:
+            # Create tables if not exist
+            tables = [
+                """CREATE TABLE IF NOT EXISTS admins (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(50) UNIQUE,
+                    password VARCHAR(100),
+                    role VARCHAR(20) DEFAULT 'admin',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS routes (
+                    id SERIAL PRIMARY KEY,
+                    route_name VARCHAR(100),
+                    distance_km INT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS schedules (
+                    id SERIAL PRIMARY KEY,
+                    route_id INT,
+                    bus_name VARCHAR(100),
+                    departure_time TIME,
+                    current_lat DOUBLE PRECISION,
+                    current_lng DOUBLE PRECISION,
+                    total_seats INT DEFAULT 40,
+                    last_gps_update TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS route_stations (
+                    id SERIAL PRIMARY KEY,
+                    route_id INT,
+                    station_name VARCHAR(50),
+                    station_order INT,
+                    lat DOUBLE PRECISION DEFAULT 27.2,
+                    lng DOUBLE PRECISION DEFAULT 75.2,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS seat_bookings (
+                    id SERIAL PRIMARY KEY,
+                    schedule_id INT,
+                    seat_number INT,
+                    passenger_name VARCHAR(100),
+                    mobile VARCHAR(15),
+                    from_station VARCHAR(50),
+                    to_station VARCHAR(50),
+                    travel_date DATE,
+                    status VARCHAR(20) DEFAULT 'confirmed',
+                    fare INT,
+                    payment_mode VARCHAR(10) DEFAULT 'cash',
+                    booked_by_type VARCHAR(10) DEFAULT 'user',
+                    booked_by_id INT,
+                    counter_id INT,
+                    order_id VARCHAR(100),
+                    payment_id VARCHAR(100),
+                    booking_hash VARCHAR(64) UNIQUE,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )""",
+                """CREATE TABLE IF NOT EXISTS gps_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    schedule_id INT NOT NULL,
+                    latitude DOUBLE PRECISION NOT NULL,
+                    longitude DOUBLE PRECISION NOT NULL,
+                    speed DOUBLE PRECISION DEFAULT 0,
+                    accuracy DOUBLE PRECISION,
+                    timestamp TIMESTAMP DEFAULT NOW()
+                )"""
+            ]
 
-        # सभी टेबल्स बनाना
-        tables = [
-            """
-            CREATE TABLE IF NOT EXISTS faces (
-                id SERIAL PRIMARY KEY,
-                bus_id INT NOT NULL,
-                face_data BYTEA NOT NULL,
-                face_image BYTEA NOT NULL
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS face_logs (
-                id SERIAL PRIMARY KEY,
-                face_id INT NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
-                bus_id INT NOT NULL,
-                entry_time TIMESTAMP NOT NULL,
-                latitude DOUBLE PRECISION,
-                longitude DOUBLE PRECISION
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS admins (
-                id SERIAL PRIMARY KEY,
-                username VARCHAR(50) UNIQUE,
-                password VARCHAR(100),
-                role VARCHAR(20) DEFAULT 'admin',
-                counter_no INTEGER DEFAULT 0
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS payments (
-                id SERIAL PRIMARY KEY,
-                schedule_id INT,
-                seat_number INT,
-                order_id VARCHAR(100),
-                payment_id VARCHAR(100),
-                amount INT,
-                status VARCHAR(20),
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS routes (
-                id SERIAL PRIMARY KEY, 
-                route_name VARCHAR(100) UNIQUE, 
-                distance_km INT
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS schedules (
-                id SERIAL PRIMARY KEY, 
-                route_id INT REFERENCES routes(id), 
-                bus_name VARCHAR(100),
-                departure_time TIME, 
-                current_lat DOUBLE PRECISION,
-                current_lng DOUBLE PRECISION,
-                total_seats INT DEFAULT 40,
-                last_gps_update TIMESTAMP
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS seat_bookings (
-                id SERIAL PRIMARY KEY,
-                schedule_id INT REFERENCES schedules(id) ON DELETE CASCADE,
-                seat_number INT,
-                passenger_name VARCHAR(100),
-                mobile VARCHAR(15),
-                from_station VARCHAR(50),
-                to_station VARCHAR(50),
-                travel_date DATE,
-                status VARCHAR(20) DEFAULT 'confirmed',
-                fare INT,
-                payment_mode VARCHAR(10) DEFAULT 'cash',
-                booked_by_type VARCHAR(10) DEFAULT 'user',
-                booked_by_id INT,
-                counter_id INT,
-                order_id VARCHAR(100),
-                payment_id VARCHAR(100),
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS route_stations (
-                id SERIAL PRIMARY KEY, 
-                route_id INT REFERENCES routes(id), 
-                station_name VARCHAR(50), 
-                station_order INT,
-                lat DOUBLE PRECISION DEFAULT 27.2,
-                lng DOUBLE PRECISION DEFAULT 75.2
-            )
-            """,
-            """
-            CREATE TABLE IF NOT EXISTS gps_logs (
-                id SERIAL PRIMARY KEY,
-                schedule_id INT NOT NULL,
-                latitude DOUBLE PRECISION NOT NULL,
-                longitude DOUBLE PRECISION NOT NULL,
-                speed DOUBLE PRECISION DEFAULT 0,
-                accuracy DOUBLE PRECISION,
-                timestamp TIMESTAMP DEFAULT NOW()
-            )
-            """
-        ]
+            for table_sql in tables:
+                cur.execute(table_sql)
 
-        for table_sql in tables:
-            cur.execute(table_sql)
+            # Insert default admin if not exists
+            cur.execute("SELECT COUNT(*) FROM admins")
+            if cur.fetchone()[0] == 0:
+                hashed_pw = generate_password_hash("admin123")
+                cur.execute(
+                    "INSERT INTO admins (username, password) VALUES (%s, %s)",
+                    ("admin", hashed_pw)
+                )
 
-        conn.commit()
+            # Insert sample routes if not exists
+            cur.execute("SELECT COUNT(*) FROM routes")
+            if cur.fetchone()[0] == 0:
+                sample_routes = [
+                    (1, 'Bikaner → Jaipur', 336),
+                    (2, 'Bikaner → Jodhpur', 252),
+                    (3, 'Jaipur → Jodhpur', 330)
+                ]
+                for route in sample_routes:
+                    cur.execute(
+                        "INSERT INTO routes (id, route_name, distance_km) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        route
+                    )
 
-        # डिफ़ॉल्ट डेटा इनसेट करना
-        cur.execute("SELECT COUNT(*) FROM admins")
-        if cur.fetchone()[0] == 0:
-            cur.execute("""
-                INSERT INTO admins (username, password, role, counter_no)
-                VALUES('admin', 'admin123', 'admin', 1)
-                ON CONFLICT DO NOTHING
-            """)
+                # Sample schedules
+                sample_schedules = [
+                    (1, 1, 'Volvo AC Sleeper', '08:00'),
+                    (2, 1, 'Semi Sleeper AC', '10:30'),
+                    (3, 2, 'Volvo AC Seater', '09:00'),
+                    (4, 3, 'Deluxe AC', '07:30')
+                ]
+                for schedule in sample_schedules:
+                    cur.execute(
+                        "INSERT INTO schedules (id, route_id, bus_name, departure_time) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        schedule
+                    )
 
-        cur.execute("SELECT COUNT(*) FROM routes")
-        if cur.fetchone()[0] == 0:
-            routes = [(1, 'बीकानेर → जयपुर', 336), (2, 'बीकानेर → जोधपुर', 252), (3, 'जयपुर → जोधपुर', 330)]
-            for r in routes:
-                cur.execute("INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING", r)
+                # Sample stations
+                sample_stations = [
+                    (1, 'Bikaner', 1, 28.0229, 73.3119),
+                    (1, 'Jaipur', 2, 26.9124, 75.7873),
+                    (2, 'Bikaner', 1, 28.0229, 73.3119),
+                    (2, 'Jodhpur', 2, 26.2389, 73.0243),
+                    (3, 'Jaipur', 1, 26.9124, 75.7873),
+                    (3, 'Jodhpur', 2, 26.2389, 73.0243)
+                ]
+                for station in sample_stations:
+                    cur.execute(
+                        "INSERT INTO route_stations (route_id, station_name, station_order, lat, lng) VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                        station
+                    )
 
-            schedules = [(1, 1, 'Volvo AC Sleeper', '08:00'), (2, 1, 'Semi Sleeper AC', '10:30'),
-                         (3, 2, 'Volvo AC Seater', '09:00'), (4, 3, 'Deluxe AC', '07:30')]
-            for s in schedules:
-                cur.execute("""
-                    INSERT INTO schedules (id, route_id, bus_name, departure_time, total_seats)
-                    VALUES (%s,%s,%s,%s::time,40) ON CONFLICT DO NOTHING
-                """, s)
-
-            stations = [(1, 'बीकानेर', 1), (1, 'जयपुर', 2), (2, 'बीकानेर', 1),
-                        (2, 'जोधपुर', 2), (3, 'जयपुर', 1), (3, 'जोधपुर', 2)]
-            for st in stations:
-                cur.execute("""
-                    INSERT INTO route_stations (route_id,station_name,station_order)
-                    VALUES (%s,%s,%s) ON CONFLICT DO NOTHING
-                """, st)
-
-            conn.commit()
-        print("✅ DB Init Complete!")
+            logger.info("✅ Database initialized successfully")
 
     except Exception as e:
-        print(f"❌ DB Init Error: {e}")
-        traceback.print_exc()
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
+        logger.error(f"❌ Database initialization failed: {e}")
         raise
-    finally:
-        if cur:
-            try:
-                cur.close()
-            except:
-                pass
-        if conn:
-            try:
-                pool.putconn(conn)
-            except:
-                pass
 
 
-init_db()
+# Initialize database on startup
+init_database()
 
 
-# ================= SOCKET EVENTS =================
-@socketio.on("connect")
-def handle_connect():
-    print(f"✅ Client connected: {request.sid}")
-
-
-@socketio.on("driver_gps")
-def gps(data):
-    sid = data.get('sid')
-    lat = float(data.get('lat', 27.5))
-    lng = float(data.get('lng', 75.0))
-    speed = float(data.get('speed', 0))
-    accuracy = data.get('accuracy', 0)
-
-    print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
-
-    conn = None
+# ================= KAYA HEALTH CHECK =================
+@app.route('/health')
+def health_check_kaya():
+    """Kaya Render health check endpoint"""
     try:
-        conn = pool.getconn()
-        cur = conn.cursor(row_factory=dict_row)
+        # Check database connection
+        with db_cursor() as cur:
+            cur.execute("SELECT 1")
 
-        # मुख्य टेबल अपडेट
-        cur.execute("""
-            UPDATE schedules SET current_lat=%s, current_lng=%s, last_gps_update=NOW() 
-            WHERE id=%s
-        """, (lat, lng, sid))
-
-        # GPS लॉग सेव करें
-        cur.execute("""
-            INSERT INTO gps_logs (schedule_id, latitude, longitude, speed, accuracy)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (sid, lat, lng, speed, accuracy))
-
-        conn.commit()
-        cur.close()
+        return jsonify({
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "My Bus AI - Kaya Render Optimized",
+            "database": "connected"
+        })
     except Exception as e:
-        print(f"❌ GPS Update Error: {e}")
-        if conn:
-            try:
-                conn.rollback()
-            except:
-                pass
-    finally:
-        if conn:
-            try:
-                pool.putconn(conn)
-            except:
-                pass
-
-    socketio.emit("bus_location", {
-        "sid": sid,
-        "lat": lat,
-        "lng": lng,
-        "speed": speed,
-        "timestamp": datetime.now().isoformat()
-    })
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 
-# ================= HTML Templates =================
-BASE_HTML = """
+# ================= KAYA-FRIENDLY HTML TEMPLATES =================
+KAYA_BASE_HTML = """
 <!DOCTYPE html>
 <html lang="hi">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>माई बस एआई - अपनी यात्रा बुक करें</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet"/>
-<style>
-*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
-body{background:#f5f7fb;color:#222;}
-.navbar{
-  position:fixed;top:0;left:0;width:100%;
-  background:white;
-  display:flex;justify-content:space-between;align-items:center;
-  padding:15px 8%;box-shadow:0 5px 20px rgba(0,0,0,.1);z-index:1000;
-}
-.logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
-.navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
-.hero{
-  height:100vh;
-  background:linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
-  url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
-  background-size:cover; background-position:center;
-  display:flex; align-items:center; justify-content:center;
-  text-align:center; color:white; padding-top:70px;
-}
-.search-box{
-  background:white; padding:20px; border-radius:15px; display:flex; gap:10px;
-}
-.search-box input{
-  padding:12px; border:none; border-radius:8px; outline:none;
-}
-.search-box button{
-  padding:12px 30px; border:none; border-radius:10px; background:#ff512f; color:white; font-weight:600; cursor:pointer;
-}
-.card{
-  background:white; border-radius:15px; box-shadow:0 10px 25px rgba(0,0,0,.1); padding:20px; margin-bottom:20px;
-}
-@media(max-width:768px){
-  .navbar{flex-direction:column; gap:10px; padding:10px 20px;}
-  .search-box{flex-direction:column; width:100%;}
-  .search-box input, .search-box button{width:100%;}
-  .hero h1{font-size:1.6rem;}
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Bus AI - Kaya Render</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+    body { 
+        background: #f8f9fa; 
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        padding-top: 70px;
+    }
+    .navbar {
+        background: linear-gradient(90deg, #2c3e50 0%, #4a6491 100%);
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    .hero {
+        background: linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.8)),
+                    url('https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1200');
+        background-size: cover;
+        background-position: center;
+        color: white;
+        padding: 100px 20px;
+        text-align: center;
+        border-radius: 0 0 20px 20px;
+        margin-top: -20px;
+    }
+    .card {
+        border: none;
+        border-radius: 15px;
+        box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        transition: transform 0.3s, box-shadow 0.3s;
+        margin-bottom: 20px;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+    .btn-primary {
+        background: linear-gradient(45deg, #4a6491, #2c3e50);
+        border: none;
+        padding: 10px 25px;
+        border-radius: 8px;
+    }
+    .seat-btn {
+        width: 45px;
+        height: 45px;
+        margin: 3px;
+        border-radius: 8px;
+    }
+    @media (max-width: 768px) {
+        .hero {
+            padding: 60px 20px;
+        }
+        .hero h1 {
+            font-size: 1.8rem;
+        }
+    }
+    </style>
 </head>
 <body>
-<div class="navbar">
-  <div class="logo">🚌 माई बस एआई</div>
-  <div>
-    <a href="/login">व्यवस्थापक लॉगिन</a>
-    <a href="/counter">काउंटर</a>
-  </div>
-</div>
+    <nav class="navbar navbar-expand-lg navbar-dark fixed-top">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-bus"></i> My Bus AI
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="/"><i class="fas fa-home"></i> Home</a>
+                    <a class="nav-link" href="/search"><i class="fas fa-search"></i> Search</a>
+                    <a class="nav-link" href="/admin"><i class="fas fa-user-shield"></i> Admin</a>
+                    <a class="nav-link" href="/health"><i class="fas fa-heartbeat"></i> Status</a>
+                </div>
+            </div>
+        </div>
+    </nav>
 
-{% if not content %}
-<section class="hero">
-  <div>
-    <h1>भारत का स्मार्ट बस प्लेटफॉर्म</h1>
-    <p>बुक करें | ट्रैक करें | फेस बोर्डिंग | लाइव सीटें</p>
-    <form class="search-box" action="/search" method="POST">
-      <input name="from" placeholder="कहाँ से" required>
-      <input name="to" placeholder="कहाँ तक" required>
-      <input type="date" name="date" required>
-      <button type="submit">खोजें</button>
-    </form>
-  </div>
-</section>
-{% endif %}
+    {% if not content %}
+    <section class="hero">
+        <div class="container">
+            <h1 class="display-4 mb-4">Smart Bus Platform</h1>
+            <p class="lead mb-5">Book • Track • Manage • Optimized for Kaya Render</p>
+            <a href="/search" class="btn btn-light btn-lg px-5">
+                <i class="fas fa-search"></i> Search Buses
+            </a>
+        </div>
+    </section>
 
-{% if content %}
-<div style="padding:100px 10%;">
-    {{ content|safe }}
-</div>
-{% endif %}
+    <div class="container mt-5">
+        <div class="row">
+            <div class="col-md-4 mb-4">
+                <div class="card text-center p-4">
+                    <i class="fas fa-bus fa-3x text-primary mb-3"></i>
+                    <h4>Search Buses</h4>
+                    <p>Find buses between any two stations</p>
+                    <a href="/search" class="btn btn-outline-primary">Search Now</a>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card text-center p-4">
+                    <i class="fas fa-ticket-alt fa-3x text-success mb-3"></i>
+                    <h4>Book Tickets</h4>
+                    <p>Book seats with easy selection</p>
+                    <a href="/search" class="btn btn-outline-success">Book Now</a>
+                </div>
+            </div>
+            <div class="col-md-4 mb-4">
+                <div class="card text-center p-4">
+                    <i class="fas fa-map-marker-alt fa-3x text-info mb-3"></i>
+                    <h4>Track Buses</h4>
+                    <p>Real-time bus tracking</p>
+                    <a href="/track" class="btn btn-outline-info">Track Now</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if content %}
+    <div class="container my-5">
+        {{ content|safe }}
+    </div>
+    {% endif %}
+
+    <footer class="bg-dark text-white py-4 mt-5">
+        <div class="container text-center">
+            <p class="mb-2">© 2024 My Bus AI | Running on Kaya Render Free Tier</p>
+            <small class="text-muted">Optimized for limited resources | Health: <span id="healthStatus">Checking...</span></small>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    // Check health status
+    fetch('/health')
+        .then(response => response.json())
+        .then(data => {
+            const statusEl = document.getElementById('healthStatus');
+            if (data.status === 'healthy') {
+                statusEl.innerHTML = '<span class="text-success">🟢 Healthy</span>';
+            } else {
+                statusEl.innerHTML = '<span class="text-warning">🟡 Issues</span>';
+            }
+        })
+        .catch(() => {
+            document.getElementById('healthStatus').innerHTML = '<span class="text-danger">🔴 Offline</span>';
+        });
+    </script>
 </body>
 </html>
 """
 
-LOGIN_HTML = """
-<div class="row justify-content-center mt-5">
-  <div class="col-md-4">
-    <div class="card shadow-lg border-0 rounded-4">
-      <div class="card-body p-4">
-        <h3 class="text-center mb-4">व्यवस्थापक लॉगिन</h3>
-        <form method="POST" autocomplete="on">
-          <input type="text" style="display:none">
-          <input type="password" style="display:none">
-          <input type="text" name="username" class="form-control mb-3" placeholder="यूज़रनेम" required>
-          <input type="password" name="password" class="form-control mb-3" placeholder="पासवर्ड" required>
-          <button class="btn btn-success w-100">लॉगिन</button>
-        </form>
-        {% if error %}
-          <div class="text-danger text-center mt-3">{{ error }}</div>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-</div>
-"""
 
-
-# ================== Main Routes ==================
-@app.route("/")
+# ================= SIMPLIFIED ROUTES FOR KAYA =================
+@app.route('/')
 @safe_db
-def home():
-    if "role" not in session:
-        session.clear()
-        session["role"] = "guest"
-
-    with get_db() as (conn, cur):
-        cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
-        routes = cur.fetchall()
-        cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
-        stations = [r["station_name"] for r in cur.fetchall()]
-
-    return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
+def home_kaya():
+    """Homepage optimized for Kaya"""
+    return render_template_string(KAYA_BASE_HTML, content=None)
 
 
-@app.route("/dashboard")
-def dashboard():
-    if not session.get("user_logged_in"):
-        return redirect("/login")
-    role = session.get("role", "user")
-    admin_links = ""
-    if role.lower() == "admin":
-        admin_links = """
-        <div class="mt-3">
-            <a href="/routes" class="btn btn-info me-2">🛣️ मार्ग प्रबंधन</a>
-            <a href="/schedules" class="btn btn-warning me-2">🚌 कार्यक्रम प्रबंधन</a>
-            <a href="/bookings" class="btn btn-success">🎫 बुकिंग देखें</a>
-            <a href="/create-counter" class="btn btn-success">🎫 काउंटर बनाएं</a>
-        </div>
-        """
-    return render_template_string(
-        BASE_HTML,
-        content=f"""
-        <div class="text-center mt-5">
-            <h2>स्वागत है 🎉</h2>
-            <h4>भूमिका: <b>{role.upper()}</b></h4>
-            <div class="mt-4">
-                <a href="/" class="btn btn-primary">🏠 होम</a>
-                <a href="/logout" class="btn btn-danger ms-2">🚪 लॉगआउट</a>
-            </div>
-            {admin_links}
-        </div>
-        """
-    )
+@app.route('/search')
+def search_page():
+    """Search page"""
+    # Get all stations for dropdown
+    stations = []
+    try:
+        with db_cursor() as cur:
+            cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+            stations = [row['station_name'] for row in cur.fetchall()]
+    except:
+        stations = ['Bikaner', 'Jaipur', 'Jodhpur', 'Delhi', 'Udaipur']
 
+    stations_options = ''.join([f'<option value="{s}">{s}</option>' for s in stations])
 
-@app.route("/buses/<int:rid>")
-@safe_db
-def buses(rid):
-    with get_db() as (conn, cur):
-        cur.execute("""
-            SELECT r.route_name, r.distance_km, 
-                   string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
-            FROM routes r 
-            LEFT JOIN route_stations rs ON r.id = rs.route_id 
-            WHERE r.id = %s 
-            GROUP BY r.id, r.route_name, r.distance_km
-        """, (rid,))
-        route = cur.fetchone()
-        if not route:
-            return "मार्ग नहीं मिला", 404
-
-        cur.execute("""
-            SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
-                   s.current_lat, s.current_lng,
-                   COALESCE(bk.count, 0) as booked_count
-            FROM schedules s 
-            LEFT JOIN (
-                SELECT schedule_id, COUNT(*) as count 
-                FROM seat_bookings 
-                WHERE travel_date = CURRENT_DATE AND status='confirmed'
-                GROUP BY schedule_id
-            ) bk ON s.id = bk.schedule_id
-            WHERE s.route_id = %s 
-            ORDER BY s.departure_time
-        """, (rid,))
-        buses_data = cur.fetchall()
-
-    html = """
-    <!DOCTYPE html>
-    <html lang="hi">
-    <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>🚌 {{ route.route_name }} - प्रीमियम बुकिंग</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet"/>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet"/>
-    <style>
-    body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
-    header { text-align:center; padding:60px 20px 40px; }
-    header h1 { font-size:42px; font-weight:700; margin-bottom:10px; text-shadow:2px 2px 10px rgba(0,0,0,0.3);}
-    header p { font-size:18px; opacity:0.9; }
-    .circle { position:absolute; border-radius:50%; opacity:0.6; animation: float 15s infinite alternate; }
-    .circle1 {width:250px;height:250px;background:#ff6a00;top:-50px;left:-50px;}
-    .circle2 {width:350px;height:350px;background:#ffd500;bottom:-100px;right:-80px;}
-    .circle3 {width:150px;height:150px;background:#00ffb0;top:200px;right:50px;}
-    @keyframes float{0%{transform:translateY(0) translateX(0);}50%{transform:translateY(-40px) translateX(20px);}100%{transform:translateY(0) translateX(0);}}
-    .bus-card {background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; box-shadow:10px 10px 20px rgba(0,0,0,0.2), -10px -10px 20px rgba(255,255,255,0.1); backdrop-filter: blur(10px); transition: transform 0.3s, box-shadow 0.3s;}
-    .bus-card:hover {transform:translateY(-10px); box-shadow:0 20px 40px rgba(0,0,0,0.3);}
-    .bus-card h5 {font-weight:700; font-size:22px;}
-    .bus-card .badge {font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}
-    .bus-card p {margin:5px 0; font-size:15px;}
-    .bus-card .btn {border-radius:50px; font-weight:600; padding:10px 25px; transition: all 0.3s;}
-    .bus-card .btn:hover {transform: scale(1.05);}
-    .bus-info i {margin-right:8px; color:#ffd700;}
-    footer {text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff; backdrop-filter: blur(5px);}
-    @media(max-width:768px){header h1{font-size:28px;} .bus-card h5{font-size:18px;}}
-    </style>
-    </head>
-    <body>
-    <div class="circle circle1"></div>
-    <div class="circle circle2"></div>
-    <div class="circle circle3"></div>
-    <header>
-        <h1>🚌 {{ route.route_name }} - प्रीमियम बुकिंग</h1>
-        <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} किमी</p>
-    </header>
-    <div class="container mt-5">
-        <div class="row justify-content-center">
-            <div class="col-md-6">
-                {% if buses %}
-                    {% for bus in buses %}
-                    <div class="bus-card">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h5>{{ bus.bus_name }} <i class="fas fa-bus"></i></h5>
-                            <span class="badge {{ 'bg-success' if bus.current_lat else 'bg-secondary' }}">
-                                {{ '🟢 LIVE' if bus.current_lat else '⚪ ऑफलाइन' }}
-                            </span>
+    content = f"""
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card p-4">
+                <h3 class="mb-4"><i class="fas fa-search"></i> Search Buses</h3>
+                <form action="/search-results" method="POST">
+                    <div class="row g-3">
+                        <div class="col-md-5">
+                            <label class="form-label">From Station</label>
+                            <select name="from" class="form-select" required>
+                                <option value="">Select Station</option>
+                                {stations_options}
+                            </select>
                         </div>
-                        <div class="bus-info mt-2">
-                            <p><i class="fas fa-clock"></i> प्रस्थान: {{ bus.departure_time.strftime('%H:%M') }}</p>
-                            <p><i class="fas fa-chair"></i> बची सीटें: {{ bus.total_seats - bus.booked_count }} | कुल सीटें: {{ bus.total_seats }}</p>
+                        <div class="col-md-5">
+                            <label class="form-label">To Station</label>
+                            <select name="to" class="form-select" required>
+                                <option value="">Select Station</option>
+                                {stations_options}
+                            </select>
                         </div>
-                        <div class="d-flex flex-wrap gap-2 mt-2">
-                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ लाइव जीपीएस</a>
-                            <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 सीट बुक करें</a>
+                        <div class="col-md-2">
+                            <label class="form-label">Date</label>
+                            <input type="date" name="date" class="form-control" 
+                                   value="{date.today().isoformat()}" required>
                         </div>
                     </div>
-                    {% endfor %}
-                {% else %}
-                    <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
-                {% endif %}
+                    <button type="submit" class="btn btn-primary mt-4 w-100 py-2">
+                        <i class="fas fa-bus"></i> Search Buses
+                    </button>
+                </form>
+            </div>
+
+            <div class="card p-4 mt-4">
+                <h5><i class="fas fa-info-circle"></i> How to Search</h5>
+                <ul class="mb-0">
+                    <li>Select departure and arrival stations</li>
+                    <li>Choose travel date</li>
+                    <li>Click Search to see available buses</li>
+                    <li>Select bus and book your seat</li>
+                </ul>
             </div>
         </div>
     </div>
-    <footer>
-        &copy; 2026 माईबस. सर्वाधिकार सुरक्षित.
-    </footer>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    </body>
-    </html>
     """
+    return render_template_string(KAYA_BASE_HTML, content=content)
 
-    return render_template_string(html, route=route, buses=buses_data)
 
-
-@app.route("/create-counter", methods=["GET", "POST"])
-@admin_required
+@app.route('/search-results', methods=['POST'])
 @safe_db
-def create_counter():
-    error = ""
-    success = ""
+def search_results():
+    """Search results page"""
+    from_station = request.form.get('from')
+    to_station = request.form.get('to')
+    travel_date = request.form.get('date')
 
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        if not username or not password:
-            error = "सभी फील्ड भरें"
-        else:
-            with get_db() as (conn, cur):
-                cur.execute("""
-                    INSERT INTO admins (username, password, role)
-                    VALUES (%s, %s, 'counter')
-                    ON CONFLICT (username) DO NOTHING
-                """, (username, password))
-                conn.commit()
-                success = f"काउंटर '{username}' सफलतापूर्वक बनाया गया ✅"
-
-    form_html = f"""
-    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
-        <div class="card-body">
-            <h4 class="card-title text-center mb-4">➕ नया काउंटर बनाएं</h4>
-            <form method="POST">
-                <div class="mb-3">
-                    <label class="form-label">यूज़रनेम</label>
-                    <input type="text" name="username" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">पासवर्ड</label>
-                    <input type="password" name="password" class="form-control" required>
-                </div>
-                <button class="btn btn-success w-100">काउंटर बनाएं</button>
-            </form>
-            {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
-            {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
-        </div>
-    </div>
-    """
-
-    return render_template_string(BASE_HTML, content=form_html)
-
-
-@app.route("/login", methods=["GET", "POST"])
-@safe_db
-def login():
-    error = ""
-
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        with get_db() as (conn, cur):
-            cur.execute("""
-                SELECT id, role FROM admins
-                WHERE username=%s AND password=%s
-            """, (username, password))
-            user = cur.fetchone()
-
-            if user:
-                session.clear()
-                session["user_logged_in"] = True
-                session["user_id"] = user["id"]
-                session["role"] = user["role"]
-                return redirect("/dashboard")
-            else:
-                error = "गलत यूज़रनेम या पासवर्ड"
-
-    return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
-
-
-@app.route("/counter", methods=["GET", "POST"])
-@safe_db
-def counter():
-    error = ""
-    if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-
-        with get_db() as (conn, cur):
-            cur.execute("""
-                SELECT id, role FROM admins
-                WHERE username=%s AND password=%s
-            """, (username, password))
-            user = cur.fetchone()
-
-            if user:
-                session.clear()
-                session["user_logged_in"] = True
-                session["user_id"] = user["id"]
-                session["role"] = user["role"]
-                return redirect("/dashboard")
-            else:
-                error = "गलत यूज़रनेम या पासवर्ड"
-
-    return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
-
-
-@app.route("/select/<int:sid>")
-def select(sid):
-    fs = session.get("from")
-    ts = session.get("to")
-    d = session.get("date")
-    if not fs or not ts or not d:
-        return redirect("/")
-    return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
-
-
-@app.route("/seats/<int:sid>")
-@safe_db
-def seat_page(sid):
-    with get_db() as (conn, cur):
+    with db_cursor() as cur:
+        # Find routes connecting these stations
         cur.execute("""
-            SELECT s.id, s.bus_name, s.departure_time, r.route_name,
-                   r.id as route_id, s.current_lat, s.current_lng
+            SELECT DISTINCT r.id, r.route_name, r.distance_km
+            FROM routes r
+            JOIN route_stations rs1 ON rs1.route_id = r.id
+            JOIN route_stations rs2 ON rs2.route_id = r.id
+            WHERE rs1.station_name = %s 
+              AND rs2.station_name = %s
+              AND rs1.station_order < rs2.station_order
+            LIMIT 1
+        """, (from_station, to_station))
+
+        route = cur.fetchone()
+
+        if route:
+            # Get buses for this route
+            cur.execute("""
+                SELECT s.*, 
+                       (SELECT COUNT(*) FROM seat_bookings 
+                        WHERE schedule_id = s.id 
+                        AND travel_date = %s 
+                        AND status = 'confirmed') as booked_seats
+                FROM schedules s
+                WHERE s.route_id = %s 
+                  AND s.is_active = true
+                ORDER BY s.departure_time
+            """, (travel_date, route['id']))
+
+            buses = cur.fetchall()
+
+            buses_html = ""
+            for bus in buses:
+                available_seats = bus['total_seats'] - bus['booked_seats']
+                status_class = "success" if available_seats > 10 else "warning" if available_seats > 0 else "danger"
+                status_text = f"{available_seats} seats" if available_seats > 0 else "Sold out"
+
+                buses_html += f"""
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <div>
+                                <h5 class="mb-0">{bus['bus_name']}</h5>
+                                <p class="text-muted mb-0">
+                                    <i class="fas fa-clock"></i> {bus['departure_time']}
+                                </p>
+                            </div>
+                            <span class="badge bg-{status_class}">{status_text}</span>
+                        </div>
+
+                        <div class="row mt-3">
+                            <div class="col-6">
+                                <p class="mb-1"><i class="fas fa-chair"></i> Total Seats: {bus['total_seats']}</p>
+                                <p class="mb-1"><i class="fas fa-road"></i> Route: {route['distance_km']} km</p>
+                            </div>
+                            <div class="col-6 text-end">
+                                {f'<a href="/book/{bus["id"]}?date={travel_date}" class="btn btn-primary">Book Now</a>' if available_seats > 0 else '<button class="btn btn-secondary" disabled>Sold Out</button>'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """
+
+            content = f"""
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h3 class="mb-1">{route['route_name']}</h3>
+                        <p class="text-muted mb-0">
+                            {from_station} → {to_station} | {route['distance_km']} km
+                        </p>
+                        <p class="mb-0">Travel Date: {travel_date}</p>
+                    </div>
+                    <a href="/search" class="btn btn-outline-primary">
+                        <i class="fas fa-arrow-left"></i> New Search
+                    </a>
+                </div>
+
+                <h5 class="mb-3">Available Buses</h5>
+                {buses_html if buses else '''
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle"></i> No buses available for this route on selected date.
+                </div>
+                '''}
+            </div>
+            """
+        else:
+            content = f"""
+            <div class="card p-4 text-center">
+                <div class="mb-4">
+                    <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+                    <h3>No Direct Route Found</h3>
+                    <p class="text-muted">We couldn't find any direct buses from {from_station} to {to_station}.</p>
+                </div>
+                <div class="d-flex justify-content-center gap-3">
+                    <a href="/search" class="btn btn-primary">
+                        <i class="fas fa-search"></i> Try Another Search
+                    </a>
+                    <a href="/" class="btn btn-outline-secondary">
+                        <i class="fas fa-home"></i> Go Home
+                    </a>
+                </div>
+            </div>
+            """
+
+    return render_template_string(KAYA_BASE_HTML, content=content)
+
+
+@app.route('/book/<int:bus_id>')
+@safe_db
+def book_seat_page(bus_id):
+    """Seat booking page"""
+    travel_date = request.args.get('date', date.today().isoformat())
+
+    with db_cursor() as cur:
+        # Get bus details
+        cur.execute("""
+            SELECT s.*, r.route_name
             FROM schedules s
             JOIN routes r ON s.route_id = r.id
             WHERE s.id = %s
-        """, (sid,))
-        schedule = cur.fetchone()
-        if not schedule:
-            return "कार्यक्रम नहीं मिला", 404
+        """, (bus_id,))
 
-        cur.execute("""
-            SELECT station_name, station_order
-            FROM route_stations
-            WHERE route_id=%s
-            ORDER BY station_order
-        """, (schedule['route_id'],))
-        stations = cur.fetchall()
-
-        today = session.get("date", date.today().isoformat())
-        cur.execute("""
-            SELECT seat_number
-            FROM seat_bookings
-            WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-        """, (sid, today))
-        booked = cur.fetchall()
-        booked_seats = set(r['seat_number'] for r in booked)
-
-    seat_buttons = ""
-    for i in range(1, 41):
-        if i in booked_seats:
-            seat_buttons += f'<button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>'
-        else:
-            seat_buttons += f'<button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>'
-
-    user_role = session.get("role", "guest")
-    bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
-    bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
-    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
-
-    map_div = """
-    <div id="map" style="width:100%; max-width:900px; height:300px; border-radius:12px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.2);"></div>
-    """
-
-    role_color = {
-        "admin": "red",
-        "counter": "green",
-        "conductor": "blue",
-        "user": "orange"
-    }.get(user_role, "gray")
-
-    html_content = f"""
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
-<div class="container" style="max-width:900px;margin:auto;">
-<h2>बस: {schedule['bus_name']} | मार्ग: {schedule['route_name']}</h2>
-<h4>प्रस्थान: {schedule['departure_time'].strftime('%H:%M')}</h4>
-<h5>भूमिका:
-<span style="color:{role_color};font-weight:bold;">{user_role.upper()}</span></h5>
-{map_div}
-<h5 style="margin-top:30px;">सीट चुनें</h5>
-<div style="display:flex;flex-wrap:wrap;gap:10px;">
-{seat_buttons}
-</div>
-</div>
-
-<script>
-const socket = io(window.location.origin);
-const SID = {sid};
-const TODAY = "{today}";
-const BUS_LAT = {bus_lat};
-const BUS_LNG = {bus_lon};
-const COUNTER_ID = {counter_js};
-
-const map = L.map('map').setView([BUS_LAT, BUS_LNG], 10);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 19
-}}).addTo(map);
-let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
-let routeLine = null;
-
-socket.on('bus_location', data => {{
-    if(data.sid == SID){{
-        const lat = parseFloat(data.lat);
-        const lng = parseFloat(data.lng);
-        busMarker.setLatLng([lat,lng]);
-        map.panTo([lat,lng], {{animate:true}});
-    }}
-}});
-
-function bookSeat(seatId){{
-    let name = prompt("यात्री का नाम:");
-    if(!name) return;
-    let mobile = prompt("मोबाइल नंबर:");
-    if(!mobile) return;
-    let btn = document.getElementById("seat-" + seatId);
-    let oldText = btn.innerText;
-    btn.innerText = "⏳ बुक हो रहा है...";
-    btn.disabled = true;
-    let fare = null;
-    let payment_mode = "cash";
-
-    if(COUNTER_ID !== null){{
-        fare = prompt("किराया राशि:");
-        if(!fare || isNaN(fare)){{
-            alert("अमान्य किराया");
-            btn.innerText = oldText;
-            btn.disabled = false;
-            return;
-        }}
-        payment_mode = prompt("भुगतान मोड: cash / online", "cash");
-        if(payment_mode !== "cash" && payment_mode !== "online"){{
-            alert("केवल cash या online स्वीकार्य है");
-            btn.innerText = oldText;
-            btn.disabled = false;
-            return;
-        }}
-    }}
-
-    fetch("/book", {{
-        method: "POST",
-        headers: {{ "Content-Type":"application/json" }},
-        body: JSON.stringify({{
-            schedule_id: SID,
-            seat_number: seatId,
-            passenger_name: name,
-            mobile: mobile,
-            date: TODAY,
-            fare: fare,
-            payment_mode: payment_mode,
-            counter_id: COUNTER_ID
-        }})
-    }})
-    .then(r => r.json())
-    .then(res => {{
-        if(res.ok){{
-            alert("सीट बुक हो गई! किराया: ₹" + res.fare);
-            btn.className = "btn btn-danger seat";
-            btn.innerText = "X" + seatId;
-            btn.disabled = true;
-        }} else {{
-            alert(res.error || res.msg);
-            btn.innerText = oldText;
-            btn.disabled = false;
-        }}
-    }})
-    .catch(err => {{
-        console.error(err);
-        btn.innerText = oldText;
-        btn.disabled = false;
-    }});
-}}
-</script>
-"""
-
-    return render_template_string(BASE_HTML, content=html_content)
-
-
-@app.route("/heartbeat")
-def heartbeat():
-    return "ok"
-
-
-@app.route("/book", methods=["POST"])
-@safe_db
-def book():
-    data = request.get_json()
-
-    with get_db() as (conn, cur):
-        cur.execute("""
-            SELECT id FROM seat_bookings
-            WHERE schedule_id=%s AND seat_number=%s AND travel_date=%s AND status='confirmed'
-        """, (data['schedule_id'], data['seat_number'], data['date']))
-        if cur.fetchone():
-            return jsonify({"ok": False, "error": "सीट पहले से बुक है"}), 409
-
-        user_role = session.get("role", "user")
-        if user_role == "counter":
-            fare = int(data.get("fare", 0))
-            payment_mode = data.get("payment_mode", "cash")
-        else:
-            fare = random.randint(250, 450)
-            payment_mode = "cash"
-
-        cur.execute("""
-        INSERT INTO seat_bookings (
-            schedule_id, seat_number, passenger_name, mobile,
-            from_station, to_station, travel_date,
-            fare, status, payment_mode,
-            booked_by_type, booked_by_id, counter_id
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (
-            int(data['schedule_id']),
-            int(data['seat_number']),
-            data['passenger_name'],
-            data['mobile'],
-            session.get("from"),
-            session.get("to"),
-            data['date'],
-            int(fare),
-            'confirmed',
-            payment_mode,
-            user_role,
-            int(session.get("user_id", 0)),
-            int(data.get("counter_id") or 0)
-        ))
-        conn.commit()
-
-    socketio.emit("seat_update", {
-        "sid": data['schedule_id'],
-        "seat": data['seat_number'],
-        "date": data['date']
-    })
-
-    return jsonify({"ok": True, "fare": fare})
-
-
-# ================= BACKGROUND GPS SOLUTION =================
-
-@app.route("/driver/<int:sid>")
-def driver(sid):
-    """ड्राइवर GPS पेज - बैकग्राउंड में काम करने के लिए Service Worker के साथ"""
-    return f"""
-<!DOCTYPE html>
-<html lang="hi">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<meta name="theme-color" content="#28a745"/>
-<title>बस {sid} - ड्राइवर GPS</title>
-<link rel="manifest" href="/manifest.json?id={sid}">
-<style>
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ 
-    font-family: 'Segoe UI', sans-serif; 
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    min-height: 100vh; 
-    color: white;
-    overflow-x: hidden;
-}}
-.container {{
-    max-width: 100%;
-    padding: 20px;
-    text-align: center;
-}}
-.status-card {{
-    background: rgba(255,255,255,0.95);
-    color: #333;
-    border-radius: 20px;
-    padding: 25px;
-    margin: 20px 0;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-}}
-.gps-indicator {{
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    margin: 20px auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 30px;
-    transition: all 0.3s;
-}}
-.gps-active {{
-    background: #28a745;
-    animation: pulse 2s infinite;
-    box-shadow: 0 0 30px #28a745;
-}}
-.gps-inactive {{
-    background: #dc3545;
-}}
-@keyframes pulse {{
-    0%, 100% {{ transform: scale(1); }}
-    50% {{ transform: scale(1.1); }}
-}}
-.btn {{
-    width: 100%;
-    padding: 18px;
-    margin: 10px 0;
-    border: none;
-    border-radius: 15px;
-    font-size: 18px;
-    font-weight: bold;
-    cursor: pointer;
-    transition: all 0.3s;
-    text-transform: uppercase;
-}}
-.btn-start {{
-    background: linear-gradient(45deg, #28a745, #20c997);
-    color: white;
-    box-shadow: 0 5px 20px rgba(40, 167, 69, 0.4);
-}}
-.btn-stop {{
-    background: linear-gradient(45deg, #dc3545, #f093fb);
-    color: white;
-    box-shadow: 0 5px 20px rgba(220, 53, 69, 0.4);
-}}
-.btn:disabled {{
-    opacity: 0.6;
-    cursor: not-allowed;
-}}
-.stats-grid {{
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 15px;
-    margin: 20px 0;
-}}
-.stat-box {{
-    background: rgba(255,255,255,0.1);
-    padding: 15px;
-    border-radius: 12px;
-    backdrop-filter: blur(10px);
-}}
-.stat-value {{
-    font-size: 24px;
-    font-weight: bold;
-    color: #ffd700;
-}}
-.stat-label {{
-    font-size: 12px;
-    opacity: 0.9;
-    margin-top: 5px;
-}}
-#log {{
-    background: rgba(0,0,0,0.3);
-    padding: 15px;
-    border-radius: 10px;
-    font-family: monospace;
-    font-size: 12px;
-    max-height: 150px;
-    overflow-y: auto;
-    text-align: left;
-    margin-top: 15px;
-}}
-.wakelock-indicator {{
-    position: fixed;
-    top: 10px;
-    right: 10px;
-    background: rgba(0,0,0,0.7);
-    padding: 8px 12px;
-    border-radius: 20px;
-    font-size: 12px;
-    display: none;
-}}
-.wakelock-active {{
-    display: block !important;
-    background: #28a745 !important;
-}}
-</style>
-</head>
-<body>
-<div class="wakelock-indicator" id="wakelockIndicator">
-    🔒 स्क्रीन लॉक रोका गया
-</div>
-
-<div class="container">
-    <h1>🚌 बस {sid}</h1>
-    <p style="opacity: 0.9;">ड्राइवर GPS ट्रैकिंग</p>
-
-    <div class="status-card">
-        <div class="gps-indicator gps-inactive" id="gpsIndicator">📍</div>
-        <h2 id="statusText">GPS बंद है</h2>
-        <p id="subStatus" style="color: #666; margin-top: 10px;">स्टार्ट बटन दबाएं</p>
-
-        <div class="stats-grid">
-            <div class="stat-box">
-                <div class="stat-value" id="lat">--</div>
-                <div class="stat-label">अक्षांश (Latitude)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value" id="lng">--</div>
-                <div class="stat-label">देशांतर (Longitude)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value" id="speed">0</div>
-                <div class="stat-label">गति (km/h)</div>
-            </div>
-            <div class="stat-box">
-                <div class="stat-value" id="accuracy">--</div>
-                <div class="stat-label">सटीकता (m)</div>
-            </div>
-        </div>
-
-        <div style="margin-top: 20px;">
-            <div id="queueStatus" style="color: #666; font-size: 14px; margin-bottom: 10px;">
-                ऑनलाइन मोड
-            </div>
-        </div>
-    </div>
-
-    <button id="startBtn" class="btn btn-start" onclick="startTracking()">
-        🚀 GPS ट्रैकिंग शुरू करें
-    </button>
-
-    <button id="stopBtn" class="btn btn-stop" onclick="stopTracking()" disabled>
-        🛑 ट्रैकिंग बंद करें
-    </button>
-
-    <div id="log"></div>
-</div>
-
-<script>
-const BUS_ID = {sid};
-const API_BASE = window.location.origin;
-
-// ग्लोबल वेरिएबल्स
-let watchId = null;
-let isTracking = false;
-let wakeLock = null;
-let gpsQueue = [];
-let lastSentTime = 0;
-const SEND_INTERVAL = 5000; // हर 5 सेकंड में भेजें
-const BACKUP_INTERVAL = 10000; // बैकअप हर 10 सेकंड
-
-// Service Worker रजिस्टर करें
-if ('serviceWorker' in navigator) {{
-    navigator.serviceWorker.register('/sw.js')
-        .then(reg => console.log('SW registered:', reg))
-        .catch(err => console.log('SW registration failed:', err));
-}}
-
-// Wake Lock API - स्क्रीन को चालू रखें
-async function requestWakeLock() {{
-    try {{
-        if ('wakeLock' in navigator) {{
-            wakeLock = await navigator.wakeLock.request('screen');
-            document.getElementById('wakelockIndicator').classList.add('wakelock-active');
-            log('स्क्रीन लॉक सक्रिय');
-
-            wakeLock.addEventListener('release', () => {{
-                log('स्क्रीन लॉक रिलीज़ हो गया');
-                document.getElementById('wakelockIndicator').classList.remove('wakelock-active');
-            }});
-        }}
-    }} catch (err) {{
-        log('Wake Lock त्रुटि: ' + err.message);
-    }}
-}}
-
-function releaseWakeLock() {{
-    if (wakeLock) {{
-        wakeLock.release();
-        wakeLock = null;
-    }}
-}}
-
-// Visibility API - बैकग्राउंड में भी काम करें
-document.addEventListener('visibilitychange', () => {{
-    if (document.hidden && isTracking) {{
-        log('बैकग्राउंड मोड सक्रिय');
-        // बैकग्राउंड में भी GPS जारी रखें
-        if (watchId === null) {{
-            restartGPS();
-        }}
-    }} else {{
-        log('फोरग्राउंड मोड');
-    }}
-}});
-
-function restartGPS() {{
-    if (watchId !== null) {{
-        navigator.geolocation.clearWatch(watchId);
-    }}
-    watchId = navigator.geolocation.watchPosition(
-        handlePosition,
-        handleError,
-        {{
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-            distanceFilter: 10
-        }}
-    );
-}}
-
-function log(msg) {{
-    const logDiv = document.getElementById('log');
-    const time = new Date().toLocaleTimeString('hi-IN');
-    logDiv.innerHTML = `[${{time}}] ${{msg}}<br>` + logDiv.innerHTML;
-    console.log(msg);
-}}
-
-function updateUI(lat, lng, speed, accuracy) {{
-    document.getElementById('lat').textContent = lat.toFixed(5);
-    document.getElementById('lng').textContent = lng.toFixed(5);
-    document.getElementById('speed').textContent = speed ? speed.toFixed(1) : '0';
-    document.getElementById('accuracy').textContent = accuracy ? accuracy.toFixed(0) : '--';
-}}
-
-function setStatus(active, text, subtext) {{
-    const indicator = document.getElementById('gpsIndicator');
-    const statusText = document.getElementById('statusText');
-    const subStatus = document.getElementById('subStatus');
-
-    if (active) {{
-        indicator.className = 'gps-indicator gps-active';
-        statusText.textContent = text || 'LIVE ट्रैकिंग';
-        statusText.style.color = '#28a745';
-    }} else {{
-        indicator.className = 'gps-indicator gps-inactive';
-        statusText.textContent = text || 'GPS बंद है';
-        statusText.style.color = '#dc3545';
-    }}
-    if (subtext) subStatus.textContent = subtext;
-}}
-
-// GPS पोजीशन हैंडलर
-function handlePosition(position) {{
-    const lat = position.coords.latitude;
-    const lng = position.coords.longitude;
-    const speed = position.coords.speed ? position.coords.speed * 3.6 : 0; // m/s to km/h
-    const accuracy = position.coords.accuracy;
-    const timestamp = new Date().toISOString();
-
-    updateUI(lat, lng, speed, accuracy);
-
-    const data = {{
-        sid: BUS_ID,
-        lat: lat,
-        lng: lng,
-        speed: speed,
-        accuracy: accuracy,
-        timestamp: timestamp
-    }};
-
-    // क्यू में डालें
-    gpsQueue.push(data);
-
-    // तुरंत भेजने की कोशिश
-    sendGPSData();
-}}
-
-function handleError(error) {{
-    let msg = '';
-    switch(error.code) {{
-        case error.PERMISSION_DENIED:
-            msg = "GPS अनुमति अस्वीकृत";
-            break;
-        case error.POSITION_UNAVAILABLE:
-            msg = "लोकेशन उपलब्ध नहीं";
-            break;
-        case error.TIMEOUT:
-            msg = "GPS टाइमआउट";
-            break;
-        default:
-            msg = "GPS त्रुटि: " + error.message;
-    }}
-    log(msg);
-    setStatus(false, 'त्रुटि', msg);
-}}
-
-// GPS डेटा भेजें (ऑनलाइन/ऑफलाइन दोनों मोड में)
-async function sendGPSData() {{
-    if (gpsQueue.length === 0) return;
-
-    const now = Date.now();
-    if (now - lastSentTime < SEND_INTERVAL && navigator.onLine) return;
-
-    const dataToSend = [...gpsQueue];
-    gpsQueue = [];
-
-    // Service Worker को मैसेज भेजें (बैकग्राउंड के लिए)
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {{
-        navigator.serviceWorker.controller.postMessage({{
-            type: 'GPS_DATA',
-            data: dataToSend,
-            apiBase: API_BASE
-        }});
-    }}
-
-    // मुख्य थ्रेड में भी भेजें (तुरंत अपडेट के लिए)
-    if (navigator.onLine) {{
-        try {{
-            const response = await fetch(API_BASE + '/api/gps-batch', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({{locations: dataToSend}})
-            }});
-
-            if (response.ok) {{
-                lastSentTime = now;
-                document.getElementById('queueStatus').textContent = 
-                    `✅ ${{dataToSend.length}} लोकेशन सिंक हुए`;
-                log('डेटा सिंक सफल');
-            }} else {{
-                throw new Error('Server error');
-            }}
-        }} catch (err) {{
-            // फेल होने पर वापस क्यू में डालें
-            gpsQueue.unshift(...dataToSend);
-            document.getElementById('queueStatus').textContent = 
-                `⏳ ${{gpsQueue.length}} लोकेशन क्यू में`;
-            log('सिंक फेल, क्यू में सेव किया');
-        }}
-    }} else {{
-        gpsQueue.unshift(...dataToSend);
-        document.getElementById('queueStatus').textContent = 
-            `📴 ऑफलाइन - ${{gpsQueue.length}} सेव`;
-        log('ऑफलाइन मोड - डेटा सेव किया');
-    }}
-}}
-
-// ट्रैकिंग शुरू करें
-async function startTracking() {{
-    if (!navigator.geolocation) {{
-        alert('इस डिवाइस में GPS सपोर्ट नहीं है');
-        return;
-    }}
-
-    isTracking = true;
-    document.getElementById('startBtn').disabled = true;
-    document.getElementById('stopBtn').disabled = false;
-
-    // Wake Lock लें
-    await requestWakeLock();
-
-    // GPS शुरू करें
-    restartGPS();
-
-    // बैकग्राउंड सिंक इंटरवल
-    window.syncInterval = setInterval(() => {{
-        if (gpsQueue.length > 0) {{
-            sendGPSData();
-        }}
-    }}, BACKUP_INTERVAL);
-
-    setStatus(true, 'LIVE ट्रैकिंग', 'GPS सक्रिय');
-    log('ट्रैकिंग शुरू हुई');
-
-    // ब्राउज़र नोटिफिकेशन
-    if ('Notification' in window && Notification.permission === 'granted') {{
-        new Notification('GPS ट्रैकिंग शुरू', {{
-            body: 'बस ' + BUS_ID + ' की ट्रैकिंग चालू है',
-            icon: '🚌'
-        }});
-    }}
-}}
-
-// ट्रैकिंग बंद करें
-function stopTracking() {{
-    isTracking = false;
-
-    if (watchId !== null) {{
-        navigator.geolocation.clearWatch(watchId);
-        watchId = null;
-    }}
-
-    if (window.syncInterval) {{
-        clearInterval(window.syncInterval);
-    }}
-
-    releaseWakeLock();
-
-    // बचा हुआ डेटा भेजें
-    if (gpsQueue.length > 0) {{
-        sendGPSData();
-    }}
-
-    document.getElementById('startBtn').disabled = false;
-    document.getElementById('stopBtn').disabled = true;
-
-    setStatus(false, 'GPS बंद', 'ट्रैकिंग रोक दी गई');
-    log('ट्रैकिंग बंद हुई');
-}}
-
-// पेज लोड पर नोटिफिकेशन अनुमति लें
-if ('Notification' in window && Notification.permission === 'default') {{
-    Notification.requestPermission();
-}}
-
-// पेज अनलोड से पहले बचा हुआ डेटा भेजें
-window.addEventListener('beforeunload', (e) => {{
-    if (isTracking && gpsQueue.length > 0) {{
-        sendGPSData();
-    }}
-}});
-
-// ऑनलाइन/ऑफलाइन हैंडलर
-window.addEventListener('online', () => {{
-    log('इंटरनेट वापस आ गया');
-    if (gpsQueue.length > 0) sendGPSData();
-}});
-
-window.addEventListener('offline', () => {{
-    log('इंटरनेट गया');
-}});
-
-// Service Worker से मैसेज सुनें
-navigator.serviceWorker?.addEventListener('message', (event) => {{
-    if (event.data.type === 'SYNC_COMPLETE') {{
-        log('बैकग्राउंड सिंक पूरा');
-    }}
-}});
-</script>
-</body>
-</html>
-"""
-
-
-@app.route("/manifest.json")
-def manifest():
-    """PWA Manifest - होम स्क्रीन पर ऐप की तरह इंस्टॉल करें"""
-    bus_id = request.args.get('id', '1')
-    return jsonify({
-        "name": f"बस ट्रैकर {bus_id}",
-        "short_name": f"बस {bus_id}",
-        "start_url": f"/driver/{bus_id}",
-        "display": "standalone",
-        "background_color": "#28a745",
-        "theme_color": "#28a745",
-        "orientation": "portrait",
-        "icons": [
-            {
-                "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>",
-                "sizes": "192x192",
-                "type": "image/svg+xml"
-            }
-        ]
-    })
-
-
-@app.route("/sw.js")
-def service_worker():
-    """Service Worker - बैकग्राउंड में GPS डेटा सिंक करें"""
-    return """
-self.addEventListener('install', (event) => {
-    console.log('Service Worker installing...');
-    self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-    console.log('Service Worker activating...');
-    event.waitUntil(clients.claim());
-});
-
-// GPS डेटा क्यू
-let gpsQueue = [];
-let isSyncing = false;
-
-self.addEventListener('message', (event) => {
-    if (event.data.type === 'GPS_DATA') {
-        const data = event.data.data;
-        const apiBase = event.data.apiBase;
-
-        // क्यू में जोड़ें
-        gpsQueue.push(...data);
-
-        // तुरंत सिंक करें
-        syncGPSData(apiBase);
-    }
-});
-
-// बैकग्राउंड सिंक
-async function syncGPSData(apiBase) {
-    if (isSyncing || gpsQueue.length === 0) return;
-
-    isSyncing = true;
-    const dataToSend = [...gpsQueue];
-    gpsQueue = [];
-
-    try {
-        const response = await fetch(apiBase + '/api/gps-batch', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({locations: dataToSend})
-        });
-
-        if (response.ok) {
-            // क्लाइंट को बताएं
-            const clients = await self.clients.matchAll();
-            clients.forEach(client => {
-                client.postMessage({
-                    type: 'SYNC_COMPLETE',
-                    count: dataToSend.length
-                });
-            });
-        } else {
-            throw new Error('Server error');
-        }
-    } catch (err) {
-        // फेल होने पर वापस क्यू में डालें
-        gpsQueue.unshift(...dataToSend);
-        console.log('Sync failed, queued:', gpsQueue.length);
-    } finally {
-        isSyncing = false;
-
-        // अगर और डेटा है तो फिर से कोशिश करें
-        if (gpsQueue.length > 0) {
-            setTimeout(() => syncGPSData(apiBase), 5000);
-        }
-    }
-}
-
-// Periodic Background Sync (अगर सपोर्टेड हो)
-self.addEventListener('periodicsync', (event) => {
-    if (event.tag === 'gps-sync') {
-        event.waitUntil(syncGPSData(self.location.origin));
-    }
-});
-
-// Fetch इंटरसेप्ट - ऑफलाइन सपोर्ट
-self.addEventListener('fetch', (event) => {
-    // GPS API कॉल्स को नेटवर्क-ओनली रखें
-    if (event.request.url.includes('/api/gps')) {
-        event.respondWith(fetch(event.request).catch(() => {
-            return new Response(JSON.stringify({queued: true}), {
-                headers: {'Content-Type': 'application/json'}
-            });
-        }));
-    }
-});
-""", 200, {'Content-Type': 'application/javascript'}
-
-
-@app.route("/api/gps-batch", methods=["POST"])
-@safe_db
-def gps_batch():
-    """बैच में GPS डेटा रिसीव करें - बैकग्राउंड सिंक के लिए"""
-    data = request.get_json()
-    locations = data.get('locations', [])
-
-    if not locations:
-        return jsonify({"ok": False, "error": "No data"}), 400
-
-    success_count = 0
-
-    with get_db() as (conn, cur):
-        for loc in locations:
-            try:
-                sid = loc.get('sid')
-                lat = float(loc.get('lat', 0))
-                lng = float(loc.get('lng', 0))
-                speed = float(loc.get('speed', 0))
-                accuracy = float(loc.get('accuracy', 0))
-
-                # मुख्य टेबल अपडेट
-                cur.execute("""
-                    UPDATE schedules 
-                    SET current_lat=%s, current_lng=%s, last_gps_update=NOW() 
-                    WHERE id=%s
-                """, (lat, lng, sid))
-
-                # GPS लॉग सेव करें
-                cur.execute("""
-                    INSERT INTO gps_logs (schedule_id, latitude, longitude, speed, accuracy)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (sid, lat, lng, speed, accuracy))
-
-                # SocketIO पर ब्रॉडकास्ट
-                socketio.emit("bus_location", {
-                    "sid": sid,
-                    "lat": lat,
-                    "lng": lng,
-                    "speed": speed,
-                    "timestamp": loc.get('timestamp', datetime.now().isoformat())
-                })
-
-                success_count += 1
-            except Exception as e:
-                print(f"Error processing GPS data: {e}")
-                continue
-
-        conn.commit()
-
-    return jsonify({
-        "ok": True,
-        "processed": success_count,
-        "total": len(locations)
-    })
-
-
-@app.route("/live-bus/<int:sid>")
-@safe_db
-def live_bus(sid):
-    with get_db() as (conn, cur):
-        cur.execute("""
-            SELECT s.id, s.bus_name, s.departure_time,
-                   r.id as route_id, r.route_name, r.distance_km,
-                   s.current_lat as lat, s.current_lng as lng,
-                   s.last_gps_update
-            FROM schedules s 
-            JOIN routes r ON s.route_id = r.id 
-            WHERE s.id = %s
-        """, (sid,))
         bus = cur.fetchone()
+
         if not bus:
-            return "बस नहीं मिली", 404
+            return render_template_string(KAYA_BASE_HTML, content="""
+                <div class="alert alert-danger text-center">
+                    <h4><i class="fas fa-exclamation-circle"></i> Bus Not Found</h4>
+                    <p>The requested bus does not exist or has been removed.</p>
+                    <a href="/search" class="btn btn-primary mt-2">Search Buses</a>
+                </div>
+            """)
 
-        lat = float(bus.get('lat', 27.2))
-        lng = float(bus.get('lng', 74.2))
-
-        # GPS अपडेट का समय
-        last_update = bus.get('last_gps_update')
-        is_live = False
-        if last_update:
-            from datetime import datetime
-            time_diff = (datetime.now() - last_update).total_seconds()
-            is_live = time_diff < 300  # 5 मिनट से कerma पुराना न हो
-
+        # Get booked seats
         cur.execute("""
-            SELECT lat, lng, station_name
-            FROM route_stations
-            WHERE route_id=%s
-            ORDER BY station_order
-        """, (bus['route_id'],))
-        stations = cur.fetchall()
+            SELECT seat_number 
+            FROM seat_bookings 
+            WHERE schedule_id = %s 
+              AND travel_date = %s
+              AND status = 'confirmed'
+        """, (bus_id, travel_date))
 
-    import json
-    stations_json = json.dumps(stations)
+        booked_seats = [row['seat_number'] for row in cur.fetchall()]
 
-    content = f'''
-    <style>
-    #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
-    .live-indicator{{animation:pulse 2s infinite;width:20px;height:20px;background:#28a745;border-radius:50%;display:inline-block;margin-right:10px;}}
-    .offline-indicator{{width:20px;height:20px;background:#dc3545;border-radius:50%;display:inline-block;margin-right:10px;}}
-    @keyframes pulse{{0%,100%{{transform:scale(1);opacity:1;}}50%{{transform:scale(1.2);opacity:0.7;}}}}
-    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;border-radius:15px;margin-bottom:20px;}}
-    .last-update{{font-size:12px;color:#666;}}
-    </style>
+    # Generate seat layout (4x10 grid)
+    seats_html = ""
+    for row in range(4):
+        for col in range(1, 11):
+            seat_num = row * 10 + col
+            if seat_num > bus['total_seats']:
+                break
 
-    <div class="stats-card">
-        <div class="d-flex justify-content-between align-items-center">
-            <div>
-                <h2 class="mb-1">🚌 {bus['bus_name']}</h2>
-                <p class="text-muted mb-0">{bus['route_name']} ({bus['distance_km']}किमी)</p>
+            if seat_num in booked_seats:
+                seats_html += f'''
+                <button class="btn btn-danger seat-btn" disabled>
+                    {seat_num}
+                </button>
+                '''
+            else:
+                seats_html += f'''
+                <button class="btn btn-success seat-btn" 
+                        onclick="selectSeat({seat_num})"
+                        data-seat="{seat_num}">
+                    {seat_num}
+                </button>
+                '''
+
+        if row < 3:
+            seats_html += '<div class="w-100"></div>'
+
+    content = f"""
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h3>{bus['bus_name']}</h3>
+                        <p class="text-muted mb-0">
+                            {bus['route_name']} | Departure: {bus['departure_time']}
+                        </p>
+                        <p class="mb-0">Travel Date: {travel_date}</p>
+                    </div>
+                    <div class="text-end">
+                        <div class="badge bg-info">Total Seats: {bus['total_seats']}</div>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h5>Seat Selection</h5>
+                    <div class="seat-legend mb-3">
+                        <span class="badge bg-success me-3">Available</span>
+                        <span class="badge bg-danger me-3">Booked</span>
+                        <span class="badge bg-primary me-3">Selected</span>
+                    </div>
+
+                    <div class="seat-layout text-center">
+                        {seats_html}
+                    </div>
+                </div>
             </div>
-            <div class="text-end">
-                <span class="{'live-indicator' if is_live else 'offline-indicator'}"></span>
-                <span class="fw-bold {'text-success' if is_live else 'text-danger'}">
-                    {'🟢 LIVE' if is_live else '⚪ ऑफलाइन'}
-                </span>
-                <div class="last-update mt-1">
-                    अंतिम अपडेट: {last_update.strftime('%H:%M:%S') if last_update else 'कभी नहीं'}
+        </div>
+
+        <div class="col-md-4">
+            <div class="card p-4">
+                <div id="bookingForm" style="display: none;">
+                    <h5 class="mb-3">Passenger Details</h5>
+                    <form id="passengerForm">
+                        <div class="mb-3">
+                            <label class="form-label">Full Name</label>
+                            <input type="text" id="passengerName" class="form-control" 
+                                   placeholder="Enter passenger name" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Mobile Number</label>
+                            <input type="tel" id="mobileNumber" class="form-control" 
+                                   placeholder="10-digit mobile number" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email (Optional)</label>
+                            <input type="email" id="email" class="form-control" 
+                                   placeholder="email@example.com">
+                        </div>
+
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i> 
+                            <small>Seat: <span id="selectedSeatNumber">--</span></small>
+                        </div>
+
+                        <button type="button" class="btn btn-primary w-100" 
+                                onclick="confirmBooking({bus_id}, '{travel_date}')">
+                            <i class="fas fa-check-circle"></i> Confirm Booking
+                        </button>
+                    </form>
+                </div>
+
+                <div id="noSelection" class="text-center text-muted py-5">
+                    <i class="fas fa-chair fa-3x mb-3"></i>
+                    <h5>Select a Seat</h5>
+                    <p>Click on an available seat to begin booking</p>
                 </div>
             </div>
         </div>
     </div>
 
-    <div id="map" class="rounded-4"></div>
-
-    <div class="alert alert-info mt-3" id="connectionStatus">
-        📡 कनेक्टिंग...
-    </div>
-
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-    const map = L.map('map').setView([{lat}, {lng}], 13);
-    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19
-    }}).addTo(map);
-
-    const stations = {stations_json};
-    let routePoints = [];
-    stations.forEach(st => {{
-        const lat = parseFloat(st.lat);
-        const lng = parseFloat(st.lng);
-        if(!isNaN(lat) && !isNaN(lng)){{
-            routePoints.push([lat,lng]);
-            L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
+    <style>
+    .seat-layout {{
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 5px;
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 10px;
+    }}
+    .seat-btn {{
+        width: 50px;
+        height: 50px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+    }}
+    .seat-btn.selected {{
+        background: #0d6efd;
+        border-color: #0d6efd;
+    }}
+    @media (max-width: 768px) {{
+        .seat-btn {{
+            width: 40px;
+            height: 40px;
+            font-size: 0.9rem;
         }}
-    }});
+    }}
+    </style>
 
-    if(routePoints.length > 1){{
-        L.polyline(routePoints, {{
-            color: 'blue',
-            weight: 8,
-            opacity: 0.9
-        }}).addTo(map);
-        map.fitBounds(L.polyline(routePoints).getBounds());
+    <script>
+    let selectedSeat = null;
+
+    function selectSeat(seatNumber) {{
+        // Reset previous selection
+        document.querySelectorAll('.seat-btn').forEach(btn => {{
+            if (btn.classList.contains('selected')) {{
+                btn.classList.remove('selected');
+                btn.classList.add('btn-success');
+            }}
+        }});
+
+        // Mark new selection
+        const seatBtn = document.querySelector(`[data-seat="${{seatNumber}}"]`);
+        if (seatBtn) {{
+            seatBtn.classList.remove('btn-success');
+            seatBtn.classList.add('selected');
+            selectedSeat = seatNumber;
+
+            // Show booking form
+            document.getElementById('selectedSeatNumber').textContent = seatNumber;
+            document.getElementById('bookingForm').style.display = 'block';
+            document.getElementById('noSelection').style.display = 'none';
+        }}
     }}
 
-    const busIcon = L.divIcon({{
-        html: '<div style="animation:pulse 2s infinite;width:30px;height:30px;background:#28a745;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #28a745;display:flex;align-items:center;justify-content:center;">🚌</div>',
-        className: 'bus-icon',
-        iconSize: [30,30]
-    }});
+    function confirmBooking(busId, travelDate) {{
+        const name = document.getElementById('passengerName').value.trim();
+        const mobile = document.getElementById('mobileNumber').value.trim();
+        const email = document.getElementById('email').value.trim();
 
-    let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
-    const sid = {sid};
-    const socket = io(window.location.origin);
-    const statusDiv = document.getElementById('connectionStatus');
-
-    socket.on('connect', () => {{
-        statusDiv.className = 'alert alert-success mt-3';
-        statusDiv.innerHTML = '✅ लाइव कनेक्टेड - रीयल-टाइम अपडेट';
-    }});
-
-    socket.on('disconnect', () => {{
-        statusDiv.className = 'alert alert-warning mt-3';
-        statusDiv.innerHTML = '⚠️ डिस्कनेक्टेड - पुनः कनेक्ट हो रहा है...';
-    }});
-
-    socket.on('bus_location', data => {{
-        if(data.sid == sid){{
-            const lat = parseFloat(data.lat);
-            const lng = parseFloat(data.lng);
-            busMarker.setLatLng([lat,lng]);
-            map.panTo([lat,lng], {{animate:true}});
-
-            // स्पीड अपडेट
-            if(data.speed) {{
-                statusDiv.innerHTML = `🚌 गति: ${{data.speed.toFixed(1)}} km/h | अपडेट: ${{new Date().toLocaleTimeString('hi-IN')}}`;
-            }}
+        if (!name) {{
+            alert('Please enter passenger name');
+            return;
         }}
-    }});
+
+        if (!mobile || mobile.length !== 10 || !/^\d+$/.test(mobile)) {{
+            alert('Please enter valid 10-digit mobile number');
+            return;
+        }}
+
+        if (!selectedSeat) {{
+            alert('Please select a seat first');
+            return;
+        }}
+
+        // Disable button and show loading
+        const btn = document.querySelector('#bookingForm button');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+        btn.disabled = true;
+
+        fetch('/api/book', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify({{
+                bus_id: busId,
+                seat: selectedSeat,
+                date: travelDate,
+                name: name,
+                mobile: mobile,
+                email: email
+            }})
+        }})
+        .then(response => response.json())
+        .then(data => {{
+            if (data.success) {{
+                alert('✅ Booking confirmed!\\nSeat: ' + selectedSeat + '\\nFare: ₹' + data.fare);
+                window.location.href = '/booking-success/' + data.booking_id;
+            }} else {{
+                alert('❌ Error: ' + data.error);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }}
+        }})
+        .catch(error => {{
+            console.error('Error:', error);
+            alert('Network error. Please try again.');
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }});
+    }}
     </script>
-    '''
-    return render_template_string(BASE_HTML, content=content)
+    """
+
+    return render_template_string(KAYA_BASE_HTML, content=content)
 
 
-@app.route("/create-payment", methods=["POST"])
-def create_payment():
-    RAZORPAY_ENABLED = os.getenv("RAZORPAY_ENABLED", "false").lower() == "true"
-    if not RAZORPAY_ENABLED:
-        return jsonify({"ok": False, "error": "भुगतान गेटवे कॉन्फ़िगर नहीं है"}), 400
-
-    data = request.get_json()
-    order = razor_client.order.create({
-        "amount": int(data['fare']) * 100,
-        "currency": "INR",
-        "receipt": f"seat_{data['sid']}_{data['seat']}",
-        "payment_capture": 1
-    })
-
-    return jsonify({
-        "ok": True,
-        "order_id": order['id'],
-        "key": os.getenv("RAZORPAY_KEY_ID")
-    })
-
-
-@app.route("/verify-payment", methods=["POST"])
+@app.route('/booking-success/<int:booking_id>')
 @safe_db
-def verify():
-    data = request.get_json()
+def booking_success(booking_id):
+    """Booking success page"""
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT sb.*, s.bus_name, r.route_name, s.departure_time
+            FROM seat_bookings sb
+            JOIN schedules s ON sb.schedule_id = s.id
+            JOIN routes r ON s.route_id = r.id
+            WHERE sb.id = %s
+        """, (booking_id,))
 
-    RAZORPAY_ENABLED = os.getenv("RAZORPAY_ENABLED", "false").lower() == "true"
+        booking = cur.fetchone()
 
-    if RAZORPAY_ENABLED:
-        try:
-            razor_client.utility.verify_payment_signature({
-                'razorpay_order_id': data['order_id'],
-                'razorpay_payment_id': data['payment_id'],
-                'razorpay_signature': data['signature']
+    if not booking:
+        return redirect('/')
+
+    content = f"""
+    <div class="card p-4 text-center">
+        <div class="mb-4">
+            <i class="fas fa-check-circle fa-4x text-success mb-3"></i>
+            <h2>Booking Confirmed!</h2>
+            <p class="text-muted">Your booking has been successfully completed.</p>
+        </div>
+
+        <div class="card mb-4" style="max-width: 500px; margin: 0 auto;">
+            <div class="card-body">
+                <h5 class="card-title">Booking Details</h5>
+                <div class="text-start">
+                    <p><strong>Booking ID:</strong> {booking_id}</p>
+                    <p><strong>Passenger:</strong> {booking['passenger_name']}</p>
+                    <p><strong>Bus:</strong> {booking['bus_name']}</p>
+                    <p><strong>Route:</strong> {booking['route_name']}</p>
+                    <p><strong>Seat:</strong> {booking['seat_number']}</p>
+                    <p><strong>Departure:</strong> {booking['departure_time']}</p>
+                    <p><strong>Travel Date:</strong> {booking['travel_date']}</p>
+                    <p><strong>Fare:</strong> ₹{booking['fare']}</p>
+                    <p><strong>Status:</strong> <span class="badge bg-success">{booking['status']}</span></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex justify-content-center gap-3">
+            <a href="/" class="btn btn-primary">
+                <i class="fas fa-home"></i> Go Home
+            </a>
+            <a href="/search" class="btn btn-outline-primary">
+                <i class="fas fa-plus"></i> Book Another
+            </a>
+            <button onclick="window.print()" class="btn btn-outline-secondary">
+                <i class="fas fa-print"></i> Print Ticket
+            </button>
+        </div>
+
+        <div class="mt-4 text-muted">
+            <small>A confirmation SMS has been sent to {booking['mobile']}</small>
+        </div>
+    </div>
+    """
+
+    return render_template_string(KAYA_BASE_HTML, content=content)
+
+
+@app.route('/api/book', methods=['POST'])
+@limiter.limit("5 per minute")
+@safe_db
+def api_book():
+    """API for booking seats"""
+    data = request.json
+
+    try:
+        with db_cursor() as cur:
+            # Check if seat already booked
+            cur.execute("""
+                SELECT id FROM seat_bookings 
+                WHERE schedule_id = %s 
+                  AND seat_number = %s 
+                  AND travel_date = %s
+                  AND status = 'confirmed'
+            """, (data['bus_id'], data['seat'], data['date']))
+
+            if cur.fetchone():
+                return jsonify({
+                    "success": False,
+                    "error": "Seat already booked. Please select another seat."
+                })
+
+            # Calculate fare
+            fare = random.randint(300, 500)
+
+            # Generate booking hash
+            booking_hash = hashlib.sha256(
+                f"{data['bus_id']}_{data['seat']}_{data['date']}_{data['name']}".encode()
+            ).hexdigest()
+
+            # Insert booking
+            cur.execute("""
+                INSERT INTO seat_bookings 
+                (schedule_id, seat_number, passenger_name, mobile, email,
+                 travel_date, fare, status, booking_hash, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'confirmed', %s, NOW())
+                RETURNING id
+            """, (
+                data['bus_id'],
+                data['seat'],
+                data['name'],
+                data['mobile'],
+                data.get('email'),
+                data['date'],
+                fare,
+                booking_hash
+            ))
+
+            booking_id = cur.fetchone()[0]
+
+            return jsonify({
+                "success": True,
+                "message": "Booking confirmed successfully",
+                "booking_id": booking_id,
+                "fare": fare
             })
-        except:
-            return jsonify({"ok": False, "error": "अमान्य भुगतान"}), 400
 
-    with get_db() as (conn, cur):
-        cur.execute("""
-            UPDATE seat_bookings
-            SET status='confirmed'
-            WHERE schedule_id=%s AND seat_number=%s
-        """, (data['sid'], data['seat']))
-        conn.commit()
-
-    socketio.emit("seat_update", {
-        "sid": data['sid'],
-        "seat": data['seat']
-    })
-
-    return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"Booking error: {e}")
+        return jsonify({
+            "success": False,
+            "error": "Booking failed. Please try again."
+        }), 500
 
 
-@app.route("/search", methods=["POST"])
+@app.route('/api/gps', methods=['POST'])
+@limiter.limit("10 per minute")
+def api_gps():
+    """API for GPS updates (polling instead of WebSockets)"""
+    data = request.json
+
+    try:
+        with db_cursor() as cur:
+            cur.execute("""
+                INSERT INTO gps_logs 
+                (schedule_id, latitude, longitude, speed, accuracy, timestamp)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+            """, (
+                data.get('bus_id'),
+                data.get('lat'),
+                data.get('lng'),
+                data.get('speed', 0),
+                data.get('accuracy', 0)
+            ))
+
+            # Update bus position
+            cur.execute("""
+                UPDATE schedules 
+                SET current_lat = %s, current_lng = %s, last_gps_update = NOW()
+                WHERE id = %s
+            """, (
+                data.get('lat'),
+                data.get('lng'),
+                data.get('bus_id')
+            ))
+
+        return jsonify({"success": True, "message": "GPS updated"})
+
+    except Exception as e:
+        logger.error(f"GPS API error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/track')
+def track_page():
+    """Bus tracking page"""
+    content = """
+    <div class="card p-4">
+        <h3 class="mb-4"><i class="fas fa-map-marker-alt"></i> Live Bus Tracking</h3>
+
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5>Track Bus</h5>
+                        <div class="mb-3">
+                            <label class="form-label">Bus Number</label>
+                            <input type="number" id="busNumber" class="form-control" 
+                                   placeholder="Enter bus ID" value="1">
+                        </div>
+                        <button onclick="trackBus()" class="btn btn-primary w-100">
+                            <i class="fas fa-search"></i> Track
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5>Live Status</h5>
+                        <div id="trackingStatus" class="text-center py-3">
+                            <i class="fas fa-bus fa-2x text-muted"></i>
+                            <p class="mt-2">Select a bus to track</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="mapContainer" style="display: none;">
+            <div id="map" style="height: 400px; border-radius: 10px; background: #e9ecef;"></div>
+            <div class="mt-3 text-center">
+                <button onclick="refreshLocation()" class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-sync-alt"></i> Refresh Location
+                </button>
+                <small class="text-muted ms-3">Last updated: <span id="lastUpdate">--</span></small>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    let currentBusId = null;
+    let refreshInterval = null;
+
+    function trackBus() {
+        const busId = document.getElementById('busNumber').value;
+        if (!busId) {
+            alert('Please enter bus number');
+            return;
+        }
+
+        currentBusId = busId;
+        document.getElementById('mapContainer').style.display = 'block';
+        updateBusLocation();
+
+        // Refresh every 10 seconds
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+        }
+        refreshInterval = setInterval(updateBusLocation, 10000);
+    }
+
+    function updateBusLocation() {
+        if (!currentBusId) return;
+
+        fetch(`/api/bus-location/$'{currentBusId}'`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const statusDiv = document.getElementById('trackingStatus');
+                    statusDiv.innerHTML = `
+                        <div class="text-success">
+                            <i class="fas fa-bus fa-2x"></i>
+                            <h5 class="mt-2">Bus ${'currentBusId'}</h5>
+                            <p class="mb-0">Status: <span class="badge bg-success">Active</span></p>
+                            <small>Last update: ${'new Date(data.last_update).toLocaleTimeString()'}</small>
+                        </div>
+                    `;
+
+                    document.getElementById('lastUpdate').textContent = 
+                        new Date(data.last_update).toLocaleTimeString();
+
+                    // Update map display
+                    updateMap(data.lat, data.lng);
+                } else {
+                    document.getElementById('trackingStatus').innerHTML = `
+                        <div class="text-danger">
+                            <i class="fas fa-exclamation-triangle fa-2x"></i>
+                            <p class="mt-2">${'data.error || "Bus not found"}'</p>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+    }
+
+    function updateMap(lat, lng) {
+        const mapDiv = document.getElementById('map');
+        mapDiv.innerHTML = `
+            <div style="padding: 20px; text-align: center;">
+                <i class="fas fa-map-marker-alt fa-3x text-danger"></i>
+                <h5 class="mt-3">Bus Location</h5>
+                <p>Latitude: ${'lat'}</p>
+                <p>Longitude: ${'lng'}</p>
+                <p><a href="https://maps.google.com/?q=${'lat'},${'lng'}" target="_blank">
+                    <i class="fas fa-external-link-alt"></i> Open in Google Maps
+                </a></p>
+            </div>
+        `;
+    }
+
+    function refreshLocation() {
+        if (currentBusId) {
+            updateBusLocation();
+        }
+    }
+    </script>
+    """
+    return render_template_string(KAYA_BASE_HTML, content=content)
+
+
+@app.route('/api/bus-location/<int:bus_id>')
 @safe_db
-def search():
-    fs_input = request.form.get("from", "").strip()
-    ts_input = request.form.get("to", "").strip()
-    travel_date = request.form.get("date", date.today().isoformat())
+def api_bus_location(bus_id):
+    """Get bus location"""
+    try:
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT current_lat, current_lng, last_gps_update
+                FROM schedules
+                WHERE id = %s
+            """, (bus_id,))
 
-    session["from"] = fs_input
-    session["to"] = ts_input
-    session["date"] = travel_date
+            bus = cur.fetchone()
 
-    if not fs_input or not ts_input:
-        return "कृपया दोनों स्टेशन चुनें", 400
+            if bus and bus['current_lat'] and bus['current_lng']:
+                return jsonify({
+                    "success": True,
+                    "lat": bus['current_lat'],
+                    "lng": bus['current_lng'],
+                    "last_update": bus['last_gps_update'].isoformat() if bus['last_gps_update'] else None
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Bus location not available"
+                })
 
-    fs = fs_input.lower()
-    ts = ts_input.lower()
+    except Exception as e:
+        logger.error(f"Bus location error: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
-    with get_db() as (conn, cur):
+
+# ================= ADMIN PANEL =================
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    """Admin login"""
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        with db_cursor() as cur:
+            cur.execute("""
+                SELECT id, username, password FROM admins 
+                WHERE username = %s
+            """, (username,))
+
+            admin = cur.fetchone()
+
+            if admin and check_password_hash(admin['password'], password):
+                session['admin_logged_in'] = True
+                session['admin_id'] = admin['id']
+                session['admin_name'] = admin['username']
+                return redirect('/admin/dashboard')
+            else:
+                error = "Invalid credentials"
+                return render_template_string(KAYA_BASE_HTML, content=f"""
+                    <div class="alert alert-danger">{error}</div>
+                    {login_form()}
+                """)
+
+    return render_template_string(KAYA_BASE_HTML, content=login_form())
+
+
+def login_form():
+    return """
+    <div class="row justify-content-center">
+        <div class="col-md-4">
+            <div class="card p-4">
+                <h3 class="text-center mb-4">Admin Login</h3>
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <input type="text" name="username" class="form-control" 
+                               placeholder="Enter username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <input type="password" name="password" class="form-control" 
+                               placeholder="Enter password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-sign-in-alt"></i> Login
+                    </button>
+                </form>
+                <div class="text-center mt-3">
+                    <a href="/" class="text-decoration-none">
+                        <i class="fas fa-arrow-left"></i> Back to Home
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+
+
+@app.route('/admin/dashboard')
+@safe_db
+def admin_dashboard():
+    """Admin dashboard"""
+    if not session.get('admin_logged_in'):
+        return redirect('/admin/login')
+
+    with db_cursor() as cur:
+        # Get stats
+        cur.execute("SELECT COUNT(*) as total FROM schedules WHERE is_active = true")
+        active_buses = cur.fetchone()['total']
+
         cur.execute("""
-            SELECT DISTINCT route_id
-            FROM route_stations
-            WHERE LOWER(station_name) = %s OR LOWER(station_name) = %s
-        """, (fs, ts))
-        candidate_routes = [r["route_id"] for r in cur.fetchall()]
-
-        if not candidate_routes:
-            return render_template_string(
-                BASE_HTML,
-                content=f"<h3 class='text-center mt-5 text-danger'>🚫 {fs_input} → {ts_input} के लिए कोई बस नहीं</h3>"
-            )
+            SELECT COUNT(*) as total 
+            FROM seat_bookings 
+            WHERE DATE(created_at) = CURRENT_DATE
+        """)
+        today_bookings = cur.fetchone()['total']
 
         cur.execute("""
-            SELECT r.id
-            FROM routes r
-            JOIN route_stations rs_from ON rs_from.route_id = r.id
-            JOIN route_stations rs_to   ON rs_to.route_id = r.id
-            WHERE r.id = ANY(%s::int[])
-              AND LOWER(rs_from.station_name) = %s
-              AND LOWER(rs_to.station_name) = %s
-              AND rs_from.station_order < rs_to.station_order
-            LIMIT 1
-        """, (candidate_routes, fs, ts))
-        route = cur.fetchone()
+            SELECT COALESCE(SUM(fare), 0) as total 
+            FROM seat_bookings 
+            WHERE DATE(created_at) = CURRENT_DATE
+        """)
+        today_revenue = cur.fetchone()['total']
 
-    if not route:
-        return render_template_string(
-            BASE_HTML,
-            content=f"<h3 class='text-center mt-5 text-danger'>🚫 {fs_input} → {ts_input} के लिए कोई वैध मार्ग नहीं</h3>"
-        )
+        # Recent bookings
+        cur.execute("""
+            SELECT sb.*, s.bus_name 
+            FROM seat_bookings sb
+            JOIN schedules s ON sb.schedule_id = s.id
+            ORDER BY sb.created_at DESC 
+            LIMIT 5
+        """)
+        recent_bookings = cur.fetchall()
 
-    return redirect(f"/buses/{route['id']}")
+    bookings_html = ""
+    for booking in recent_bookings:
+        bookings_html += f"""
+        <tr>
+            <td>{booking['id']}</td>
+            <td>{booking['passenger_name']}</td>
+            <td>{booking['bus_name']}</td>
+            <td>{booking['seat_number']}</td>
+            <td>₹{booking['fare']}</td>
+            <td><span class="badge bg-success">{booking['status']}</span></td>
+        </tr>
+        """
+
+    content = f"""
+    <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h3 class="mb-1">Admin Dashboard</h3>
+                <p class="text-muted mb-0">Welcome, {session.get('admin_name', 'Admin')}</p>
+            </div>
+            <a href="/admin/logout" class="btn btn-outline-danger">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card bg-primary text-white p-3 text-center">
+                    <h4>{active_buses}</h4>
+                    <p class="mb-0">Active Buses</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card bg-success text-white p-3 text-center">
+                    <h4>{today_bookings}</h4>
+                    <p class="mb-0">Today's Bookings</p>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card bg-warning text-white p-3 text-center">
+                    <h4>₹{today_revenue}</h4>
+                    <p class="mb-0">Today's Revenue</p>
+                </div>
+            </div>
+        </div>
+
+        <h5 class="mb-3">Recent Bookings</h5>
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Passenger</th>
+                        <th>Bus</th>
+                        <th>Seat</th>
+                        <th>Fare</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {bookings_html}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="mt-4">
+            <h5>Quick Actions</h5>
+            <div class="d-flex flex-wrap gap-2">
+                <a href="/admin/buses" class="btn btn-outline-primary">
+                    <i class="fas fa-bus"></i> Manage Buses
+                </a>
+                <a href="/admin/routes" class="btn btn-outline-primary">
+                    <i class="fas fa-route"></i> Manage Routes
+                </a>
+                <a href="/admin/bookings" class="btn btn-outline-success">
+                    <i class="fas fa-list"></i> All Bookings
+                </a>
+                <a href="/health" class="btn btn-outline-info">
+                    <i class="fas fa-heartbeat"></i> System Health
+                </a>
+            </div>
+        </div>
+    </div>
+    """
+
+    return render_template_string(KAYA_BASE_HTML, content=content)
 
 
-@app.route("/logout")
-def logout():
+@app.route('/admin/buses')
+@safe_db
+def admin_buses():
+    """Manage buses"""
+    if not session.get('admin_logged_in'):
+        return redirect('/admin/login')
+
+    with db_cursor() as cur:
+        cur.execute("""
+            SELECT s.*, r.route_name
+            FROM schedules s
+            LEFT JOIN routes r ON s.route_id = r.id
+            ORDER BY s.id
+        """)
+        buses = cur.fetchall()
+
+    buses_html = ""
+    for bus in buses:
+        status_badge = "success" if bus['is_active'] else "secondary"
+        status_text = "Active" if bus['is_active'] else "Inactive"
+
+        buses_html += f"""
+        <tr>
+            <td>{bus['id']}</td>
+            <td>{bus['bus_name']}</td>
+            <td>{bus['route_name'] or 'N/A'}</td>
+            <td>{bus['departure_time']}</td>
+            <td>{bus['total_seats']}</td>
+            <td><span class="badge bg-{status_badge}">{status_text}</span></td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary">
+                    <i class="fas fa-edit"></i>
+                </button>
+            </td>
+        </tr>
+        """
+
+    content = f"""
+    <div class="card p-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h3 class="mb-0">Manage Buses</h3>
+            <a href="/admin/dashboard" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back
+            </a>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Bus Name</th>
+                        <th>Route</th>
+                        <th>Departure</th>
+                        <th>Seats</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {buses_html}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+
+    return render_template_string(KAYA_BASE_HTML, content=content)
+
+
+@app.route('/admin/logout')
+def admin_logout():
+    """Admin logout"""
     session.clear()
-    return redirect("/")
+    return redirect('/')
 
 
-# ================= RUN SERVER =================
-if __name__ == "__main__":
-    print("🚀 बस बुकिंग ऐप शुरू हो रहा है... (बैकग्राउंड GPS सहित)")
-    socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
+# ================= KAYA RENDER के लिए RUN COMMAND =================
+if __name__ == '__main__':
+    print("🚀 Starting My Bus AI - Kaya Render Optimized Version")
+    print("📊 Memory Limit: 512MB")
+    print("💾 Database Connections:", Config.MAX_DB_CONNECTIONS)
+    print("🌐 WebSockets: Disabled (using HTTP polling)")
+    print("✅ Database initialized")
+
+    # Get port from environment (Kaya Render provides this)
+    port = int(os.getenv('PORT', 10000))
+
+    # For local testing
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=False,  # Debug mode off for production
+        threaded=True  # Handle multiple requests
+    )
