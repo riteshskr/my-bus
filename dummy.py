@@ -12,9 +12,7 @@ pg_conn = psycopg2.connect(
 pg_cur = pg_conn.cursor()
 
 # Fetch all rows from schedules
-pg_cur.execute("""DELETE FROM seat_bookings WHERE schedule_id IN (1,2,3,4);""")
-pg_conn.commit()
-pg_cur.execute("SELECT * FROM seat_bookings;")
+pg_cur.execute("""SELECT *  FROM admins;""")
 rows = pg_cur.fetchall()
 
 # Print rows

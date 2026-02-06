@@ -1,129 +1,109 @@
+HOME_HTML = """
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SmartBus AI – Future of Travel</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+<title>MyBus AI</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+
 <style>
-*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
-body{min-height:100vh;background:radial-gradient(circle at top,#1a2a6c,#000);color:white;overflow-x:hidden;}
-.blob{position:absolute;width:300px;height:300px;background:linear-gradient(45deg,#00e0ff,#ff00cc);border-radius:50%;filter:blur(120px);animation:float 10s infinite alternate;}
-.blob2{right:-100px;top:200px;animation-delay:3s;}
-@keyframes float{from{transform:translateY(0);}to{transform:translateY(-200px);}}
-nav{display:flex;justify-content:space-between;align-items:center;padding:20px 60px;}
-nav h1{font-size:30px;}
-nav ul{display:flex;gap:30px;list-style:none;}
-nav ul li{cursor:pointer;font-weight:500;}
-.hero{display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:80px;}
-.hero-text h2{font-size:55px;line-height:1.2;}
-.hero-text p{margin:20px 0;font-size:18px;color:#ddd;}
-.hero-text button{padding:14px 30px;border:none;border-radius:30px;background:linear-gradient(45deg,#00e0ff,#ff00cc);color:white;font-size:16px;cursor:pointer;}
-.card{background:rgba(255,255,255,0.1);backdrop-filter:blur(20px);padding:30px;border-radius:25px;}
-.card input, .card button{width:100%;padding:12px;margin:10px 0;border:none;border-radius:10px;}
-.card button{background:#00e0ff;font-weight:600;cursor:pointer;}
-.stats{display:flex;justify-content:space-around;padding:40px;text-align:center;}
-.stat h3{font-size:40px;color:#00e0ff;}
-.features{display:grid;grid-template-columns:repeat(4,1fr);gap:25px;padding:60px;}
-.feature{background:rgba(255,255,255,0.08);padding:25px;border-radius:20px;text-align:center;transition:.3s;}
-.feature:hover{transform:scale(1.05);background:rgba(255,255,255,0.15);}
-.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);display:none;align-items:center;justify-content:center;}
-.modal-content{background:#111;padding:30px;border-radius:20px;width:300px;}
-.modal-content input, .modal-content button{width:100%;padding:10px;margin:10px 0;border:none;border-radius:8px;}
-.modal-content button{background:#00e0ff;font-weight:600;}
-footer{text-align:center;padding:20px;color:#ccc;}
+*{font-family:Poppins;}
+body{margin:0;background:#f4f6fb;}
+.nav{
+  background:white;
+  padding:15px 8%;
+  display:flex;
+  justify-content:space-between;
+  box-shadow:0 5px 20px rgba(0,0,0,.1);
+}
+.logo{font-size:22px;font-weight:700;color:#ff3d00;}
+
+.hero{
+  padding:50px 8%;
+  background:linear-gradient(135deg,#ff512f,#dd2476);
+  color:white;
+}
+
+.search{
+  background:white;
+  margin-top:-40px;
+  padding:25px;
+  border-radius:18px;
+  box-shadow:0 20px 40px rgba(0,0,0,.3);
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr auto;
+  gap:15px;
+}
+
+.search input{
+  padding:14px;
+  border-radius:10px;
+  border:none;
+  background:#f1f3f7;
+}
+
+.search button{
+  padding:14px 30px;
+  border:none;
+  border-radius:10px;
+  background:#ff3d00;
+  color:white;
+  font-weight:600;
+}
+
+.section{
+  padding:50px 8%;
+}
+
+.card{
+  background:white;
+  padding:20px;
+  border-radius:15px;
+  box-shadow:0 10px 25px rgba(0,0,0,.1);
+  margin-bottom:20px;
+}
 </style>
 </head>
+
 <body>
-<div class="blob"></div>
-<div class="blob blob2"></div>
 
-<nav>
-  <h1>🚌 SmartBus AI</h1>
-  <ul>
-    <li>Home</li>
-    <li>Routes</li>
-    <li onclick="openLogin()">Login</li>
-  </ul>
-</nav>
+<div class="nav">
+  <div class="logo">🚌 MyBus AI</div>
+  <div>Welcome {{session.username}}</div>
+</div>
 
-<section class="hero">
-  <div class="hero-text">
-    <h2>The Future of<br>Bus Travel</h2>
-    <p>Face recognition, live GPS, cashless booking.</p>
-    <button>Book Now</button>
-  </div>
+<div class="hero">
+  <h1>Book Smart. Travel Smarter.</h1>
+  <p>Live seats • AI boarding • Real tracking</p>
+</div>
 
-  <div class="card">
-    <h3>Search Bus</h3>
+<div class="section">
+
+  <div class="search">
     <input id="from" placeholder="From">
     <input id="to" placeholder="To">
-    <input id="date" type="date">
-    <button id="searchButton">बस ढूंढें</button>
+    <input type="date" id="date">
+    <button onclick="search()">Search</button>
   </div>
-</section>
 
-<section class="stats">
-  <div class="stat"><h3>120+</h3><p>Buses</p></div>
-  <div class="stat"><h3>50k+</h3><p>Users</p></div>
-  <div class="stat"><h3>99%</h3><p>Accuracy</p></div>
-</section>
+</div>
 
-<section class="features">
-  <div class="feature">🤖<h4>Face Boarding</h4></div>
-  <div class="feature">📍<h4>Live Tracking</h4></div>
-  <div class="feature">💳<h4>Payments</h4></div>
-  <div class="feature">🪑<h4>Seat Selection</h4></div>
-</section>
+<div class="section">
+  <h2>Why MyBus?</h2>
+  <div class="card">🚀 Face Recognition Boarding</div>
+  <div class="card">📡 Real-time GPS Tracking</div>
+  <div class="card">💺 Live Seat Selection</div>
+</div>
 
 <script>
-document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("searchButton").addEventListener("click", findBus);
-});
+function search(){
+  let f=from.value;
+  let t=to.value;
+  let d=date.value;
 
-function findBus(){
-  const from = document.getElementById("from").value.trim();
-  const to = document.getElementById("to").value.trim();
-  const date = document.getElementById("date").value;
-
-  if(!from || !to || !date){
-    alert("कृपया सभी फील्ड भरें!");
+  if(!f||!t||!d){
+    alert("Fill all fields");
     return;
   }
 
-  fetch("/search", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({from: from, to: to, date: date})
-  })
-  .then(res => res.json())
-  .then(data => {
-    console.log(data);
-    alert("मिले हुए रूट: " + data.length);
-  })
-  .catch(err => console.error(err));
-}
-
-// Login Modal
-function openLogin(){
-  document.getElementById('loginModal').style.display='flex';
-}
-window.onclick = e =>{
-  if(e.target.id==='loginModal') e.target.style.display='none';
-}
-</script>
-
-<footer>© 2026 SmartBus AI – Futuristic Transport System</footer>
-
-<!-- Login Modal -->
-<div class="modal" id="loginModal">
-  <div class="modal-content">
-    <h3>Login</h3>
-    <input placeholder="Email">
-    <input type="password" placeholder="Password">
-    <button>Login</button>
-  </div>
-</div>
-
-</body>
-</html>
+  location.href="/search?f="+f+"&t="+t+"&d="+d;

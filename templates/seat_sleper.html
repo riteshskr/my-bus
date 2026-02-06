@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SmartBus AI - Sleeper Bus</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;font-family:'Poppins',sans-serif;margin:0;padding:0;}
+body{
+  background: linear-gradient(135deg,#141e30,#243b55);
+  color:white;
+  display:flex;
+  justify-content:center;
+  align-items:flex-start;
+  min-height:100vh;
+  padding:20px;
+}
+
+.bus-container{
+  width:480px;
+  perspective:1200px;
+}
+
+.bus-inner{
+  background: rgba(255,255,255,0.08);
+  backdrop-filter:blur(15px);
+  border-radius:25px;
+  padding:20px;
+  box-shadow:0 20px 40px rgba(0,0,0,0.5);
+  transform: rotateX(6deg);
+  transform-style: preserve-3d;
+}
+
+.header{
+  text-align:center;
+  margin-bottom:10px;
+  font-weight:700;
+  color:#00e0ff;
+  font-size:20px;
+}
+
+.legend{
+  display:flex;
+  justify-content:space-around;
+  margin-bottom:10px;
+  font-size:14px;
+}
+.legend span{display:flex;align-items:center;gap:5px;}
+.legend div{width:20px;height:20px;border-radius:4px;}
+.legend .available{background:#1f2d3d;}
+.legend .selected{background:#2ecc71;}
+.legend .booked{background:#555;}
+
+.seat-row{display:flex;justify-content:space-between;margin:3px 0;}
+.sleeper{
+  width:90px;
+  height:42px;
+  background:#2b3b4f;
+  border-radius:8px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:600;
+  cursor:pointer;
+  transition: all 0.3s;
+}
+
+.sleeper:hover{
+  transform: scale(1.1);
+  background:#00e0ff;
+  color:black;
+  box-shadow:0 0 8px #00e0ff;
+}
+
+.selected{
+  background:#2ecc71 !important;
+  color:black;
+  box-shadow:0 0 15px #2ecc71;
+}
+
+.booked{
+  background:#555 !important;
+  opacity:.5;
+  cursor:not-allowed;
+}
+
+.aisle{width:18px;}
+
+.cabin-title{
+  font-weight:600;font-size:16px;color:#00ff99;margin:12px 0 4px;text-align:center;
+}
+
+.summary{
+  margin-top:20px;text-align:center;
+  background: linear-gradient(45deg,#00e0ff,#00ff99);
+  padding:15px;border-radius:15px;color:black;font-weight:700;
+}
+
+.btn{
+  margin-top:10px;padding:10px 25px;border-radius:30px;border:none;
+  background:black;color:#00e0ff;font-weight:700;cursor:pointer;transition:0.3s;
+}
+.btn:hover{
+  transform: scale(1.05);background:white;color:black;
+}
+
+@media(max-width:500px){
+  .bus-container{width:100%;}
+  .sleeper{width:72px;height:36px;font-size:12px;}
+}
+</style>
+</head>
+<body>
+
+<div class="bus-container">
+  <div class="bus-inner">
+    <div class="header">🚌 SmartBus AI - Sleeper Bus Layout</div>
+
+    <div class="legend">
+      <span><div class="available"></div> Available</span>
+      <span><div class="selected"></div> Selected</span>
+      <span><div class="booked"></div> Booked</span>
+    </div>
+
+    <!-- Lower Deck -->
+    <div class="cabin-title">Lower Sleeper Deck (₹600)</div>
+    <div id="lower-deck"></div>
+
+    <!-- Upper Deck -->
+    <div class="cabin-title">Upper Sleeper Deck (₹650)</div>
+    <div id="upper-deck"></div>
+
+    <div class="summary">
+      Selected: <span id="selected"></span><br>
+      Total: ₹<span id="price">0</span><br>
+      <button class="btn" onclick="confirmBooking()">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let selected=[], total=0;
+let bookedSeats=["L2","L5","U1","U4"];
+
+// seat click
+function clickSeat(el,id,price){
+  if(bookedSeats.includes(id)) return;
+  if(selected.includes(id)){
+    selected=selected.filter(x=>x!==id);
+    total-=price;
+    el.classList.remove("selected");
+  }else{
+    selected.push(id);
+    total+=price;
+    el.classList.add("selected");
+  }
+  document.getElementById("selected").innerText=selected.join(", ");
+  document.getElementById("price").innerText=total;
+}
+
+// generate sleeper deck
+function generateSleeper(containerId, prefix, rows, cols, price){
+  const container=document.getElementById(containerId);
+  let seatNo=1;
+  for(let r=0;r<rows;r++){
+    let row=document.createElement("div");
+    row.className="seat-row";
+    for(let c=0;c<cols;c++){
+      if(c==1){
+        let aisle=document.createElement("div");
+        aisle.className="aisle";
+        row.appendChild(aisle);
+      }
+      let seat=document.createElement("div");
+      let id=prefix+seatNo++;
+      seat.className="sleeper";
+      seat.innerText=id;
+      if(bookedSeats.includes(id)) seat.classList.add("booked");
+      seat.onclick=()=>clickSeat(seat,id,price);
+      row.appendChild(seat);
+    }
+    container.appendChild(row);
+  }
+}
+
+// Lower deck 6 rows x 2 (1+1 layout)
+generateSleeper('lower-deck','L',6,2,600);
+
+// Upper deck 6 rows x 2 (1+1 layout)
+generateSleeper('upper-deck','U',6,2,650);
+
+// confirm
+function confirmBooking(){
+  if(selected.length==0){ alert("Select seats first"); return; }
+  alert("Seats: "+selected.join(", ")+"\nAmount: ₹"+total);
+}
+</script>
+
+</body>
+</html>

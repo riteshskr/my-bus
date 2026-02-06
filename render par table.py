@@ -53,7 +53,8 @@ CREATE TABLE schedules (
     seating_rate DOUBLE PRECISION,
     single_sleeper_rate DOUBLE PRECISION,
     double_sleeper_rate DOUBLE PRECISION,
-    total_seats INT DEFAULT 40
+    total_seats INT DEFAULT 40,
+    last_gps_update TIMESTAMP
     );""")
 pg_cur.execute("""
     CREATE TABLE route_stations (

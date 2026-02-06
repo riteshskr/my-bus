@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SmartBus Seat Booking</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <style>
+        body {font-family: sans-serif; margin:10px;}
+        h2, h3 {text-align:center;}
+        #seats {display: grid; grid-template-columns: repeat(auto-fit, minmax(50px, 1fr)); gap:8px; max-width:400px; margin:auto;}
+        .seat {height:50px; line-height:50px; text-align:center; border-radius:5px; cursor:pointer; color:white; font-weight:bold; position: relative;}
+        .seat.available {background:#4CAF50;}       /* green */
+        .seat.booked-paid {background:#2196F3;}    /* blue */
+        .seat.booked-unpaid {background:#FFEB3B; color:#000;} /* yellow */
+        .seat.unavailable {background:#f44336; cursor:not-allowed;} /* red */
+
+        /* Tooltip */
+        .tooltip {
+            visibility: hidden;
+            background-color: #333;
+            color: #fff;
+            text-align: left;
+            border-radius: 5px;
+            padding: 5px;
+            position: absolute;
+            z-index: 10;
+            bottom: 110%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: max-content;
+            max-width: 180px;
+            font-size: 12px;
+            line-height: 1.2em;
+        }
+        .seat:hover .tooltip { visibility: visible; }
+
+        table {border-collapse: collapse; width: 100%; margin-top:20px;}
+        th, td {border:1px solid #ddd; padding:8px; text-align:center;}
+        th {background:#f2f2f2;}
+        #summary {margin-top:15px; text-align:center;}
+
+        /* Modal / Popup */
+        .modal {
+            display: none; 
+            position: fixed; 
+            z-index: 100; 
+            left: 0; top: 0; width: 100%; height: 100%; 
+            overflow: auto; background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 350px;
+        }
+        .modal-content p {margin:5px 0;}
+        .modal-content button {
+            margin-top:10px;
+            padding:8px 12px;
+            border:none;
+            border-radius:5px;
+            cursor:pointer;
+        }
+        .btn-confirm {background-color:#4CAF50; color:white;}
+        .btn-cancel {background-color:#f44336; color:white; margin-left:10px;}
+    </style>
+</head>
+<body>
+<h2>Schedule ID: {{ schedule_id }}</h2>
+<div id="seats"></div>
+
+{% if user_role in ['counter','admin'] %}
+<h3>Live Booking Dashboard</h3>
+<table id="dashboard">
+    <thead>
+        <tr>
+            <th>Seat</th>
+            <th>Passenger</th>
+            <th>Mobile</th>
+            <th>Booked By</th>
+            <th>Payment</th>
+            <th>Paid</th>
+            <th>Fare (₹)</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<div id="summary">
+    <p>Total Collected Online: ₹<span id="onlineTotal">0</span></p>
+    <p>Total Collected Cash: ₹<span id="cashTotal">0</span></p>
+    <p>Total Seats Booked: <span id="totalSeats">0</span></p>
+</div>
+{% endif %}
+
+<!-- Modal / Popup -->
+<div id="bookingModal" class="modal">
+    <div class="modal-content">
+        <h3>Confirm Booking</h3>
+        <p id="modalSeat"></p>
+        <p id="modalName"></p>
+        <p id="modalMobile"></p>
+        <p id="modalPayment"></p>
+        <p id="modalFare"></p>
+        <button class="btn-confirm" id="confirmBtn">Confirm</button>
+        <button class="btn-cancel" id="cancelBtn">Cancel</button>
+    </div>
+</div>
+
+<script>
+const USER_ID = {{ user_id }};
+const USER_ROLE = "{{ user_role }}";
+const SCHEDULE_ID = {{ schedule_id }};
+const RAZORPAY_KEY = "{{ razorpay_key }}";
+const IS_COUNTER = ["counter","admin"].includes(USER_ROLE);
+
+const socket = io();
+const seatsDiv = document.getElementById("seats");
+const TOTAL_SEATS = 30;
+const dashboardBody = document.querySelector("#dashboard tbody");
+
+let onlineTotal = 0;
+let cashTotal = 0;
+let totalSeatsBooked = 0;
+
+const modal = document.getElementById("bookingModal");
+const modalSeat = document.getElementById("modalSeat");
+const modalName = document.getElementById("modalName");
+const modalMobile = document.getElementById("modalMobile");
+const modalPayment = document.getElementById("modalPayment");
+const modalFare = document.getElementById("modalFare");
+const confirmBtn = document.getElementById("confirmBtn");
+const cancelBtn = document.getElementById("cancelBtn");
+
+let currentBooking = null;
+
+// Render seats
+for(let i=1;i<=TOTAL_SEATS;i++){
+    const seatDiv = document.createElement("div");
+    seatDiv.className = "seat available";
+    seatDiv.id = "seat-" + i;
+    seatDiv.innerText = i;
+
+    // Tooltip span
+    const tooltip = document.createElement("span");
+    tooltip.className = "tooltip";
+    tooltip.innerText = "Available";
+    seatDiv.appendChild(tooltip);
+
+    seatDiv.onclick = () => openBookingPopup(i, seatDiv);
+    seatsDiv.appendChild(seatDiv);
+}
+
+// Live update handler
+socket.on("seat_update", data => {
+    if(data.schedule_id !== SCHEDULE_ID) return;
+    const seatDiv = document.getElementById("seat-" + data.seat);
+    if(seatDiv){
+        seatDiv.classList.remove("available","booked-paid","booked-unpaid","unavailable");
+        if(data.paid) seatDiv.classList.add("booked-paid");
+        else seatDiv.classList.add("booked-unpaid");
+        seatDiv.disabled = true;
+
+        // Update tooltip
+        const tooltip = seatDiv.querySelector(".tooltip");
+        tooltip.innerText = `Passenger: ${data.name}\nMobile: ${data.mobile}\nBooked by: ${data.user_type}\nPayment: ${data.payment_mode}\nPaid: ${data.paid?'Yes':'No'}\nFare: ₹${data.amount}`;
+    }
+    updateDashboard(data);
+});
+
+// Update dashboard table
+function updateDashboard(data){
+    if(!dashboardBody) return;
+    let row = document.createElement("tr");
+    row.innerHTML = `
+        <td>${data.seat}</td>
+        <td>${data.name}</td>
+        <td>${data.mobile}</td>
+        <td>${data.user_type}</td>
+        <td>${data.payment_mode}</td>
+        <td>${data.paid?'Yes':'No'}</td>
+        <td>${data.amount}</td>
+    `;
+    dashboardBody.appendChild(row);
+
+    if(data.payment_mode==="online" && data.paid) onlineTotal += data.amount;
+    if(data.payment_mode==="cash") cashTotal += data.amount;
+    totalSeatsBooked += 1;
+
+    document.getElementById("onlineTotal").innerText = onlineTotal;
+    document.getElementById("cashTotal").innerText = cashTotal;
+    document.getElementById("totalSeats").innerText = totalSeatsBooked;
+}
+
+// Open popup
+function openBookingPopup(seatId, seatDiv){
+    const name = prompt("Passenger Name:");
+    if(!name) return;
+
+    const mobile = prompt("Mobile Number:");
+    if(!mobile) return;
+
+    let allowedModes = ["online"];
+    if(IS_COUNTER) allowedModes = ["cash","online"];
+
+    let paymentMode;
+    if(allowedModes.length===1) paymentMode=allowedModes[0];
+    else {
+        paymentMode = prompt("Payment Mode? cash or online").toLowerCase();
+        if(!allowedModes.includes(paymentMode)){
+            alert("Invalid payment mode");
+            return;
+        }
+    }
+
+    let amount = paymentMode==="online"?0: prompt("Fare Amount (₹):", "100");
+    amount = parseInt(amount) || 0;
+
+    currentBooking = {seatId, seatDiv, name, mobile, paymentMode, amount, paid: paymentMode==="online"?false:true};
+
+    // Fill modal
+    modalSeat.innerText = "Seat: " + seatId;
+    modalName.innerText = "Passenger: " + name;
+    modalMobile.innerText = "Mobile: " + mobile;
+    modalPayment.innerText = "Payment Mode: " + paymentMode;
+    modalFare.innerText = "Fare: ₹" + amount;
+
+    modal.style.display = "block";
+}
+
+// Confirm booking
+confirmBtn.onclick = () => {
+    const b = currentBooking;
+    if(b.paymentMode==="online"){
+        fetch("/create_order", {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({seat_number: b.seatId})
+        }).then(r=>r.json()).then(data=>{
+            const options = {
+                "key": RAZORPAY_KEY,
+                "amount": data.amount,
+                "currency": "INR",
+                "order_id": data.order_id,
+                "name": "SmartBus",
+                "handler": function(response){
+                    sendBooking(b.seatId, b.name, b.mobile, b.paymentMode, true, data.amount);
+                },
+                "theme": {"color":"#3399cc"}
+            };
+            const rzp = new Razorpay(options);
+            rzp.open();
+        });
+    } else {
+        sendBooking(b.seatId, b.name, b.mobile, b.paymentMode, false, b.amount);
+    }
+    modal.style.display = "none";
+}
+
+// Cancel booking
+cancelBtn.onclick = () => {
+    modal.style.display = "none";
+}
+
+// Send booking to server
+function sendBooking(seat, name, mobile, paymentMode, paid, amount){
+    fetch("/confirm_booking", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+            schedule_id: SCHEDULE_ID,
+            seat_number: seat,
+            passenger_name: name,
+            mobile: mobile,
+            user_id: USER_ID,
+            counter_id: IS_COUNTER?USER_ID:null,
+            payment_mode: paymentMode,
+            paid: paid,
+            amount: amount
+        })
+    }).then(r=>r.json()).then(res=>{
+        if(res.ok){
+            const seatDiv = document.getElementById("seat-" + seat);
+            seatDiv.classList.remove("available");
+            if(paid) seatDiv.classList.add("booked-paid");
+            else seatDiv.classList.add("booked-unpaid");
+            seatDiv.disabled = true;
+
+            const tooltip = seatDiv.querySelector(".tooltip");
+            tooltip.innerText = `Passenger: ${name}\nMobile: ${mobile}\nBooked by: ${IS_COUNTER?'Counter/Admin':'User'}\nPayment: ${paymentMode}\nPaid: ${paid?'Yes':'No'}\nFare: ₹${amount}`;
+            alert(`Seat booked! Fare: ₹${amount}`);
+        } else {
+            alert(res.error);
+        }
+    });
+}
+
+// Close modal on outside click
+window.onclick = function(event){
+    if(event.target == modal) modal.style.display = "none";
+}
+</script>
+</body>
+</html>

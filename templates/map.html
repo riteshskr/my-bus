@@ -1,0 +1,21 @@
+<div id="map" style="height:500px;width:100%;border-radius:12px;"></div>
+
+<script>
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], {{ 13 if bus.get('lat') else 10 }});
+
+// ✅ Clear streets + highways map (Carto Light)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+
+// Optional: bus marker
+const busIcon = L.divIcon({
+    html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+    className: 'bus-icon',
+    iconSize: [60,60]
+});
+
+let busMarker = L.marker([{{ lat }}, {{ lng }}], {icon: busIcon}).addTo(map);
+</script>

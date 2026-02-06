@@ -1,17 +1,21 @@
 from dotenv import load_dotenv
+import json
+
 load_dotenv()
 import setuptools
 import os, random
 from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g,session
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+import mysql.connector
 import atexit
 import razorpay
 
+# import psycopg2
 razor_client = razorpay.Client(auth=(
     os.getenv("RAZORPAY_KEY_ID"),
     os.getenv("RAZORPAY_KEY_SECRET")
@@ -54,14 +58,26 @@ def shutdown_pool():
 
 # ================= DB CONTEXT =================
 def get_db():
-    if 'db_conn' not in g:
+    try:
+        if 'db_conn' not in g or g.db_conn.closed:
+            g.db_conn = pool.getconn()
+        if 'db_cur' not in g:
+            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+        return g.db_conn, g.db_cur
+    except:
+        pool.closeall()
         g.db_conn = pool.getconn()
-    return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
+        g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+        return g.db_conn, g.db_cur
 
 
 @app.teardown_appcontext
 def close_db(error=None):
+    cur = g.pop('db_cur', None)
     conn = g.pop('db_conn', None)
+
+    if cur:
+        cur.close()
     if conn:
         pool.putconn(conn)
 
@@ -71,18 +87,25 @@ def safe_db(func):
     def wrapper(*a, **kw):
         try:
             return func(*a, **kw)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
+        finally:
+            close_db()  # चाहे error आये या न आये
 
     return wrapper
 
+
 def admin_required(f):
-    def wrap(*a,**k):
-        if "admin" not in session:
-            return redirect("/admin/login")
-        return f(*a,**k)
-    wrap.__name__ = f.__name__
+    @wraps(f)
+    def wrap(*a, **k):
+        if not session.get("user_logged_in"):
+            return redirect("/login")
+
+        if session.get("role") != "admin":
+            return "Access Denied", 403
+
+        return f(*a, **k)
+
     return wrap
+
 
 # ================= DB INIT =================
 def init_db():
@@ -91,12 +114,35 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
+        # cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS faces (
+                id SERIAL PRIMARY KEY,
+                bus_id INT NOT NULL,
+                face_data BYTEA NOT NULL,
+                face_image BYTEA NOT NULL
+            );
+            """)
+
+        # face_logs table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS face_logs (
+                id SERIAL PRIMARY KEY,
+                face_id INT NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                bus_id INT NOT NULL,
+                entry_time TIMESTAMP NOT NULL,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION
+            );
+            """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE,
             password VARCHAR(100),
-            role VARCHAR(20) DEFAULT 'admin'
+            role VARCHAR(20) DEFAULT 'admin',
+            counter_no INTEGER DEFAULT 0
         )
         """)
         cur.execute("SELECT COUNT(*) FROM admins ")
@@ -172,6 +218,13 @@ def init_db():
         conn.commit()
 
         # ===== DEFAULT DATA =====
+        cur.execute("SELECT COUNT(*) FROM admins")
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            cur.execute(""" INSERT INTO  admins(username, password, role, counter_no)
+            VALUES('admin', 'admin123', 'admin', 1);""")
+
         cur.execute("SELECT COUNT(*) FROM routes")
         count = cur.fetchone()[0]
 
@@ -222,14 +275,18 @@ def init_db():
 
             conn.commit()
 
-        cur.close()
-        pool.putconn(conn)
+            cur.close()
+            pool.putconn(conn)  # ✅ सबसे important line
 
-        print("✅ DB Init Complete!")
+            print("✅ DB Init Complete!")
+
 
     except Exception as e:
+
         import traceback
+
         print("❌ DB INIT REAL ERROR ↓")
+
         traceback.print_exc()
 
         try:
@@ -258,648 +315,318 @@ def gps(data):
 
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
-    # Save to DB
     try:
         with app.app_context():
             conn, cur = get_db()
             cur.execute("""
-                   UPDATE schedules 
-                   SET current_lat=%s, current_lng=%s
-                   WHERE id=%s
-               """, (lat, lng, sid))
+                UPDATE schedules 
+                SET current_lat=%s, current_lng=%s
+                WHERE id=%s
+            """, (lat, lng, sid))
             conn.commit()
     except:
         pass
 
-    emit("bus_location", {
-        "sid": sid, "lat": lat, "lng": lng, "speed": speed,
+    # 🔥 यही main fix है
+    socketio.emit("bus_location", {
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed,
         "timestamp": data.get('timestamp', '')
-    }, broadcast=True)
+    })
 
 
 # ================= HTML BASE =================
-BASE_HTML = """<!DOCTYPE html>
-<html lang="hi">
+
+BASE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚌 Bus Booking India - Live GPS + Real-time Seats</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Bus AI - Book Your Journey</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
 
-    <!-- Bootstrap 5.3 CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
+body{background:#f5f7fb;color:#222;}
 
-    <!-- Leaflet Maps CSS (Live GPS के लिए) -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+/* Navbar */
+.navbar{
+  position:fixed;
+  top:0;left:0;width:100%;
+  background:white;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:15px 8%;
+  box-shadow:0 5px 20px rgba(0,0,0,.1);
+  z-index:1000;
+}
+.logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
+.navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
 
-    <!-- Font Awesome Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+/* Hero */
+.hero{
+  height:100vh;
+  background:
+    linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
+  background-size:cover;
+  background-position:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  color:white;
+  padding-top:70px;
+}
 
-    <style>
-        /* Bus Booking Theme */
-        body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
+/* Search Box */
+.search-box{
+  background:white;
+  padding:20px;
+  border-radius:15px;
+  display:flex;
+  gap:10px;
+}
+.search-box input{
+  padding:12px;
+  border:none;
+  border-radius:8px;
+  outline:none;
+}
+.search-box button{
+  padding:12px 30px;
+  border:none;
+  border-radius:10px;
+  background:#ff512f;
+  color:white;
+  font-weight:600;
+  cursor:pointer;
+}
 
-        .main-container {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px);
-            border-radius: 25px;
-            box-shadow: 0 25px 50px rgba(0,0,0,0.2);
-            margin: 20px auto;
-            padding: 30px;
-        }
+/* Cards */
+.card{
+  background:white;
+  border-radius:15px;
+  box-shadow:0 10px 25px rgba(0,0,0,.1);
+  padding:20px;
+  margin-bottom:20px;
+}
 
-        /* Route Cards */
-        .route-card {
-            transition: all 0.4s ease;
-            border: none;
-            border-radius: 20px;
-            overflow: hidden;
-            height: 100%;
-        }
+/* ---------- Mobile Fixes ---------- */
+@media(max-width:768px){
 
-        .route-card:hover {
-            transform: translateY(-10px) scale(1.02);
-            box-shadow: 0 30px 60px rgba(0,0,0,0.3) !important;
-        }
+  .navbar{
+    flex-direction:column;
+    gap:10px;
+    padding:10px 20px;
+  }
 
-        /* Bus Cards */
-        .bus-card {
-            border-radius: 20px;
-            border: none;
-            transition: all 0.3s;
-            cursor: pointer;
-        }
+  .search-box{
+    flex-direction:column;
+    width:100%;
+  }
 
-        .bus-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2) !important;
-        }
+  .search-box input,
+  .search-box button{
+    width:100%;
+  }
 
-        /* Seat Layout */
-        .seat {
-            width: 55px !important;
-            height: 55px !important;
-            margin: 4px;
-            font-weight: bold;
-            border-radius: 12px !important;
-            font-size: 14px;
-            transition: all 0.3s ease;
-            border: 3px solid transparent;
-        }
-
-        .seat:hover:not(:disabled) {
-            transform: scale(1.1);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-        }
-
-        .bus-row {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 8px;
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        /* Live GPS Map */
-        #map, .mini-map {
-            height: 400px;
-            width: 100%;
-            border-radius: 20px;
-            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
-            margin-bottom: 20px;
-        }
-
-        .live-bus {
-            animation: pulse 2s infinite;
-            width: 30px;
-            height: 30px;
-            background: #ff4444;
-            border-radius: 50%;
-            border: 4px solid #fff;
-            box-shadow: 0 0 20px #ff4444;
-        }
-
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.3); }
-        }
-
-        /* Booking Header */
-        .booking-header {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 25px;
-            color: white;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
-        }
-
-        /* Navigation Buttons */
-        .nav-buttons {
-            background: rgba(255,255,255,0.2);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 20px;
-            margin-top: 40px;
-        }
-
-        .btn-custom {
-            border-radius: 25px;
-            padding: 12px 30px;
-            font-weight: 600;
-            border: none;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .btn-custom:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .seat { width: 45px !important; height: 45px !important; font-size: 12px; }
-            .main-container { margin: 10px; padding: 20px; }
-        }
-
-        /* Loading Animation */
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255,255,255,.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-    </style>
+  .hero h1{font-size:1.6rem;}
+}
+</style>
 </head>
-
 <body>
-    <div class="container-fluid py-4">
-        <div class="main-container">
-              <div class="text-center mb-5">
 
-            </div>
+<div class="navbar">
+  <div class="logo">🚌 My Bus AI</div>
+  <div>
+    <a href="/login">Admin login</a>
+    <a href="/counter">Counter</a>
+  </div>
+</div>
 
-            <!-- Main Content -->
-            {{content|safe}}
+{% if not content %}
+<section class="hero">
+  <div>
+    <h1>India’s Smart Bus Platform</h1>
+    <p>Book | Track | Face Boarding | Live Seats</p>
 
-            <!-- Navigation -->
-            <div class="nav-buttons text-center">
-                <a href="/" class="btn btn-light btn-lg btn-custom me-3">
-                    <i class="fas fa-home me-2"></i>🏠 Home
-                </a>
-                <a href="/driver/1" class="btn btn-success btn-lg btn-custom" target="_blank">
-                    <i class="fas fa-map-marker-alt me-2"></i>📱 Driver GPS
-                </a>
-                <a href="/live-bus/1" class="btn btn-primary btn-lg btn-custom">
-                    <i class="fas fa-route me-2"></i>🗺️ Live Track
-                </a>
-            </div>
-        </div>
-    </div>
+    <form class="search-box" action="/search" method="POST">
+      <input name="from" placeholder="From" required>
+      <input name="to" placeholder="To" required>
+      <input type="date" name="date" required>
+      <button type="submit">Search</button>
+    </form>
+  </div>
+</section>
+{% endif %}
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+{% if content %}
+<div style="padding:100px 10%;">
+    {{ content|safe }}
+</div>
+{% endif %}
 
-    <!-- Socket.IO CDN (Real-time Updates) -->
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-
-    <!-- Leaflet Maps JS (GPS Tracking) -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- Route Selection Flow -->
-    <script>
-        // Route card click handler
-        function selectRoute(routeId) {
-            window.location.href = `/buses/${routeId}`;
-        }
-
-        // Bus card click handler
-        function selectBus(busId) {
-            window.location.href = `/select/${busId}`;
-        }
-
-        // Smooth hover effects
-        document.addEventListener('DOMContentLoaded', function() {
-            document.querySelectorAll('.route-card, .bus-card').forEach(card => {
-                card.style.transition = 'all 0.4s ease';
-                card.addEventListener('mouseenter', () => {
-                    card.style.transform = 'translateY(-8px) scale(1.02)';
-                });
-                card.addEventListener('mouseleave', () => {
-                    card.style.transform = 'translateY(0) scale(1)';
-                });
-            });
-        });
-
-        // Socket connection status
-        if (typeof io !== 'undefined') {
-            const socket = io({
-                transports: ['websocket', 'polling'],
-                timeout: 10000
-            });
-
-            socket.on('connect', () => {
-                console.log('✅ Socket Connected:', socket.id);
-            });
-
-            socket.on('connect_error', (err) => {
-                console.log('❌ Socket Error:', err.message);
-            });
-        }
-    </script>
 </body>
-</html>"""
-# ========= /admin/add-bus =========
-@app.route("/admin/add-bus", methods=["GET","POST"])
-@admin_required
-def admin_add_bus():
-    conn, cur = get_db()
+</html>
+"""
 
-    # सभी routes dropdown के लिए
-    cur.execute("SELECT id, route_name FROM routes ORDER BY id")
-    routes = cur.fetchall()
+HOME_HTML = """
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <select class="form-select" id="from">
+      <option selected disabled>From</option>
+      <option>Delhi</option>
+      <option>Mumbai</option>
+      <option>Bengaluru</option>
+      <option>Jaipur</option>
+    </select>
+  </div>
 
-    if request.method == "POST":
-        route_id = request.form["route_id"]
-        bus_name = request.form["bus_name"]
-        time = request.form["departure_time"]
-        seats = request.form["total_seats"]
+  <div class="col-md-4">
+    <select class="form-select" id="to">
+      <option selected disabled>To</option>
+      <option>Jaipur</option>
+      <option>Pune</option>
+      <option>Chennai</option>
+      <option>Hyderabad</option>
+    </select>
+  </div>
 
-        cur.execute("""
-            INSERT INTO schedules
-            (route_id, bus_name, departure_time, total_seats)
-            VALUES (%s, %s, %s::time, %s)
-        """, (route_id, bus_name, time, seats))
+  <div class="col-md-3">
+    <input type="date" class="form-control" id="date">
+  </div>
 
-        conn.commit()
+  <div class="col-md-1 d-grid">
+    <button class="btn btn-danger" onclick="searchBus()">Search</button>
+  </div>
+</div>
 
-        return """
-        <h3>✅ नई बस सफलतापूर्वक जोड़ दी गई!</h3>
-        <a href='/admin'>Admin Dashboard</a>
-        """
+<script>
+function searchBus(){
+  let f = document.getElementById("from").value;
+  let t = document.getElementById("to").value;
+  let d = document.getElementById("date").value;
 
-    options = "".join(
-        f"<option value='{r['id']}'>{r['route_name']}</option>"
-        for r in routes
-    )
+  if(!f || !t || !d){
+    alert("Please fill all fields");
+    return;
+  }
+  alert("Searching buses from " + f + " to " + t + " on " + d);
+}
+</script>
+"""
 
-    return f"""
-    <h3>🚌 नई Bus जोड़ें</h3>
+# ===== login html =======
+LOGIN_HTML = """
+<div class="row justify-content-center mt-5">
+  <div class="col-md-4">
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-4">
 
-    <form method="post">
+        <h3 class="text-center mb-4">Admin Login</h3>
 
-    Route:
-    <select name="route_id">{options}</select><br><br>
+       <form method="POST" autocomplete="on">
+       <!-- Hidden fields (Chrome autofill रोकने के लिए) -->
+          <input type="text" style="display:none">
+          <input type="password" style="display:none">
 
-    Bus Name:
-    <input name="bus_name" placeholder="जैसे: Volvo AC"><br><br>
+          <input type="text" name="username"
+                 class="form-control mb-3"
+                 placeholder="Username" required>
 
-    Departure Time:
-    <input name="departure_time" placeholder="08:30"><br><br>
+          <input type="password" name="password"
+                 class="form-control mb-3"
+                 placeholder="Password" required>
 
-    Total Seats:
-    <input name="total_seats" value="40"><br><br>
+          <button class="btn btn-success w-100">
+            Login
+          </button>
+        </form>
 
-    <button>Add Bus</button>
+        {% if error %}
+          <div class="text-danger text-center mt-3">
+            {{ error }}
+          </div>
+        {% endif %}
 
-    </form>
-    """
-#======= /admin/login ========
-
-@app.route("/admin/login", methods=["GET","POST"])
-def admin_login():
-    conn, cur = get_db()
-
-    error = ""
-
-    if request.method == "POST":
-        u = request.form["username"]
-        p = request.form["password"]
-
-        cur.execute(
-            "SELECT * FROM admins WHERE username=%s AND password=%s",
-            (u, p)
-        )
-        admin = cur.fetchone()
-
-        if admin:
-            session["admin"] = admin["username"]
-            return redirect("/admin")
-        else:
-            error = "❌ गलत Username या Password"
-
-    html = f"""
-    <div class="row justify-content-center">
-        <div class="col-md-5">
-            <div class="card shadow-lg border-0 rounded-4 p-4">
-                <div class="text-center mb-4">
-                    <h2 class="fw-bold">🔐 Admin Login</h2>
-                    <p class="text-muted">Bus Booking Control Panel</p>
-                </div>
-
-                {'<div class="alert alert-danger text-center">'+error+'</div>' if error else ''}
-
-                <form method="post">
-                    <div class="mb-3">
-                        <label class="form-label">Username</label>
-                        <input name="username" class="form-control form-control-lg" required>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label">Password</label>
-                        <input name="password" type="password" class="form-control form-control-lg" required>
-                    </div>
-
-                    <div class="d-grid">
-                        <button class="btn btn-primary btn-lg">
-                            🚀 Login
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
+      </div>
     </div>
-    """
+  </div>
+</div>
+"""
 
-    return render_template_string(BASE_HTML, content=html)
-#========= admin=======
-@app.route("/admin")
-@admin_required
-def admin_home():
-    conn, cur = get_db()
-
-    # ===== STATS =====
-    cur.execute("SELECT COUNT(*) AS total FROM seat_bookings")
-    total = cur.fetchone()["total"]
-
-    cur.execute("SELECT COALESCE(SUM(fare),0) AS earn FROM seat_bookings")
-    earn = cur.fetchone()["earn"]
-
-    cur.execute("""
-        SELECT COUNT(*) AS today
-        FROM seat_bookings
-        WHERE travel_date = CURRENT_DATE
-    """)
-    today = cur.fetchone()["today"]
-
-    cur.execute("""
-        SELECT passenger_name, seat_number, travel_date,
-               fare, booked_by_type
-        FROM seat_bookings
-        ORDER BY id DESC LIMIT 8
-    """)
-    recent = cur.fetchall()
-
-    cards = f"""
-    <div class="row g-4 mb-5">
-        <div class="col-md-4">
-            <div class="card shadow text-center border-0 rounded-4 p-4">
-                <h6>Total Bookings</h6>
-                <h2 class="fw-bold text-primary">{total}</h2>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card shadow text-center border-0 rounded-4 p-4">
-                <h6>Total Earning</h6>
-                <h2 class="fw-bold text-success">₹ {earn}</h2>
-            </div>
-        </div>
-
-        <div class="col-md-4">
-            <div class="card shadow text-center border-0 rounded-4 p-4">
-                <h6>Today Bookings</h6>
-                <h2 class="fw-bold text-warning">{today}</h2>
-            </div>
-        </div>
-    </div>
-    """
-
-    actions = """
-    <div class="d-flex justify-content-center gap-3 mb-5 flex-wrap">
-        <a href="/admin/add-bus" class="btn btn-success btn-lg">➕ Add Bus</a>
-        <a href="/admin/book" class="btn btn-primary btn-lg">🧾 Counter Booking</a>
-        <a href="/admin/bookings" class="btn btn-info btn-lg">📋 All Bookings</a>
-        <a href="/admin/logout" class="btn btn-danger btn-lg">🚪 Logout</a>
-    </div>
-    """
-
-    table = """
-    <h4 class="mb-3">🕒 Recent Bookings</h4>
-    <div class="table-responsive">
-    <table class="table table-striped table-hover shadow rounded-4">
-        <thead class="table-dark">
-            <tr>
-                <th>Name</th>
-                <th>Seat</th>
-                <th>Date</th>
-                <th>Fare</th>
-                <th>Type</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-
-    for r in recent:
-        table += f"""
-        <tr>
-            <td>{r['passenger_name']}</td>
-            <td>{r['seat_number']}</td>
-            <td>{r['travel_date']}</td>
-            <td>₹ {r['fare']}</td>
-            <td>{r['booked_by_type']}</td>
-        </tr>
-        """
-
-    table += "</tbody></table></div>"
-
-    content = f"""
-    <div class="text-center mb-5">
-        <h2 class="fw-bold">🚌 Admin Dashboard</h2>
-        <p class="text-muted">Bus Booking Management</p>
-    </div>
-
-    {cards}
-    {actions}
-    {table}
-    """
-
-    return render_template_string(BASE_HTML, content=content)
-
-    #========== /admin/bookings =========
-@app.route("/admin/bookings")
-@admin_required
-def all_bookings():
-    conn, cur = get_db()
-
-    cur.execute("""
-    SELECT id, schedule_id, seat_number,
-           passenger_name, mobile,
-           from_station, to_station,
-           travel_date, fare, status,
-           booked_by_type
-    FROM seat_bookings
-    ORDER BY id DESC
-    """)
-
-    rows = cur.fetchall()
-
-    html = """
-    <h3>All Bookings</h3>
-    <table border="1" cellpadding="5">
-    <tr>
-      <th>ID</th>
-      <th>Name</th>
-      <th>Seat</th>
-      <th>Date</th>
-      <th>Fare</th>
-      <th>Type</th>
-    </tr>
-    """
-
-    for r in rows:
-        html += f"""
-        <tr>
-          <td>{r.get('id','')}</td>
-          <td>{r.get('passenger_name','')}</td>
-          <td>{r.get('seat_number','')}</td>
-          <td>{r.get('travel_date','')}</td>
-          <td>{r.get('fare','')}</td>
-          <td>{r.get('booked_by_type','')}</td>
-        </tr>
-        """
-
-    html += "</table><br><a href='/admin'>Back</a>"
-
-    return html
-#========/admin/book======
-@app.route("/admin/book", methods=["GET","POST"])
-@admin_required
-def admin_book():
-    if request.method=="POST":
-
-        data = request.form
-
-        payload = {
-            "sid": data["sid"],
-            "seat": data["seat"],
-            "name": data["name"],
-            "mobile": data["mobile"],
-            "date": data["date"],
-            "from": data["from"],
-            "to": data["to"],
-            "payment_mode": "cash",
-            "booked_by_type": "counter",
-            "booked_by_id": 1
-        }
-
-        with app.test_client() as c:
-            c.post("/book", json=payload)
-
-        return "✅ Counter se booking ho gayi"
-
-    return """
-    <h3>Counter Booking</h3>
-
-    <form method="post">
-    Bus ID: <input name="sid"><br>
-    Seat: <input name="seat"><br>
-    Name: <input name="name"><br>
-    Mobile: <input name="mobile"><br>
-    Date: <input name="date"><br>
-    From: <input name="from"><br>
-    To: <input name="to"><br>
-
-    <button>Book</button>
-    </form>
-    """
 
 # ================= ROUTES =================
 @app.route("/")
 @safe_db
 def home():
+    if "role" not in session:
+        session.clear()
+        session["role"] = "guest"
+
     conn, cur = get_db()
 
-    # सभी Routes (बड़े cards)
+    # Fetch all routes for route cards
     cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
     routes = cur.fetchall()
 
-    # Hero Section
-    hero_section = '''
-    <div class="text-center p-5 bg-gradient-primary text-blue rounded-4 shadow-lg mx-auto mb-5" style="max-width:800px;">
-        <h1 class="display-4 fw-bold mb-4">🚌 Bus Booking India</h1>
-        <p class="lead mb-5">Live GPS Tracking + Real-time Seat Booking</p>
-        <h4 class="mb-4">📍 सबसे पहले अपना Route चुनें:</h4>
-    </div>
-    '''
+    # Fetch all unique stations for search
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+    stations = [r["station_name"] for r in cur.fetchall()]
 
-    # 🔥 Route Selection Cards (बड़ा + Clear)
-    routes_section = '<div class="row g-4 mb-5">'
-    for r in routes:
-        routes_section += f'''
-        <div class="col-md-6 col-lg-4">
-            <div class="card h-100 bg-info text-white shadow-lg border-0 hover-scale" style="border-radius:20px;cursor:pointer;">
-                <div class="card-body p-5 text-center" onclick="selectRoute({r['id']})">
-                    <h3 class="fw-bold mb-3">{r['route_name']}</h3>
-                    <div class="display-4 text-warning mb-4">🛣️ {r['distance_km']} km</div>
-                    <div class="h5 mb-3">⚡ Live GPS Tracking</div>
-                    <button class="btn btn-success btn-lg px-5">
-                        🚀 Buses देखें → Bus {r['id']}
-                    </button>
-                </div>
+    return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
+
+
+@app.route("/dashboard")
+def dashboard():
+    if not session.get("user_logged_in"):
+        return redirect("/login")
+
+    role = session.get("role", "user")
+
+    # Admin को extra links
+    admin_links = ""
+    if role.lower() == "admin":
+        admin_links = """
+        <div class="mt-3">
+            <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
+            <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
+            <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
+            <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
+
+        </div>
+        """
+
+    return render_template_string(
+        BASE_HTML,
+        content=f"""
+        <div class="text-center mt-5">
+            <h2>Welcome 🎉</h2>
+            <h4>Role: <b>{role.upper()}</b></h4>
+
+            <div class="mt-4">
+                <a href="/" class="btn btn-primary">🏠 Home</a>
+                <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
             </div>
-        </div>'''
-    routes_section += '</div>'
 
-    # Live GPS Status (नीचे छोटा)
-    cur.execute("""
-        SELECT s.id, s.bus_name, r.route_name, 
-               s.current_lat as lat, s.current_lng as lng
-        FROM schedules s JOIN routes r ON s.route_id = r.id
-        ORDER BY s.id LIMIT 4
-    """)
-    live_buses = cur.fetchall()
-
-    live_section = '<h3 class="text-center mb-4">🟢 Live Running Buses</h3><div class="row g-4">'
-    for bus in live_buses:
-        status = "🟢 LIVE GPS" if bus.get('lat') else "⚪ Ready"
-        coords = f'{float(bus["lat"]):.4f}, {float(bus["lng"]):.4f}' if bus.get('lat') else '---'
-        live_section += f'''
-        <div class="col-md-6 col-lg-3">
-            <div class="card border-0 shadow">
-                <div class="card-body text-center p-3">
-                    <h6 class="fw-bold">{bus['bus_name']}</h6>
-                    <small class="text-muted">{bus['route_name']}</small><br>
-                    <span class="badge {'bg-success' if bus.get('lat') else 'bg-secondary'}">{status}</span>
-                    <div class="mt-2"><small>📍 {coords}</small></div>
-                </div>
-            </div>
-        </div>'''
-    live_section += '</div>'
-
-    content = hero_section + routes_section + live_section
-    return render_template_string(BASE_HTML, content=content)
+            {admin_links}
+        </div>
+        """
+    )
 
 
 @app.route("/buses/<int:rid>")
-@safe_db
+# @safe_db
 def buses(rid):
     conn, cur = get_db()
 
-    # Route name + stations
+    # Route details + stations
     cur.execute("""
         SELECT r.route_name, r.distance_km, 
                string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
@@ -911,9 +638,9 @@ def buses(rid):
     route = cur.fetchone()
 
     if not route:
-        return "❌ Route नहीं मिला", 404
+        return "Route not found", 404
 
-    # सभी schedules with LIVE GPS status
+    # All buses of this route
     cur.execute("""
         SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
                s.current_lat, s.current_lng,
@@ -930,358 +657,452 @@ def buses(rid):
     """, (rid,))
     buses_data = cur.fetchall()
 
-    # Header
-    html = f'''
-    <div class="text-center mb-5 booking-header">
-        <h2 class="display-4 fw-bold mb-3">
-            🚌 <span class="text-warning">{route['route_name']}</span>
-        </h2>
-        <div class="h4 mb-4 text-white-50">
-            📍 {route['stations']} | 🛣️ {route['distance_km']} km
-        </div>
-        <p class="lead mb-0">⏰ सभी बसों का समय + Live GPS ट्रैकिंग</p>
-    </div>
-    '''
+    # Full HTML inline
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚌 {{ route.route_name }} - Premium Booking</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+    body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
+    header { text-align:center; padding:60px 20px 40px; }
+    header h1 { font-size:42px; font-weight:700; margin-bottom:10px; text-shadow:2px 2px 10px rgba(0,0,0,0.3);}
+    header p { font-size:18px; opacity:0.9; }
+    .circle { position:absolute; border-radius:50%; opacity:0.6; animation: float 15s infinite alternate; }
+    .circle1 {width:250px;height:250px;background:#ff6a00;top:-50px;left:-50px;}
+    .circle2 {width:350px;height:350px;background:#ffd500;bottom:-100px;right:-80px;}
+    .circle3 {width:150px;height:150px;background:#00ffb0;top:200px;right:50px;}
+    @keyframes float{0%{transform:translateY(0) translateX(0);}50%{transform:translateY(-40px) translateX(20px);}100%{transform:translateY(0) translateX(0);}}
+    .bus-card {background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; box-shadow:10px 10px 20px rgba(0,0,0,0.2), -10px -10px 20px rgba(255,255,255,0.1); backdrop-filter: blur(10px); transition: transform 0.3s, box-shadow 0.3s;}
+    .bus-card:hover {transform:translateY(-10px); box-shadow:0 20px 40px rgba(0,0,0,0.3);}
+    .bus-card h5 {font-weight:700; font-size:22px;}
+    .bus-card .badge {font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}
+    .bus-card p {margin:5px 0; font-size:15px;}
+    .bus-card .btn {border-radius:50px; font-weight:600; padding:10px 25px; transition: all 0.3s;}
+    .bus-card .btn:hover {transform: scale(1.05);}
+    .bus-info i {margin-right:8px; color:#ffd700;}
+    footer {text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff; backdrop-filter: blur(5px);}
+    @media(max-width:768px){header h1{font-size:28px;} .bus-card h5{font-size:18px;}}
+    </style>
+    </head>
+    <body>
 
-    if not buses_data:
-        html += '<div class="alert alert-warning text-center"><h4>⚠️ आज इस रूट पर कोई बस नहीं</h4></div>'
-    else:
-        html += '<h3 class="text-center mb-5">🚌 आज उपलब्ध बसें</h3>'
+    <div class="circle circle1"></div>
+    <div class="circle circle2"></div>
+    <div class="circle circle3"></div>
 
-        # Schedule cards - बड़ा + attractive design
-        for bus in buses_data:
-            dep_time = bus['departure_time'].strftime('%H:%M')
-            gps_status = "🟢 LIVE GPS" if bus.get('current_lat') else "⚪ Ready"
-            gps_coords = f"{bus['current_lat']:.4f}, {bus['current_lng']:.4f}" if bus.get('current_lat') else ""
-            seats_left = bus['total_seats'] - bus['booked_count']
+    <header>
+        <h1>🚌 {{ route.route_name }} - Premium Booking</h1>
+        <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} km</p>
+    </header>
 
-            html += f'''
-            <div class="row mb-5">
-                <div class="col-lg-8 mx-auto">
-                    <div class="card bus-card h-100 shadow-lg border-0" style="border-radius:25px;">
-                        <div class="card-body p-5 text-center position-relative overflow-hidden">
-                            <!-- GPS Badge -->
-                            <div class="position-absolute top-0 end-0 m-3">
-                                <span class="badge fs-6 px-3 py-2 {"bg-success text-white" if bus.get('current_lat') else "bg-secondary"}">
-                                    {gps_status}
-                                </span>
-                            </div>
-
-                            <!-- Bus Info -->
-                            <div class="mb-4">
-                                <h3 class="fw-bold mb-3 display-6">{bus['bus_name']}</h3>
-                                <div class="h2 text-primary mb-4">
-                                    <i class="fas fa-clock me-2"></i>{dep_time}
-                                </div>
-                                <div class="row text-center">
-                                    <div class="col-md-4">
-                                        <div class="h5 mb-1 text-success">🎫</div>
-                                        <div>सीटें बाकी</div>
-                                        <div class="h4 fw-bold text-success">{seats_left}</div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="h5 mb-1 text-info">💺</div>
-                                        <div>कुल</div>
-                                        <div class="h4 fw-bold text-info">{bus['total_seats']}</div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <div class="h5 mb-1 text-warning">📱</div>
-                                        <div>GPS</div>
-                                        <div class="h6 {"text-success fw-bold" if bus.get('current_lat') else "text-muted"}">
-                                            {gps_status}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {gps_coords and f'''
-                            <div class="alert alert-warning mt-4">
-                                📍 LIVE लोकेशन: <strong>{gps_coords}</strong>
-                            </div>''' or ""}
-
-                            <!-- Action Buttons -->
-                            <div class="d-grid gap-3 d-md-flex mt-4">
-                                <a href="/live-bus/{bus['id']}" class="btn btn-primary btn-lg flex-fill btn-custom">
-                                    <i class="fas fa-map-marker-alt me-2"></i>Live GPS
-                                </a>
-                                <a href="/select/{bus['id']}" class="btn btn-success btn-lg flex-fill btn-custom">
-                                    <i class="fas fa-chair me-2"></i>सीट बुक करें
-                                </a>
-                            </div>
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                {% if buses %}
+                    {% for bus in buses %}
+                    <div class="bus-card">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5>{{ bus.bus_name }} <i class="fas fa-bus"></i></h5>
+                            <span class="badge {{ 'bg-success' if bus.current_lat else 'bg-secondary' }}">
+                                {{ '🟢 LIVE' if bus.current_lat else '⚪ Offline' }}
+                            </span>
                         </div>
-                    </div>
-                </div>
-            </div>'''
+                        <div class="bus-info mt-2">
+                            <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
+                            <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
+                        </div>
 
-    # Back button
-    html += '''
-    <div class="text-center mt-5">
-        <a href="/" class="btn btn-outline-light btn-lg btn-custom">
-            <i class="fas fa-arrow-left me-2"></i>← सभी Routes देखें
-        </a>
-    </div>'''
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
+                            <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
+                        </div>
 
-    return render_template_string(BASE_HTML, content=html)
+                    {% endfor %}
+                {% else %}
+                    <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        &copy; 2026 MyBus. All Rights Reserved.
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+        """
+
+    return render_template_string(html, route=route, buses=buses_data)
 
 
-@app.route("/select/<int:sid>", methods=["GET", "POST"])
-@safe_db
-def select(sid):
-    conn, cur = get_db()
-    cur.execute("SELECT route_id FROM schedules WHERE id=%s", (sid,))
-    row = cur.fetchone()
-    route_id = row["route_id"] if row else 1
-
-    cur.execute("SELECT station_name FROM route_stations WHERE route_id=%s ORDER BY station_order", (route_id,))
-    stations = [r["station_name"] for r in cur.fetchall()]
-
-    opts = "".join(f"<option>{s}</option>" for s in stations)
-    today = date.today().isoformat()
+# **** create counter ******
+@app.route("/create-counter", methods=["GET", "POST"])
+@admin_required
+def create_counter():
+    error = ""
+    success = ""
 
     if request.method == "POST":
-        fs = request.form["from"]
-        ts = request.form["to"]
-        d = request.form["date"]
-        return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+        username = request.form.get("username")
+        password = request.form.get("password")
 
-    form = f'''
-    <div class="card mx-auto" style="max-width:500px">
+        if not username or not password:
+            error = "सभी fields भरें"
+        else:
+            try:
+                conn, cur = get_db()
+                cur.execute("""
+                    INSERT INTO admins (username, password, role)
+                    VALUES (%s, %s, 'counter')
+                    ON CONFLICT (username) DO NOTHING
+                """, (username, password))
+                conn.commit()
+                success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
+            except Exception as e:
+                conn.rollback()
+                error = str(e)
+
+    form_html = f"""
+    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
         <div class="card-body">
-            <h5 class="card-title text-center">🎫 Journey Details</h5>
+            <h4 class="card-title text-center mb-4">➕ Create New Counter</h4>
+
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label">From:</label>
-                    <select name="from" class="form-select" required>{opts}</select>
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">To:</label>
-                    <select name="to" class="form-select" required>{opts}</select>
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control" required>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">Date:</label>
-                    <input type="date" name="date" class="form-control" value="{today}" min="{today}" required>
-                </div>
-                <button class="btn btn-success w-100">View Available Seats</button>
+
+                <button class="btn btn-success w-100">Create Counter</button>
             </form>
+
+            {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
+            {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
         </div>
-    </div>'''
-    return render_template_string(BASE_HTML, content=form)
+    </div>
+    """
+
+    return render_template_string(BASE_HTML, content=form_html)
+
+
+# ******* login ********
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(LOGIN_HTML, error=error)
+    )
+
+
+# ******* counter ********
+@app.route("/counter", methods=["GET", "POST"])
+def counter():
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(LOGIN_HTML, error=error)
+    )
+
+
+@app.route("/select/<int:sid>")
+@safe_db
+def select(sid):
+    fs = session.get("from")
+    ts = session.get("to")
+    d = session.get("date")
+
+    if not fs or not ts or not d:
+        return redirect("/")
+
+    return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
 
 @app.route("/seats/<int:sid>")
 @safe_db
-def seats(sid):
-    fs = request.args.get("fs", "बीकानेर")
-    ts = request.args.get("ts", "जयपुर")
-    d = request.args.get("d", date.today().isoformat())
-
+def seat_page(sid):
     conn, cur = get_db()
 
-    # ===== STATION ORDER =====
+    # ===== Schedule details =====
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name,
+               r.id as route_id, s.current_lat, s.current_lng
+        FROM schedules s
+        JOIN routes r ON s.route_id = r.id
+        WHERE s.id = %s
+    """, (sid,))
+    schedule = cur.fetchone()
+    if not schedule:
+        return "Schedule not found", 404
+
+    # ===== Route stations =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
-        WHERE route_id = (SELECT route_id FROM schedules WHERE id=%s)
-        ORDER BY station_order
-    """, (sid,))
-    stations_data = cur.fetchall()
-
-    station_to_order = {r['station_name']: r['station_order'] for r in stations_data}
-
-    fs_order = station_to_order.get(fs, 1)
-    ts_order = station_to_order.get(ts, 2)
-
-    # ===== BOOKED SEATS =====
-    cur.execute("""
-        SELECT seat_number, from_station, to_station
-        FROM seat_bookings
-        WHERE schedule_id=%s
-        AND travel_date=%s
-        AND status='confirmed'
-    """, (sid, d))
-
-    booked_rows = cur.fetchall()
-    booked_seats = set()
-
-    for row in booked_rows:
-        b_fs = station_to_order.get(row['from_station'], 0)
-        b_ts = station_to_order.get(row['to_station'], 0)
-
-        if not (ts_order <= b_fs or fs_order >= b_ts):
-            booked_seats.add(row['seat_number'])
-
-    # ===== SEAT BUTTONS =====
-    seat_buttons = ""
-    available_count = 40 - len(booked_seats)
-
-    for i in range(1, 41):
-        if i in booked_seats:
-            seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
-        else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
-
-    # ===== BUS LOCATION =====
-    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
-    bus = cur.fetchone()
-
-    lat = float(bus['current_lat'] or 27.2)
-    lng = float(bus['current_lng'] or 75.0)
-
-    # ===== ROUTE STATIONS FOR MAP =====
-    cur.execute("""
-        SELECT lat, lng, station_name
-        FROM route_stations
         WHERE route_id=%s
         ORDER BY station_order
-    """, (bus['route_id'],))
-
+    """, (schedule['route_id'],))
     stations = cur.fetchall()
 
-    import json
-    stations_json = json.dumps(stations, ensure_ascii=False)
+    # ===== Already booked seats =====
+    today = session.get("date", date.today().isoformat())
+    cur.execute("""
+        SELECT seat_number
+        FROM seat_bookings
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """, (sid, today))
+    booked = cur.fetchall()
+    booked_seats = set(r['seat_number'] for r in booked)
 
-    # ================= HTML =================
-    html = f"""
+    # ===== Seat buttons =====
+    seat_buttons = ""
+    for i in range(1, 41):  # Total 40 seats
+        if i in booked_seats:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
+            '''
+        else:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
+            '''
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    # ===== Bus default location =====
+    user_role = session.get("role", "guest")
+    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
+    bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
+    bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
+    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
 
-<style>
-#seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
-.btn-success{{background:#28a745 !important;}}
-.btn-danger{{background:#dc3545 !important;}}
+    # ===== Map div =====
+    map_div = """
+    <div id="map" style="
+        width:100%;
+        max-width:900px;
+        height:300px;
+        border-radius:12px;
+        overflow:hidden;
+        box-shadow:0 4px 10px rgba(0,0,0,0.2);
+    "></div>
+    """
+    # ===== Role color =====
+    role_color = {
+        "admin": "red",
+        "counter": "green",
+        "conductor": "blue",
+        "user": "orange"
+    }.get(user_role, "gray")
+    # ===== Full HTML =====
+    html_content = f"""
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-.bus-icon{{
-   width:30px !important;
-    height:30px !important;
-    background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-    background-size:contain;
-    background-repeat:no-repeat;
-    filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
-}}
-</style>
+    <div class="container" style="max-width:900px;margin:auto;">
+        <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
+        <h5>
+        Role:
+        <span style="color:{role_color};font-weight:bold;">
+            {user_role.upper()}
+        </span>
+    </h5>
+        <h5>Live Location</h5>
+        {map_div}
 
-<div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available: <span class="badge bg-success">{available_count}</span>
-</div>
+        <h5 style="margin-top:30px;">Select Seat</h5>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            {seat_buttons}
+        </div>
+    </div>
 
-<div id="seat-map"></div>
+    <script>
+   const socket = io(window.location.origin);
+    const SID = {sid};
+    const TODAY = "{today}";
+    const BUS_LAT = {bus_lat};
+    const BUS_LNG = {bus_lon};
+    const COUNTER_ID = {counter_js};
 
-<div class="text-center">
-  {seat_buttons}
-</div>
+    // ===== Leaflet Map Init =====
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15); // zoom 15 = city/highway level
 
-<script>
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }}).addTo(map);
 
-const sid = {sid};
+    let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
 
-// ===== MAP =====
-const map = L.map('seat-map').setView([{lat}, {lng}], 9);
-
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
-
-const stations = {stations_json};
-
-let routePoints = [];
-
-stations.forEach(st => {{
-    let la = parseFloat(st.lat);
-    let ln = parseFloat(st.lng);
-
-    if(!isNaN(la) && !isNaN(ln)){{
-        routePoints.push([la,ln]);
-
-        L.marker([la,ln])
-         .addTo(map)
-         .bindPopup(st.station_name);
-    }}
-}});
-
-if(routePoints.length >= 2){{
-    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
-    map.fitBounds(poly.getBounds());
-}}
-
-// ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
-let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
-
-// ===== SOCKET =====
-const socket = io();
-
-socket.on("bus_location", d => {{
-   if(d.sid == sid){{
-       busMarker.setLatLng([d.lat, d.lng]);
-   }}
-}});
-
-socket.on("seat_update", d => {{
-   if(d.sid == sid){{
-       markSeatBooked(d.seat);
-   }}
-}});
-
-// ===== HELPER =====
-function markSeatBooked(seat){{
-    const btns = document.querySelectorAll(".seat");
-    const btn = btns[seat-1];
-
-    if(btn){{
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X";
-        btn.disabled = true;
-    }}
-}}
-
-// ===== BOOK SEAT =====
-async function bookSeat(seat, btn){{
-
-    let name = prompt("Passenger Name");
-    if(!name) return;
-
-    let mobile = prompt("Mobile Number");
-    if(!mobile) return;
-
-    let payload = {{
-        sid: sid,
-        seat: seat,
-        name: name,
-        mobile: mobile,
-        date: "{d}",
-        from: "{fs}",
-        to: "{ts}",
-        payment_mode: "cash",
-
-        booked_by_type: "user",
-        booked_by_id: 1
-    }};
-
-    let res = await fetch("/book", {{
-        method:"POST",
-        headers:{{"Content-Type":"application/json"}},
-        body: JSON.stringify(payload)
+    // ===== Bus location update =====
+    socket.on("bus_location", data => {{
+        if(data.sid == SID){{
+            let lat = parseFloat(data.lat);
+            let lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat, lng]);
+            map.flyTo([lat,lng], map.getZoom());;
+        }}
     }});
 
-    let data = await res.json();
+    // ===== Seat update realtime =====
+    socket.on("seat_update", function(data) {{
+        if(SID != data.sid || TODAY != data.date) return;
 
-    if(data.ok){{
-        markSeatBooked(seat);
-        alert("Seat Booked Successfully ✅");
-    }} 
-    else {{
-        alert(data.error);
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn){{
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerText = "X" + data.seat;
+        }}
+    }});
+     setInterval(()=>{{
+    fetch("/heartbeat");
+    }}, 30000);
+
+    // ===== Seat Booking =====
+    function bookSeat(seatId){{
+        let name = prompt("Passenger Name:");
+        if(!name) return;
+
+        let mobile = prompt("Mobile Number:");
+        if(!mobile) return;
+
+        let btn = document.getElementById("seat-" + seatId);
+        let oldText = btn.innerText;
+        btn.innerText = "⏳ Booking...";
+        btn.disabled = true;
+        let fare = null;
+        let payment_mode = "cash";
+        if(COUNTER_ID !== null){{
+            fare = prompt("Fare amount:");
+            if(!fare || isNaN(fare)){{
+                alert("Invalid fare");
+            return;
+            }}
+
+         payment_mode = prompt("Payment mode: cash / online", "cash");
+        if(payment_mode !== "cash" && payment_mode !== "online"){{
+            alert("Only cash or online allowed");
+            return;
+            }}
+        }}
+        fetch("/book", {{
+            method: "POST",
+            headers: {{ "Content-Type":"application/json" }},
+            body: JSON.stringify({{
+                schedule_id: SID,
+                seat_number: seatId,
+                passenger_name: name,
+                mobile: mobile,
+                date: TODAY,
+                fare: fare,
+                payment_mode: payment_mode,
+                counter_id: COUNTER_ID
+            }})
+        }})
+        .then(r => r.json())
+        .then(res => {{
+            if(res.ok){{
+                alert("Seat booked! Fare: ₹" + res.fare);
+            }} else {{
+                alert(res.error || res.msg);
+                btn.innerText = oldText;
+                btn.disabled = false;
+            }}
+        }})
+        .catch(err => {{
+            console.error(err);
+            btn.innerText = oldText;
+            btn.disabled = false;
+        }});
     }}
-}}
 
-</script>
-"""
 
-    return render_template_string(BASE_HTML, content=html)
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=html_content)
+
+
+@app.route("/heartbeat")
+def heartbeat():
+    return "ok"
 
 
 @app.route("/book", methods=["POST"])
@@ -1289,87 +1110,61 @@ async function bookSeat(seat, btn){{
 def book():
     data = request.get_json()
 
-    # ===== Required fields =====
-    required = [
-        'sid', 'seat', 'name', 'mobile', 'date',
-        'from', 'to', 'payment_mode',
-        'booked_by_type', 'booked_by_id'
-    ]
-
-    for field in required:
-        if field not in data or str(data[field]).strip() == "":
-            return jsonify({"ok": False, "error": f"Missing field: {field}"})
-
     conn, cur = get_db()
 
     try:
-        # ===== Check if seat already booked =====
         cur.execute("""
             SELECT id FROM seat_bookings
             WHERE schedule_id=%s 
             AND seat_number=%s 
             AND travel_date=%s
             AND status='confirmed'
-        """, (data['sid'], data['seat'], data['date']))
+        """, (data['schedule_id'], data['seat_number'], data['date']))
 
         if cur.fetchone():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-        # ===== Temporary Fare =====
-        fare = random.randint(250, 450)
+        user_role = session.get("role", "user")
 
-        # 👉 RAZORPAY IGNORE → ALWAYS CASH
-        status = "confirmed"
-        payment_mode = "cash"
+        if user_role == "counter":
+            fare = int(data.get("fare", 0))
+            payment_mode = data.get("payment_mode", "cash")
+        else:
+            fare = random.randint(250, 450)
+            payment_mode = "cash"
 
-        # ===== INSERT BOOKING =====
         cur.execute("""
         INSERT INTO seat_bookings
         (
-            schedule_id,
-            seat_number,
-            passenger_name,
-            mobile,
-            from_station,
-            to_station,
-            travel_date,
-            fare,
-            status,
-            payment_mode,
-            booked_by_type,
-            booked_by_id,
-            counter_id
+         schedule_id, seat_number, passenger_name, mobile,
+         from_station, to_station, travel_date,
+         fare, status, payment_mode,
+         booked_by_type, booked_by_id, counter_id
         )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s)
         """, (
-            data['sid'],
-            data['seat'],
-            data['name'],
+            int(data['schedule_id']),
+            int(data['seat_number']),
+            data['passenger_name'],
             data['mobile'],
-            data['from'],
-            data['to'],
+            session.get("from"),
+            session.get("to"),
             data['date'],
-            fare,
-            status,
-            payment_mode,
-            data['booked_by_type'],
-            data['booked_by_id'],
-            data.get('counter_id')  # optional
+            int(fare),
+            'confirmed',  # status
+            payment_mode,  # payment_mode
+            user_role,  # booked_by_type
+            int(session.get("user_id", 0)),
+            int(data.get("counter_id") or 0)
         ))
-
         conn.commit()
-
-        # ===== LIVE UPDATE =====
         socketio.emit("seat_update", {
-            "sid": data['sid'],
-            "seat": data['seat']
+            "sid": data['schedule_id'],  # schedule_id को sid की जगह
+            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
+            "date": data['date']
         })
-
-        return jsonify({
-            "ok": True,
-            "fare": fare,
-            "message": "Seat booked successfully (CASH MODE)"
-        })
+        return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
         conn.rollback()
@@ -1442,7 +1237,7 @@ def driver(sid):
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io({{ transports: ["websocket", "polling"] }});
+        const socket = io(window.location.origin);
         let watchId = null;
 
         function startGPS() {{
@@ -1576,10 +1371,15 @@ def live_bus(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-    const map = L.map('map').setView([{lat}, {lng}], {13 if bus.get('lat') else 10});
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap'
-    }}).addTo(map);
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
+
+// ✅ Carto clear streets + highways
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+</script>
 
     // ===== ROUTE POLYLINE =====
     const stations = {stations_json};
@@ -1598,7 +1398,7 @@ def live_bus(sid):
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'Blue',   // thick red polyline
+            color: 'blue',   // thick red polyline
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
@@ -1615,7 +1415,7 @@ def live_bus(sid):
 
     // ===== SOCKET LIVE UPDATE =====
     const sid = {sid};
-    const socket = io({{transports:["websocket","polling"]}});
+   const socket = io(window.location.origin);
 
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
@@ -1692,6 +1492,63 @@ def verify():
     })
 
     return jsonify({"ok": True})
+
+
+@app.route("/search", methods=["POST"])
+@safe_db
+def search():
+    fs_input = request.form.get("from", "").strip()
+    ts_input = request.form.get("to", "").strip()
+    travel_date = request.form.get("date", date.today().isoformat())
+    session["from"] = fs_input
+    session["to"] = ts_input
+    session["date"] = travel_date
+    if not fs_input or not ts_input:
+        return "Please select both From and To stations", 400
+
+    fs = fs_input.lower()
+    ts = ts_input.lower()
+
+    conn, cur = get_db()
+
+    # Step 1: Find routes containing both stations
+    cur.execute("""
+        SELECT DISTINCT route_id
+        FROM route_stations
+        WHERE LOWER(station_name) = %s OR LOWER(station_name) = %s
+    """, (fs, ts))
+
+    candidate_routes = [r["route_id"] for r in cur.fetchall()]
+
+    if not candidate_routes:
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No buses for {fs_input} → {ts_input}</h3>"
+        )
+
+    # Step 2: Check correct order
+    cur.execute("""
+        SELECT r.id
+        FROM routes r
+        JOIN route_stations rs_from ON rs_from.route_id = r.id
+        JOIN route_stations rs_to   ON rs_to.route_id = r.id
+        WHERE r.id = ANY(%s::int[])
+          AND LOWER(rs_from.station_name) = %s
+          AND LOWER(rs_to.station_name) = %s
+          AND rs_from.station_order < rs_to.station_order
+        LIMIT 1
+    """, (candidate_routes, fs, ts))
+
+    route = cur.fetchone()
+
+    if not route:
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No valid route for {fs_input} → {ts_input}</h3>"
+        )
+
+    # 🔥 DIRECT REDIRECT
+    return redirect(f"/buses/{route['id']}")
 
 
 if __name__ == "__main__":

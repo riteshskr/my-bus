@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartBus AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:Poppins;}
+body{background:#f5f7fb;color:#222;transition:.4s;}
+.dark body{background:#0f172a;color:white}
+
+/* Navbar */
+nav{
+  position:fixed;
+  top:0;left:0;width:100%;
+  padding:15px 8%;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  background:rgba(0,0,0,.6);
+  backdrop-filter:blur(10px);
+  color:white;
+  z-index:999;
+}
+nav h2{font-weight:700;}
+nav a{
+  color:white;
+  margin-left:20px;
+  text-decoration:none;
+  font-weight:500;
+}
+.btn{
+  padding:8px 16px;
+  border-radius:20px;
+  background:linear-gradient(45deg,#ff512f,#dd2476);
+  border:none;
+  color:white;
+  cursor:pointer;
+}
+
+/* Hero */
+.hero{
+  height:100vh;
+  background:
+    linear-gradient(rgba(0,0,0,.5),rgba(0,0,0,.8)),
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1600&q=80");
+  background-size:cover;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  color:white;
+}
+
+.hero h1{font-size:3.5rem;}
+.hero p{font-size:1.2rem;margin:15px 0 30px;}
+
+.search-box{
+  background:white;
+  padding:20px;
+  border-radius:15px;
+  display:flex;
+  gap:10px;
+}
+.search-box input{padding:12px;border:none;border-radius:8px;background:#eee;}
+.search-box button{padding:12px 25px;border:none;border-radius:10px;background:#ff512f;color:white}
+
+/* Modal */
+.modal{
+  display:none;
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.7);
+  justify-content:center;
+  align-items:center;
+}
+.modal-content{
+  background:white;
+  padding:30px;
+  border-radius:15px;
+  width:300px;
+}
+.modal input{
+  width:100%;
+  padding:10px;
+  margin:10px 0;
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <h2>🚌 SmartBus AI</h2>
+  <div>
+    <a href="#">Home</a>
+    <a href="#">Buses</a>
+    <a href="#">My Tickets</a>
+    <a href="/admin">Admin</a>
+    <button class="btn" onclick="openModal()">Login</button>
+  </div>
+</nav>
+
+<section class="hero">
+  <div>
+    <h1>India's Smart Bus Booking</h1>
+    <p>Live Seats • Face Boarding • AI Tracking</p>
+    <div class="search-box">
+      <input placeholder="From">
+      <input placeholder="To">
+      <input type="date">
+      <button>Search</button>
+    </div>
+  </div>
+</section>
+
+<!-- LOGIN MODAL -->
+<div class="modal" id="loginModal">
+  <div class="modal-content">
+    <h3>Login</h3>
+    <input placeholder="Username">
+    <input type="password" placeholder="Password">
+    <button class="btn" style="width:100%">Login</button>
+  </div>
+</div>
+
+<script>
+function openModal(){
+  document.getElementById("loginModal").style.display="flex";
+}
+window.onclick=e=>{
+  if(e.target.id=="loginModal")
+    e.target.style.display="none";
+}
+</script>
+
+</body>
+</html>

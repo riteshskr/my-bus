@@ -1,30 +1,58 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Bus Passenger Dashboard</title>
-    <style>
-        table {border-collapse: collapse; width: 80%; margin: auto;}
-        th, td {border: 1px solid black; padding: 8px; text-align: center;}
-        th {background-color: #f2f2f2;}
-    </style>
-</head>
-<body>
-    <h2 style="text-align:center;">Bus Passenger Dashboard</h2>
-    <table>
-        <tr>
-            <th>Bus ID</th>
-            <th>Station</th>
-            <th>Passengers</th>
-            <th>Time</th>
-        </tr>
-        {% for row in data %}
-        <tr>
-            <td>{{ row[0] }}</td>
-            <td>{{ row[1] }}</td>
-            <td>{{ row[2] }}</td>
-            <td>{{ row[3] }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-3">
+            <div class="card text-center mb-4">
+                <div class="card-body">
+                    <i class="fas fa-user-circle fa-3x mb-3" style="color:#4a6491;"></i>
+                    <h5>{{ username }}</h5>
+                    <p class="text-muted">{{ role.upper() }}</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-body">
+                    <h6 class="card-title mb-3"><i class="fas fa-bars"></i> Menu</h6>
+                    <div class="list-group list-group-flush">
+                        <a href="/" class="list-group-item list-group-item-action">
+                            <i class="fas fa-home"></i> Home
+                        </a>
+                        <a href="/search-buses" class="list-group-item list-group-item-action">
+                            <i class="fas fa-search"></i> Search Buses
+                        </a>
+                        <a href="/my-bookings" class="list-group-item list-group-item-action">
+                            <i class="fas fa-ticket-alt"></i> My Bookings
+                        </a>
+                        {% if role == "admin" %}
+                            <a href="/admin/routes" class="list-group-item list-group-item-action">
+                                <i class="fas fa-route"></i> Route Management
+                            </a>
+                            <a href="/admin/schedules" class="list-group-item list-group-item-action">
+                                <i class="fas fa-bus"></i> Schedule Management
+                            </a>
+                            <a href="/admin/bookings" class="list-group-item list-group-item-action">
+                                <i class="fas fa-list"></i> All Bookings
+                            </a>
+                            <a href="/admin/create-counter" class="list-group-item list-group-item-action">
+                                <i class="fas fa-plus-circle"></i> Create Counter
+                            </a>
+                            <a href="/admin/metrics" class="list-group-item list-group-item-action">
+                                <i class="fas fa-chart-line"></i> System Metrics
+                            </a>
+                        {% endif %}
+                        <a href="/logout" class="list-group-item list-group-item-action text-danger">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-9">
+            <!-- Dashboard content continues... -->
+        </div>
+    </div>
+</div>
+{% endblock %}

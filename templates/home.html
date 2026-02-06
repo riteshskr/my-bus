@@ -1,21 +1,24 @@
 {% extends "base.html" %}
-{% block content %}
-<h2>Available Routes</h2>
-<ul>
-{% for route in routes %}
-    <li>{{ route.route_name }} - {{ route.distance_km }} km
-        <a href="/select/{{ route.id }}">Book Seat</a>
-    </li>
-{% endfor %}
-</ul>
 
-<h2>Live Bus Tracking</h2>
-<div id="map">Map placeholder</div>
-<script>
-    const socket = io();
-    socket.on("bus_location", data => {
-        console.log("Bus Location:", data);
-        // Map update code can go here
-    });
-</script>
+{% block content %}
+<section class="hero">
+    <div class="container">
+        <h1 style="font-size:3.5rem; margin-bottom:20px;">भारत का स्मार्ट बस प्लेटफॉर्म</h1>
+        <p style="font-size:1.3rem; margin-bottom:40px;">Book | Track | Heavy Traffic Optimized</p>
+        <form class="search-box" action="/search" method="POST">
+            <input name="from" placeholder="From (e.g., Bikaner)" required 
+                   style="padding:15px 20px; border:2px solid #e0e0e0; border-radius:12px; flex:1;">
+            <input name="to" placeholder="To (e.g., Jaipur)" required
+                   style="padding:15px 20px; border:2px solid #e0e0e0; border-radius:12px; flex:1;">
+            <input type="date" name="date" required min="{{ today }}"
+                   style="padding:15px 20px; border:2px solid #e0e0e0; border-radius:12px;">
+            <button type="submit" 
+                    style="padding:15px 40px; border:none; border-radius:12px; 
+                           background:linear-gradient(45deg, #4a6491, #2c3e50); 
+                           color:white; font-weight:600; cursor:pointer;">
+                <i class="fas fa-search"></i> Search
+            </button>
+        </form>
+    </div>
+</section>
 {% endblock %}

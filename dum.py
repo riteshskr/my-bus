@@ -17,7 +17,7 @@ app.jinja_env.auto_reload = False
 
 @app.after_request
 def after_request(response):
-    response.headers["Cache-Control"] = "public, max-age=3600"
+    response.headers["Cache-Control"] = "no-store"
     return response
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 

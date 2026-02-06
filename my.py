@@ -33,7 +33,6 @@ import psutil
 # ================= CONFIGURATION =================
 load_dotenv()
 
-
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
     DATABASE_URL = os.getenv("DATABASE_URL")
@@ -46,7 +45,6 @@ class Config:
     RAZORPAY_ENABLED = os.getenv("RAZORPAY_ENABLED", "false").lower() == "true"
     RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
     RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
-
 
 # ================= LOGGING SETUP =================
 logging.basicConfig(level=logging.INFO)
@@ -101,7 +99,6 @@ socketio = SocketIO(
     message_queue=Config.REDIS_URL if redis_client else None
 )
 
-
 # ================= DATABASE CONNECTION POOL =================
 def create_connection_pool():
     max_retries = 5
@@ -122,9 +119,7 @@ def create_connection_pool():
             time.sleep(2 ** i)
     raise Exception("Failed to create database pool")
 
-
 pool = create_connection_pool()
-
 
 # ================= DATABASE HELPER FUNCTIONS =================
 @contextmanager
@@ -160,7 +155,6 @@ def get_database_connection(retry_count=3):
                 except Exception as e:
                     logger.error(f"Error returning connection: {e}")
 
-
 def safe_database(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -170,9 +164,7 @@ def safe_database(func):
             logger.error(f"Database error in {func.__name__}: {str(e)}")
             traceback.print_exc()
             return jsonify({"error": "Service temporarily unavailable"}), 503
-
     return wrapper
-
 
 # ================= GPS BATCH PROCESSOR =================
 class GPSBatchProcessor:
@@ -250,9 +242,7 @@ class GPSBatchProcessor:
             logger.error(f"❌ Batch processing failed: {e}")
             self.batch.extend(batch)
 
-
 gps_processor = GPSBatchProcessor()
-
 
 # ================= ADMIN DECORATOR =================
 def admin_required(f):
@@ -263,9 +253,7 @@ def admin_required(f):
         if session.get("role") != "admin":
             return "Access Denied", 403
         return f(*a, **k)
-
     return wrap
-
 
 # ================= DATABASE INITIALIZATION =================
 def initialize_database():
@@ -496,21 +484,17 @@ def initialize_database():
             except:
                 pass
 
-
 initialize_database()
-
 
 # ================= REQUEST ID TRACKING =================
 @app.before_request
 def assign_request_id():
     g.request_id = str(uuid.uuid4())
 
-
 @app.after_request
 def add_request_id(response):
     response.headers['X-Request-ID'] = getattr(g, 'request_id', '')
     return response
-
 
 # ================= ROUTES =================
 @app.route("/")
@@ -524,7 +508,6 @@ def home():
         cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
         stations = [r["station_name"] for r in cur.fetchall()]
     return render_template("home.html", stations=stations, today=today)
-
 
 @app.route("/login", methods=["GET", "POST"])
 @safe_database
@@ -549,7 +532,6 @@ def login():
             else:
                 error = "Invalid username or password"
     return render_template("login.html", error=error)
-
 
 @app.route("/dashboard")
 @safe_database
@@ -586,7 +568,6 @@ def dashboard():
             stats["recent_bookings"] = cur.fetchall()
     return render_template("dashboard.html", stats=stats, role=role, username=username)
 
-
 @app.route("/search", methods=["POST"])
 @safe_database
 def search_buses():
@@ -610,10 +591,9 @@ def search_buses():
         """, (from_station, to_station))
         route = cur.fetchone()
     if not route:
-        return render_template("search.html", error="No direct buses found",
+        return render_template("search.html", error="No direct buses found", 
                                from_station=from_station, to_station=to_station)
     return redirect(f"/buses/{route['id']}")
-
 
 @app.route("/buses/<int:route_id>")
 @safe_database
@@ -647,7 +627,6 @@ def buses_list(route_id):
         buses = cur.fetchall()
     return render_template("buses.html", route=route, buses=buses)
 
-
 @app.route("/seats/<int:schedule_id>")
 @safe_database
 def seat_selection(schedule_id):
@@ -670,7 +649,6 @@ def seat_selection(schedule_id):
         """, (schedule_id, today))
         booked_seats = set(r['seat_number'] for r in cur.fetchall())
     return render_template("seats.html", schedule=schedule, booked_seats=booked_seats, today=today)
-
 
 @app.route("/book", methods=["POST"])
 @safe_database
@@ -722,7 +700,6 @@ def book_seat():
     })
     return jsonify({"ok": True, "fare": fare})
 
-
 @app.route("/live-bus/<int:schedule_id>")
 @safe_database
 def live_tracking(schedule_id):
@@ -749,11 +726,9 @@ def live_tracking(schedule_id):
         stations = cur.fetchall()
     return render_template("live_tracking.html", bus=bus, stations=stations)
 
-
 @app.route("/driver/<int:bus_id>")
 def driver_app(bus_id):
     return render_template("driver_app.html", bus_id=bus_id)
-
 
 @app.route("/admin/metrics")
 @admin_required
@@ -791,9 +766,8 @@ def system_metrics():
         "memory_percent": psutil.virtual_memory().percent,
         "disk_usage": psutil.disk_usage('/').percent
     }
-    return render_template("metrics.html", db_metrics=db_metrics,
-                           redis_metrics=redis_metrics, system_metrics=system_metrics)
-
+    return render_template("metrics.html", db_metrics=db_metrics, 
+                          redis_metrics=redis_metrics, system_metrics=system_metrics)
 
 @app.route("/health")
 def health_check():
@@ -815,12 +789,10 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }), 503
 
-
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect("/")
-
 
 def cleanup_old_data():
     try:
@@ -839,12 +811,10 @@ def cleanup_old_data():
     except Exception as e:
         logger.error(f"❌ Cleanup failed: {e}")
 
-
 # ================= SOCKET.IO EVENTS =================
 @socketio.on("connect")
 def handle_connect():
     logger.info(f"✅ Client connected: {request.sid}")
-
 
 @socketio.on("driver_gps")
 def handle_driver_gps(data):
@@ -866,22 +836,19 @@ def handle_driver_gps(data):
     except Exception as e:
         logger.error(f"GPS handling error: {e}")
 
-
 # ================= RUN APPLICATION =================
 if __name__ == "__main__":
     logger.info("🚀 Starting Heavy Traffic Optimized Bus App...")
-
-
+    
     def run_scheduled_jobs():
         while True:
             schedule.run_pending()
             time.sleep(60)
-
-
+    
     schedule.every().day.at("02:00").do(cleanup_old_data)
     scheduler_thread = threading.Thread(target=run_scheduled_jobs, daemon=True)
     scheduler_thread.start()
-
+    
     socketio.run(
         app,
         host="0.0.0.0",
