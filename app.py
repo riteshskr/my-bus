@@ -25,13 +25,11 @@ from concurrent.futures import ThreadPoolExecutor
 # ================= CONFIG =================
 load_dotenv()
 
-
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "secret-key-change-this-in-production")
     DATABASE_URL = os.getenv("DATABASE_URL")
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
     PORT = int(os.getenv("PORT", 10000))
-
 
 # ================= APP =================
 app = Flask(__name__)
@@ -64,7 +62,6 @@ except Exception as e:
     logger.error(f"❌ Database pool creation failed: {e}")
     pool = None
 
-
 # ================= DB CONTEXT =================
 @contextmanager
 def get_database_connection():
@@ -73,7 +70,6 @@ def get_database_connection():
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             yield conn, cur
-
 
 def safe_database(func):
     @wraps(func)
@@ -84,19 +80,16 @@ def safe_database(func):
             logger.error(f"Database error in {func.__name__}: {e}")
             traceback.print_exc()
             return jsonify({"error": "Database error"}), 500
-
     return wrapper
-
 
 # ================= SOCKET =================
 socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
+    app, 
+    cors_allowed_origins="*", 
     async_mode="eventlet",
     logger=False,
     engineio_logger=False
 )
-
 
 # ================= INIT TABLES =================
 def initialize_database():
@@ -112,7 +105,7 @@ def initialize_database():
             DROP TABLE IF EXISTS payments CASCADE;
             DROP TABLE IF EXISTS admins CASCADE;
             """)
-
+            
             # Create tables
             tables = [
                 """
@@ -197,10 +190,10 @@ def initialize_database():
                 )
                 """
             ]
-
+            
             for table_sql in tables:
                 cur.execute(table_sql)
-
+            
             # Insert default admin
             cur.execute("SELECT COUNT(*) FROM admins")
             if cur.fetchone()["count"] == 0:
@@ -208,7 +201,7 @@ def initialize_database():
                     "INSERT INTO admins(username,password,role) VALUES(%s,%s,%s)",
                     ("admin", generate_password_hash("admin123"), "admin")
                 )
-
+            
             # Insert sample routes
             cur.execute("SELECT COUNT(*) FROM routes")
             if cur.fetchone()["count"] == 0:
@@ -225,7 +218,7 @@ def initialize_database():
                         (route_name, distance)
                     )
                     route_id = cur.fetchone()["id"]
-
+                    
                     # Add stations for this route
                     if route_name == "Delhi → Jaipur":
                         stations = [
@@ -241,34 +234,32 @@ def initialize_database():
                         ]
                     else:
                         stations = [(route_id, "Start", 1, 0, 0), (route_id, "End", 2, 0, 0)]
-
+                    
                     for station in stations:
                         cur.execute(
                             "INSERT INTO route_stations(route_id, station_name, station_order, lat, lng) VALUES(%s,%s,%s,%s,%s)",
                             station
                         )
-
+                    
                     # Add schedules for this route
                     for i in range(1, 4):
                         cur.execute(
                             "INSERT INTO schedules(route_id, bus_name, departure_time) VALUES(%s,%s,%s)",
-                            (route_id, f"Bus {i} - AC Sleeper", f"{7 + i}:00:00")
+                            (route_id, f"Bus {i} - AC Sleeper", f"{7+i}:00:00")
                         )
-
+            
             conn.commit()
             logger.info("✅ Database initialized")
-
+            
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
         raise
-
 
 if os.getenv("INIT_DB", "true").lower() == "true":
     try:
         initialize_database()
     except Exception as e:
         logger.warning(f"Database initialization skipped: {e}")
-
 
 # ================= HELPER FUNCTIONS =================
 def admin_required(f):
@@ -277,15 +268,12 @@ def admin_required(f):
         if not session.get("user_logged_in") or session.get("role") != "admin":
             return redirect("/login")
         return f(*args, **kwargs)
-
     return wrapper
-
 
 def generate_booking_hash(data):
     return hashlib.sha256(
         f"{data['schedule_id']}_{data['seat_number']}_{data['date']}".encode()
     ).hexdigest()
-
 
 # ================= ROUTES =================
 @app.route("/")
@@ -298,15 +286,14 @@ def home():
             cur.execute("SELECT COUNT(*) FROM schedules WHERE is_active = true")
             active_buses = cur.fetchone()["count"]
         return render_template(
-            "index.html",
-            routes=routes,
+            "index.html", 
+            routes=routes, 
             active_buses=active_buses,
             today=date.today().isoformat()
         )
     except Exception as e:
         logger.error(f"Home route error: {e}")
         return "MyBus is starting up... Please refresh in a moment.", 503
-
 
 @app.route("/login", methods=["GET", "POST"])
 @safe_database
@@ -315,12 +302,12 @@ def login():
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
-
+        
         try:
             with get_database_connection() as (conn, cur):
                 cur.execute("SELECT * FROM admins WHERE username = %s", (username,))
                 user = cur.fetchone()
-
+                
                 if user and check_password_hash(user["password"], password):
                     session.clear()
                     session["user_logged_in"] = True
@@ -333,15 +320,13 @@ def login():
         except Exception as e:
             logger.error(f"Login error: {e}")
             error = "Database error"
-
+    
     return render_template("login.html", error=error)
-
 
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect("/")
-
 
 @app.route("/dashboard")
 @admin_required
@@ -351,14 +336,13 @@ def dashboard():
         with get_database_connection() as (conn, cur):
             cur.execute("SELECT COUNT(*) as total FROM seat_bookings WHERE DATE(created_at) = CURRENT_DATE")
             today_bookings = cur.fetchone()["total"]
-
+            
             cur.execute("SELECT COUNT(*) as total FROM schedules WHERE is_active = true")
             active_buses = cur.fetchone()["total"]
-
-            cur.execute(
-                "SELECT COALESCE(SUM(fare), 0) as total FROM seat_bookings WHERE DATE(created_at) = CURRENT_DATE")
+            
+            cur.execute("SELECT COALESCE(SUM(fare), 0) as total FROM seat_bookings WHERE DATE(created_at) = CURRENT_DATE")
             today_revenue = cur.fetchone()["total"]
-
+            
             cur.execute("""
                 SELECT sb.*, s.bus_name 
                 FROM seat_bookings sb
@@ -366,7 +350,7 @@ def dashboard():
                 ORDER BY sb.created_at DESC LIMIT 5
             """)
             recent_bookings = cur.fetchall()
-
+        
         return render_template(
             "dashboard.html",
             today_bookings=today_bookings,
@@ -378,7 +362,6 @@ def dashboard():
         logger.error(f"Dashboard error: {e}")
         return "Database error", 500
 
-
 @app.route("/health")
 def health():
     try:
@@ -389,7 +372,7 @@ def health():
                 cur.execute("SELECT 1")
         except Exception as e:
             db_status = f"error: {e}"
-
+        
         return jsonify({
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -406,27 +389,26 @@ def health():
             "timestamp": datetime.now().isoformat()
         }), 500
 
-
 # ================= SIMPLE GPS PROCESSOR =================
 class GPSBatchProcessor:
     def __init__(self):
         self.batch = []
         self.batch_size = 5
         self.lock = threading.Lock()
-
+    
     def add(self, data):
         with self.lock:
             self.batch.append(data)
             if len(self.batch) >= self.batch_size:
                 self._flush()
-
+    
     def _flush(self):
         if not self.batch:
             return
-
+        
         batch_to_process = self.batch.copy()
         self.batch = []
-
+        
         try:
             with get_database_connection() as (conn, cur):
                 for data in batch_to_process:
@@ -440,22 +422,19 @@ class GPSBatchProcessor:
                         data.get("speed", 0),
                         data.get("accuracy", 0)
                     ))
-
+                
                 conn.commit()
                 logger.info(f"Processed {len(batch_to_process)} GPS points")
-
+                
         except Exception as e:
             logger.error(f"GPS processing error: {e}")
 
-
 gps_processor = GPSBatchProcessor()
-
 
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
     logger.info(f"Client connected: {request.sid}")
-
 
 @socketio.on("driver_gps")
 def handle_driver_gps(data):
@@ -464,7 +443,6 @@ def handle_driver_gps(data):
         emit("gps_ack", {"status": "received"})
     except Exception as e:
         logger.error(f"GPS error: {e}")
-
 
 # ================= CLEANUP JOB =================
 def cleanup_old_data():
@@ -476,39 +454,33 @@ def cleanup_old_data():
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
 
-
 def scheduler_thread():
     while True:
         schedule.run_pending()
         time.sleep(60)
 
-
 if os.getenv("ENABLE_SCHEDULER", "true").lower() == "true":
     schedule.every().day.at("02:00").do(cleanup_old_data)
     threading.Thread(target=scheduler_thread, daemon=True).start()
-
 
 # ================= ERROR HANDLERS =================
 @app.errorhandler(404)
 def not_found(e):
     return render_template("404.html"), 404
 
-
 @app.errorhandler(500)
 def internal_error(e):
     return render_template("500.html"), 500
-
 
 # ================= RUN APPLICATION =================
 if __name__ == "__main__":
     logger.info("🚀 Starting MyBus App...")
     logger.info(f"🌐 Port: {Config.PORT}")
     logger.info(f"📊 Redis: {'Connected' if redis_client else 'Not configured'}")
-
+    
     # Use eventlet if available, otherwise use threading
     try:
         import eventlet
-
         socketio.run(
             app,
             host="0.0.0.0",
