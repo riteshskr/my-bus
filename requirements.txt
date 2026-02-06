@@ -13,3 +13,4 @@ python-dotenv
 requests
 mysql-connector-python
 Flask-Limiter>=4.0.0
+flask-wtf
