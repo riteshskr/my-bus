@@ -13,3 +13,5 @@ python-dotenv
 opencv-python
 requests
 numpy
+Flask-Limiter==3.5.1 
+psutil==5.9.8  
