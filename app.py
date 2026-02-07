@@ -4,17 +4,15 @@ import json
 load_dotenv()
 import setuptools
 import os, random
-from datetime import date, datetime, timedelta
+from datetime import date
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g, session, send_file
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 import atexit
 import razorpay
-import threading
-import time
 
 # import psycopg2
 razor_client = razorpay.Client(auth=(
@@ -34,7 +32,6 @@ if RAZORPAY_ENABLED:
     ))
 else:
     razor_client = None
-
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
@@ -51,37 +48,6 @@ if not DATABASE_URL:
 
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
 print("✅ Connection pool ready")
-
-# ================= GPS BACKGROUND STORAGE =================
-# Store GPS data temporarily when app is in background
-gps_backup_store = {}
-gps_last_update = {}
-
-
-# Clean old GPS data every hour
-def cleanup_gps_store():
-    while True:
-        time.sleep(3600)  # 1 hour
-        try:
-            current_time = time.time()
-            keys_to_delete = []
-            for key, data in gps_backup_store.items():
-                if current_time - data.get('timestamp', 0) > 7200:  # 2 hours old
-                    keys_to_delete.append(key)
-
-            for key in keys_to_delete:
-                del gps_backup_store[key]
-                if key in gps_last_update:
-                    del gps_last_update[key]
-
-            print(f"🧹 Cleaned {len(keys_to_delete)} old GPS entries")
-        except:
-            pass
-
-
-# Start cleanup thread
-cleanup_thread = threading.Thread(target=cleanup_gps_store, daemon=True)
-cleanup_thread.start()
 
 
 @atexit.register
@@ -187,23 +153,6 @@ def init_db():
             VALUES ('admin', '1234')
             ON CONFLICT DO NOTHING
             """)
-
-        # ===== GPS BACKUP TABLE =====
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS gps_backup (
-            id SERIAL PRIMARY KEY,
-            bus_id INT NOT NULL,
-            lat DOUBLE PRECISION NOT NULL,
-            lng DOUBLE PRECISION NOT NULL,
-            speed DOUBLE PRECISION DEFAULT 0,
-            accuracy DOUBLE PRECISION DEFAULT 50,
-            battery INT DEFAULT 100,
-            source VARCHAR(50),
-            app_state VARCHAR(20) DEFAULT 'foreground',
-            created_at TIMESTAMP DEFAULT NOW(),
-            INDEX idx_bus_time (bus_id, created_at)
-        )""")
-
         cur.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id SERIAL PRIMARY KEY,
@@ -231,7 +180,6 @@ def init_db():
             departure_time TIME, 
             current_lat DOUBLE PRECISION,
             current_lng DOUBLE PRECISION,
-            last_gps_update TIMESTAMP DEFAULT NOW(),
             total_seats INT DEFAULT 40
         )""")
 
@@ -326,14 +274,18 @@ def init_db():
 
             conn.commit()
 
-        cur.close()
-        pool.putconn(conn)  # ✅ सबसे important line
+            cur.close()
+            pool.putconn(conn)  # ✅ सबसे important line
 
-        print("✅ DB Init Complete!")
+            print("✅ DB Init Complete!")
+
 
     except Exception as e:
+
         import traceback
+
         print("❌ DB INIT REAL ERROR ↓")
+
         traceback.print_exc()
 
         try:
@@ -359,115 +311,865 @@ def gps(data):
     lat = float(data.get('lat', 27.5))
     lng = float(data.get('lng', 75.0))
     speed = float(data.get('speed', 0))
-    app_state = data.get('app_state', 'foreground')  # foreground/background
 
-    print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h [{app_state}]")
+    print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
     try:
         with app.app_context():
             conn, cur = get_db()
-
-            # Update schedule table
             cur.execute("""
                 UPDATE schedules 
-                SET current_lat=%s, current_lng=%s, last_gps_update=NOW()
+                SET current_lat=%s, current_lng=%s
                 WHERE id=%s
             """, (lat, lng, sid))
-
-            # Store in GPS backup for background tracking
-            if app_state == 'background':
-                cur.execute("""
-                    INSERT INTO gps_backup (bus_id, lat, lng, speed, source, app_state)
-                    VALUES (%s, %s, %s, %s, 'mobile_app', %s)
-                """, (sid, lat, lng, speed, app_state))
-
             conn.commit()
-
-            # Store in memory cache for quick access
-            key = f"bus_{sid}"
-            gps_backup_store[key] = {
-                'lat': lat,
-                'lng': lng,
-                'speed': speed,
-                'timestamp': time.time(),
-                'app_state': app_state
-            }
-            gps_last_update[key] = time.time()
-
-    except Exception as e:
-        print(f"GPS update error: {e}")
+    except:
         pass
 
-    # 🔥 Always emit to all clients
+    # 🔥 यही main fix है
     socketio.emit("bus_location", {
         "sid": sid,
         "lat": lat,
         "lng": lng,
         "speed": speed,
-        "app_state": app_state,
-        "timestamp": data.get('timestamp', datetime.now().isoformat())
+        "timestamp": data.get('timestamp', '')
     })
 
 
-# New event for app state changes
-@socketio.on("app_state_change")
-def handle_app_state(data):
-    sid = data.get('sid')
-    state = data.get('state', 'foreground')  # foreground/background
-    print(f"📱 Bus-{sid} app state changed to: {state}")
+# ================= HTML BASE =================
 
-    # Store last known state
-    key = f"bus_{sid}_state"
-    gps_backup_store[key] = {
-        'state': state,
-        'timestamp': time.time()
-    }
+BASE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Bus AI - Book Your Journey</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
+body{background:#f5f7fb;color:#222;}
+
+/* Navbar */
+.navbar{
+  position:fixed;
+  top:0;left:0;width:100%;
+  background:white;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:15px 8%;
+  box-shadow:0 5px 20px rgba(0,0,0,.1);
+  z-index:1000;
+}
+.logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
+.navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
+
+/* Hero */
+.hero{
+  height:100vh;
+  background:
+    linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
+  background-size:cover;
+  background-position:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
+  color:white;
+  padding-top:70px;
+}
+
+/* Search Box */
+.search-box{
+  background:white;
+  padding:20px;
+  border-radius:15px;
+  display:flex;
+  gap:10px;
+}
+.search-box input{
+  padding:12px;
+  border:none;
+  border-radius:8px;
+  outline:none;
+}
+.search-box button{
+  padding:12px 30px;
+  border:none;
+  border-radius:10px;
+  background:#ff512f;
+  color:white;
+  font-weight:600;
+  cursor:pointer;
+}
+
+/* Cards */
+.card{
+  background:white;
+  border-radius:15px;
+  box-shadow:0 10px 25px rgba(0,0,0,.1);
+  padding:20px;
+  margin-bottom:20px;
+}
+
+/* ---------- Mobile Fixes ---------- */
+@media(max-width:768px){
+
+  .navbar{
+    flex-direction:column;
+    gap:10px;
+    padding:10px 20px;
+  }
+
+  .search-box{
+    flex-direction:column;
+    width:100%;
+  }
+
+  .search-box input,
+  .search-box button{
+    width:100%;
+  }
+
+  .hero h1{font-size:1.6rem;}
+}
+</style>
+</head>
+<body>
+
+<div class="navbar">
+  <div class="logo">🚌 My Bus AI</div>
+  <div>
+    <a href="/login">Admin login</a>
+    <a href="/counter">Counter</a>
+  </div>
+</div>
+
+{% if not content %}
+<section class="hero">
+  <div>
+    <h1>India’s Smart Bus Platform</h1>
+    <p>Book | Track | Face Boarding | Live Seats</p>
+
+    <form class="search-box" action="/search" method="POST">
+      <input name="from" placeholder="From" required>
+      <input name="to" placeholder="To" required>
+      <input type="date" name="date" required>
+      <button type="submit">Search</button>
+    </form>
+  </div>
+</section>
+{% endif %}
+
+{% if content %}
+<div style="padding:100px 10%;">
+    {{ content|safe }}
+</div>
+{% endif %}
+
+</body>
+</html>
+"""
+
+HOME_HTML = """
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <select class="form-select" id="from">
+      <option selected disabled>From</option>
+      <option>Delhi</option>
+      <option>Mumbai</option>
+      <option>Bengaluru</option>
+      <option>Jaipur</option>
+    </select>
+  </div>
+
+  <div class="col-md-4">
+    <select class="form-select" id="to">
+      <option selected disabled>To</option>
+      <option>Jaipur</option>
+      <option>Pune</option>
+      <option>Chennai</option>
+      <option>Hyderabad</option>
+    </select>
+  </div>
+
+  <div class="col-md-3">
+    <input type="date" class="form-control" id="date">
+  </div>
+
+  <div class="col-md-1 d-grid">
+    <button class="btn btn-danger" onclick="searchBus()">Search</button>
+  </div>
+</div>
+
+<script>
+function searchBus(){
+  let f = document.getElementById("from").value;
+  let t = document.getElementById("to").value;
+  let d = document.getElementById("date").value;
+
+  if(!f || !t || !d){
+    alert("Please fill all fields");
+    return;
+  }
+  alert("Searching buses from " + f + " to " + t + " on " + d);
+}
+</script>
+"""
+
+# ===== login html =======
+LOGIN_HTML = """
+<div class="row justify-content-center mt-5">
+  <div class="col-md-4">
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-4">
+
+        <h3 class="text-center mb-4">Admin Login</h3>
+
+       <form method="POST" autocomplete="on">
+       <!-- Hidden fields (Chrome autofill रोकने के लिए) -->
+          <input type="text" style="display:none">
+          <input type="password" style="display:none">
+
+          <input type="text" name="username"
+                 class="form-control mb-3"
+                 placeholder="Username" required>
+
+          <input type="password" name="password"
+                 class="form-control mb-3"
+                 placeholder="Password" required>
+
+          <button class="btn btn-success w-100">
+            Login
+          </button>
+        </form>
+
+        {% if error %}
+          <div class="text-danger text-center mt-3">
+            {{ error }}
+          </div>
+        {% endif %}
+
+      </div>
+    </div>
+  </div>
+</div>
+"""
 
 
-# New event for background GPS sync
-@socketio.on("gps_sync_background")
-def sync_background_gps(data):
-    """Sync multiple GPS points from background"""
-    sid = data.get('sid')
-    points = data.get('points', [])
+# ================= ROUTES =================
+@app.route("/")
+@safe_db
+def home():
+    if "role" not in session:
+        session.clear()
+        session["role"] = "guest"
 
-    print(f"🔄 Syncing {len(points)} GPS points for Bus-{sid} from background")
+    conn, cur = get_db()
+
+    # Fetch all routes for route cards
+    cur.execute("SELECT id, route_name, distance_km FROM routes ORDER BY id")
+    routes = cur.fetchall()
+
+    # Fetch all unique stations for search
+    cur.execute("SELECT DISTINCT station_name FROM route_stations ORDER BY station_name")
+    stations = [r["station_name"] for r in cur.fetchall()]
+
+    return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
+
+
+@app.route("/dashboard")
+def dashboard():
+    if not session.get("user_logged_in"):
+        return redirect("/login")
+
+    role = session.get("role", "user")
+
+    # Admin को extra links
+    admin_links = ""
+    if role.lower() == "admin":
+        admin_links = """
+        <div class="mt-3">
+            <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
+            <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
+            <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
+            <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
+
+        </div>
+        """
+
+    return render_template_string(
+        BASE_HTML,
+        content=f"""
+        <div class="text-center mt-5">
+            <h2>Welcome 🎉</h2>
+            <h4>Role: <b>{role.upper()}</b></h4>
+
+            <div class="mt-4">
+                <a href="/" class="btn btn-primary">🏠 Home</a>
+                <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
+            </div>
+
+            {admin_links}
+        </div>
+        """
+    )
+
+
+@app.route("/buses/<int:rid>")
+# @safe_db
+def buses(rid):
+    conn, cur = get_db()
+
+    # Route details + stations
+    cur.execute("""
+        SELECT r.route_name, r.distance_km, 
+               string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+        FROM routes r 
+        LEFT JOIN route_stations rs ON r.id = rs.route_id 
+        WHERE r.id = %s 
+        GROUP BY r.id, r.route_name, r.distance_km
+    """, (rid,))
+    route = cur.fetchone()
+
+    if not route:
+        return "Route not found", 404
+
+    # All buses of this route
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
+               s.current_lat, s.current_lng,
+               COALESCE(bk.count, 0) as booked_count
+        FROM schedules s 
+        LEFT JOIN (
+            SELECT schedule_id, COUNT(*) as count 
+            FROM seat_bookings 
+            WHERE travel_date = CURRENT_DATE AND status='confirmed'
+            GROUP BY schedule_id
+        ) bk ON s.id = bk.schedule_id
+        WHERE s.route_id = %s 
+        ORDER BY s.departure_time
+    """, (rid,))
+    buses_data = cur.fetchall()
+
+    # Full HTML inline
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚌 {{ route.route_name }} - Premium Booking</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+    body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
+    header { text-align:center; padding:60px 20px 40px; }
+    header h1 { font-size:42px; font-weight:700; margin-bottom:10px; text-shadow:2px 2px 10px rgba(0,0,0,0.3);}
+    header p { font-size:18px; opacity:0.9; }
+    .circle { position:absolute; border-radius:50%; opacity:0.6; animation: float 15s infinite alternate; }
+    .circle1 {width:250px;height:250px;background:#ff6a00;top:-50px;left:-50px;}
+    .circle2 {width:350px;height:350px;background:#ffd500;bottom:-100px;right:-80px;}
+    .circle3 {width:150px;height:150px;background:#00ffb0;top:200px;right:50px;}
+    @keyframes float{0%{transform:translateY(0) translateX(0);}50%{transform:translateY(-40px) translateX(20px);}100%{transform:translateY(0) translateX(0);}}
+    .bus-card {background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; box-shadow:10px 10px 20px rgba(0,0,0,0.2), -10px -10px 20px rgba(255,255,255,0.1); backdrop-filter: blur(10px); transition: transform 0.3s, box-shadow 0.3s;}
+    .bus-card:hover {transform:translateY(-10px); box-shadow:0 20px 40px rgba(0,0,0,0.3);}
+    .bus-card h5 {font-weight:700; font-size:22px;}
+    .bus-card .badge {font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}
+    .bus-card p {margin:5px 0; font-size:15px;}
+    .bus-card .btn {border-radius:50px; font-weight:600; padding:10px 25px; transition: all 0.3s;}
+    .bus-card .btn:hover {transform: scale(1.05);}
+    .bus-info i {margin-right:8px; color:#ffd700;}
+    footer {text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff; backdrop-filter: blur(5px);}
+    @media(max-width:768px){header h1{font-size:28px;} .bus-card h5{font-size:18px;}}
+    </style>
+    </head>
+    <body>
+
+    <div class="circle circle1"></div>
+    <div class="circle circle2"></div>
+    <div class="circle circle3"></div>
+
+    <header>
+        <h1>🚌 {{ route.route_name }} - Premium Booking</h1>
+        <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} km</p>
+    </header>
+
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6">
+                {% if buses %}
+                    {% for bus in buses %}
+                    <div class="bus-card">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h5>{{ bus.bus_name }} <i class="fas fa-bus"></i></h5>
+                            <span class="badge {{ 'bg-success' if bus.current_lat else 'bg-secondary' }}">
+                                {{ '🟢 LIVE' if bus.current_lat else '⚪ Offline' }}
+                            </span>
+                        </div>
+                        <div class="bus-info mt-2">
+                            <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
+                            <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
+                            <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
+                        </div>
+
+                    {% endfor %}
+                {% else %}
+                    <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        &copy; 2026 MyBus. All Rights Reserved.
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+        """
+
+    return render_template_string(html, route=route, buses=buses_data)
+
+
+# **** create counter ******
+@app.route("/create-counter", methods=["GET", "POST"])
+@admin_required
+def create_counter():
+    error = ""
+    success = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        if not username or not password:
+            error = "सभी fields भरें"
+        else:
+            try:
+                conn, cur = get_db()
+                cur.execute("""
+                    INSERT INTO admins (username, password, role)
+                    VALUES (%s, %s, 'counter')
+                    ON CONFLICT (username) DO NOTHING
+                """, (username, password))
+                conn.commit()
+                success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
+            except Exception as e:
+                conn.rollback()
+                error = str(e)
+
+    form_html = f"""
+    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
+        <div class="card-body">
+            <h4 class="card-title text-center mb-4">➕ Create New Counter</h4>
+
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control" required>
+                </div>
+
+                <button class="btn btn-success w-100">Create Counter</button>
+            </form>
+
+            {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
+            {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
+        </div>
+    </div>
+    """
+
+    return render_template_string(BASE_HTML, content=form_html)
+
+
+# ******* login ********
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(LOGIN_HTML, error=error)
+    )
+
+
+# ******* counter ********
+@app.route("/counter", methods=["GET", "POST"])
+def counter():
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
+    return render_template_string(
+        BASE_HTML,
+        content=render_template_string(LOGIN_HTML, error=error)
+    )
+
+
+@app.route("/select/<int:sid>")
+@safe_db
+def select(sid):
+    fs = session.get("from")
+    ts = session.get("to")
+    d = session.get("date")
+
+    if not fs or not ts or not d:
+        return redirect("/")
+
+    return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
+
+
+@app.route("/seats/<int:sid>")
+@safe_db
+def seat_page(sid):
+    conn, cur = get_db()
+
+    # ===== Schedule details =====
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name,
+               r.id as route_id, s.current_lat, s.current_lng
+        FROM schedules s
+        JOIN routes r ON s.route_id = r.id
+        WHERE s.id = %s
+    """, (sid,))
+    schedule = cur.fetchone()
+    if not schedule:
+        return "Schedule not found", 404
+
+    # ===== Route stations =====
+    cur.execute("""
+        SELECT station_name, station_order
+        FROM route_stations
+        WHERE route_id=%s
+        ORDER BY station_order
+    """, (schedule['route_id'],))
+    stations = cur.fetchall()
+
+    # ===== Already booked seats =====
+    today = session.get("date", date.today().isoformat())
+    cur.execute("""
+        SELECT seat_number
+        FROM seat_bookings
+        WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
+    """, (sid, today))
+    booked = cur.fetchall()
+    booked_seats = set(r['seat_number'] for r in booked)
+
+    # ===== Seat buttons =====
+    seat_buttons = ""
+    for i in range(1, 41):  # Total 40 seats
+        if i in booked_seats:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
+            '''
+        else:
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
+            '''
+
+    # ===== Bus default location =====
+    user_role = session.get("role", "guest")
+    counter_id = session.get("user_id") if user_role in ("counter", "conductor") else None
+    bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
+    bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
+    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
+
+    # ===== Map div =====
+    map_div = """
+    <div id="map" style="
+        width:100%;
+        max-width:900px;
+        height:300px;
+        border-radius:12px;
+        overflow:hidden;
+        box-shadow:0 4px 10px rgba(0,0,0,0.2);
+    "></div>
+    """
+    # ===== Role color =====
+    role_color = {
+        "admin": "red",
+        "counter": "green",
+        "conductor": "blue",
+        "user": "orange"
+    }.get(user_role, "gray")
+    # ===== Full HTML =====
+    html_content = f"""
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <div class="container" style="max-width:900px;margin:auto;">
+        <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
+        <h5>
+        Role:
+        <span style="color:{role_color};font-weight:bold;">
+            {user_role.upper()}
+        </span>
+    </h5>
+        <h5>Live Location</h5>
+        {map_div}
+
+        <h5 style="margin-top:30px;">Select Seat</h5>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            {seat_buttons}
+        </div>
+    </div>
+
+    <script>
+   const socket = io(window.location.origin);
+    const SID = {sid};
+    const TODAY = "{today}";
+    const BUS_LAT = {bus_lat};
+    const BUS_LNG = {bus_lon};
+    const COUNTER_ID = {counter_js};
+
+    // ===== Leaflet Map Init =====
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15); // zoom 15 = city/highway level
+
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }}).addTo(map);
+
+    let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
+
+    // ===== Bus location update =====
+    socket.on("bus_location", data => {{
+        if(data.sid == SID){{
+            let lat = parseFloat(data.lat);
+            let lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat, lng]);
+            map.flyTo([lat,lng], map.getZoom());;
+        }}
+    }});
+
+    // ===== Seat update realtime =====
+    socket.on("seat_update", function(data) {{
+        if(SID != data.sid || TODAY != data.date) return;
+
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn){{
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerText = "X" + data.seat;
+        }}
+    }});
+     setInterval(()=>{{
+    fetch("/heartbeat");
+    }}, 30000);
+
+    // ===== Seat Booking =====
+    function bookSeat(seatId){{
+        let name = prompt("Passenger Name:");
+        if(!name) return;
+
+        let mobile = prompt("Mobile Number:");
+        if(!mobile) return;
+
+        let btn = document.getElementById("seat-" + seatId);
+        let oldText = btn.innerText;
+        btn.innerText = "⏳ Booking...";
+        btn.disabled = true;
+        let fare = null;
+        let payment_mode = "cash";
+        if(COUNTER_ID !== null){{
+            fare = prompt("Fare amount:");
+            if(!fare || isNaN(fare)){{
+                alert("Invalid fare");
+            return;
+            }}
+
+         payment_mode = prompt("Payment mode: cash / online", "cash");
+        if(payment_mode !== "cash" && payment_mode !== "online"){{
+            alert("Only cash or online allowed");
+            return;
+            }}
+        }}
+        fetch("/book", {{
+            method: "POST",
+            headers: {{ "Content-Type":"application/json" }},
+            body: JSON.stringify({{
+                schedule_id: SID,
+                seat_number: seatId,
+                passenger_name: name,
+                mobile: mobile,
+                date: TODAY,
+                fare: fare,
+                payment_mode: payment_mode,
+                counter_id: COUNTER_ID
+            }})
+        }})
+        .then(r => r.json())
+        .then(res => {{
+            if(res.ok){{
+                alert("Seat booked! Fare: ₹" + res.fare);
+            }} else {{
+                alert(res.error || res.msg);
+                btn.innerText = oldText;
+                btn.disabled = false;
+            }}
+        }})
+        .catch(err => {{
+            console.error(err);
+            btn.innerText = oldText;
+            btn.disabled = false;
+        }});
+    }}
+
+
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=html_content)
+
+
+@app.route("/heartbeat")
+def heartbeat():
+    return "ok"
+
+
+@app.route("/book", methods=["POST"])
+@safe_db
+def book():
+    data = request.get_json()
+
+    conn, cur = get_db()
 
     try:
-        with app.app_context():
-            conn, cur = get_db()
-            for point in points:
-                cur.execute("""
-                    INSERT INTO gps_backup (bus_id, lat, lng, speed, source, app_state)
-                    VALUES (%s, %s, %s, %s, 'mobile_background', 'background')
-                """, (sid, point['lat'], point['lng'], point.get('speed', 0)))
+        cur.execute("""
+            SELECT id FROM seat_bookings
+            WHERE schedule_id=%s 
+            AND seat_number=%s 
+            AND travel_date=%s
+            AND status='confirmed'
+        """, (data['schedule_id'], data['seat_number'], data['date']))
 
-            # Update latest location
-            if points:
-                latest = points[-1]
-                cur.execute("""
-                    UPDATE schedules 
-                    SET current_lat=%s, current_lng=%s, last_gps_update=NOW()
-                    WHERE id=%s
-                """, (latest['lat'], latest['lng'], sid))
+        if cur.fetchone():
+            return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-                # Emit latest location
-                socketio.emit("bus_location", {
-                    "sid": sid,
-                    "lat": latest['lat'],
-                    "lng": latest['lng'],
-                    "speed": latest.get('speed', 0),
-                    "app_state": "background",
-                    "timestamp": latest.get('timestamp', datetime.now().isoformat())
-                })
+        user_role = session.get("role", "user")
 
-            conn.commit()
+        if user_role == "counter":
+            fare = int(data.get("fare", 0))
+            payment_mode = data.get("payment_mode", "cash")
+        else:
+            fare = random.randint(250, 450)
+            payment_mode = "cash"
+
+        cur.execute("""
+        INSERT INTO seat_bookings
+        (
+         schedule_id, seat_number, passenger_name, mobile,
+         from_station, to_station, travel_date,
+         fare, status, payment_mode,
+         booked_by_type, booked_by_id, counter_id
+        )
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s)
+        """, (
+            int(data['schedule_id']),
+            int(data['seat_number']),
+            data['passenger_name'],
+            data['mobile'],
+            session.get("from"),
+            session.get("to"),
+            data['date'],
+            int(fare),
+            'confirmed',  # status
+            payment_mode,  # payment_mode
+            user_role,  # booked_by_type
+            int(session.get("user_id", 0)),
+            int(data.get("counter_id") or 0)
+        ))
+        conn.commit()
+        socketio.emit("seat_update", {
+            "sid": data['schedule_id'],  # schedule_id को sid की जगह
+            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
+            "date": data['date']
+        })
+        return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
-        print(f"Background GPS sync error: {e}")
+        conn.rollback()
+        return jsonify({"ok": False, "error": str(e)})
 
 
-# ================= IMPROVED DRIVER PAGE =================
 @app.route("/driver/<int:sid>")
 def driver(sid):
     return f"""
@@ -476,288 +1178,73 @@ def driver(sid):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Bus {sid} GPS - Enhanced</title>
+    <title>Bus {sid} GPS</title>
+
     <style>
         body {{
-            background-color: #1a1a2e;
-            color: white;
-            padding: 20px;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f0f0;
+            padding: 40px;
+            text-align: center;
+            font-family: sans-serif;
             margin: 0;
         }}
-        .container {{
-            max-width: 800px;
-            margin: 0 auto;
-        }}
-        header {{
-            text-align: center;
-            padding: 20px;
-            background: #16213e;
-            border-radius: 15px;
-            margin-bottom: 30px;
-        }}
         h2 {{
-            color: #4cc9f0;
-            margin: 10px 0;
+            color: #333;
         }}
-        .controls {{
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-            flex-wrap: wrap;
-            margin: 30px 0;
-        }}
-        .btn {{
+        .btn-gps {{
             padding: 15px 30px;
-            font-size: 16px;
+            font-size: 18px;
             border: none;
             border-radius: 10px;
+            background-color: #28a745;
+            color: white;
             cursor: pointer;
             font-weight: bold;
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }}
-        .btn-start {{
-            background: linear-gradient(45deg, #4CAF50, #8BC34A);
-            color: white;
         }}
         .btn-stop {{
-            background: linear-gradient(45deg, #f44336, #e91e63);
+            padding: 15px 30px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background-color: #dc3545;
             color: white;
+            cursor: pointer;
+            font-weight: bold;
+            margin-left: 10px;
         }}
-        .btn-secondary {{
-            background: linear-gradient(45deg, #2196F3, #03A9F4);
-            color: white;
-        }}
-        .status-card {{
-            background: #0f3460;
-            padding: 20px;
-            border-radius: 15px;
-            margin: 20px 0;
+        #status {{
+            font-size: 18px;
+            margin-top: 25px;
+            color: #333;
             font-family: monospace;
-            font-size: 16px;
-            line-height: 1.6;
-        }}
-        .info-grid {{
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-top: 20px;
-        }}
-        .info-item {{
-            background: rgba(255,255,255,0.1);
-            padding: 10px;
+            padding: 15px;
+            background: white;
             border-radius: 8px;
-        }}
-        .connection-status {{
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            margin-right: 10px;
-        }}
-        .connected {{ background: #4CAF50; box-shadow: 0 0 10px #4CAF50; }}
-        .disconnected {{ background: #f44336; }}
-        .instructions {{
-            background: #1e3a5f;
-            padding: 20px;
-            border-radius: 15px;
-            margin-top: 30px;
-            border-left: 5px solid #4cc9f0;
-        }}
-        .instruction-list {{
-            margin-left: 20px;
-            line-height: 1.8;
-        }}
-        .heartbeat {{
-            font-size: 12px;
-            color: #888;
-            text-align: center;
-            margin-top: 20px;
-        }}
-        @media (max-width: 600px) {{
-            .controls {{ flex-direction: column; }}
-            .info-grid {{ grid-template-columns: 1fr; }}
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }}
     </style>
 </head>
 
 <body>
-    <div class="container">
-        <header>
-            <h1>🚌 Driver GPS – Bus {sid}</h1>
-            <p>Enhanced with Background GPS Support</p>
-        </header>
 
-        <div class="controls">
-            <button id="startBtn" class="btn btn-start" onclick="startGPS()">
-                <span>🚀</span> GPS शुरू करें
-            </button>
-            <button id="stopBtn" class="btn btn-stop" onclick="stopGPS()" disabled>
-                <span>🛑</span> GPS बंद करें
-            </button>
-            <button class="btn btn-secondary" onclick="requestBackgroundPermission()">
-                <span>⚙️</span> Background Permission
-            </button>
-        </div>
+    <h2>🚗 Driver GPS – Bus {sid}</h2>
 
-        <div class="status-card">
-            <h3>📊 GPS Status</h3>
-            <div id="status">GPS बंद है</div>
+    <button id="startBtn" class="btn-gps" onclick="startGPS()">🚀 GPS शुरू करें</button>
+    <button id="stopBtn" class="btn-stop" onclick="stopGPS()" disabled>🛑 GPS बंद करें</button>
 
-            <div class="info-grid" id="locationInfo">
-                <div class="info-item"><strong>Latitude:</strong> <span id="lat">-</span></div>
-                <div class="info-item"><strong>Longitude:</strong> <span id="lng">-</span></div>
-                <div class="info-item"><strong>Speed:</strong> <span id="speed">0 km/h</span></div>
-                <div class="info-item"><strong>Accuracy:</strong> <span id="accuracy">-</span></div>
-                <div class="info-item"><strong>App State:</strong> <span id="appState">foreground</span></div>
-                <div class="info-item"><strong>Last Update:</strong> <span id="lastUpdate">-</span></div>
-            </div>
-
-            <div style="margin-top: 15px;">
-                <span class="connection-status" id="socketStatus" class="disconnected"></span>
-                <span id="socketText">Disconnected</span>
-            </div>
-        </div>
-
-        <div class="instructions">
-            <h3>📱 Important Instructions for Continuous GPS:</h3>
-            <ul class="instruction-list">
-                <li><strong>Allow "Background Location"</strong> permission in browser settings</li>
-                <li><strong>Disable battery optimization</strong> for this website</li>
-                <li>Keep this tab <strong>open in background</strong></li>
-                <li>Don't force close the browser</li>
-                <li>For Android: Use Chrome and enable "Site Settings" → "Location" → "Allow in background"</li>
-            </ul>
-        </div>
-
-        <div class="heartbeat" id="heartbeat">
-            Heartbeat: ♥
-        </div>
-    </div>
+    <div id="status">GPS बंद है</div>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io(window.location.origin);
-        const SID = {sid};
-
         let watchId = null;
-        let lastLocation = null;
-        let backgroundPoints = [];
-        let appState = 'foreground';
-        let heartbeatInterval = null;
 
-        // Socket connection status
-        socket.on('connect', () => {{
-            updateSocketStatus(true);
-        }});
-
-        socket.on('disconnect', () => {{
-            updateSocketStatus(false);
-        }});
-
-        function updateSocketStatus(connected) {{
-            const statusElem = document.getElementById('socketStatus');
-            const textElem = document.getElementById('socketText');
-
-            if (connected) {{
-                statusElem.className = 'connection-status connected';
-                textElem.textContent = 'Connected to Server';
-            }} else {{
-                statusElem.className = 'connection-status disconnected';
-                textElem.textContent = 'Disconnected';
-            }}
-        }}
-
-        // App state detection
-        document.addEventListener('visibilitychange', () => {{
-            appState = document.hidden ? 'background' : 'foreground';
-            document.getElementById('appState').textContent = appState;
-
-            // Notify server about state change
-            socket.emit('app_state_change', {{
-                sid: SID,
-                state: appState
-            }});
-
-            if (appState === 'background') {{
-                console.log('📱 App went to background - GPS continues in background mode');
-                // Reduce update frequency in background
-                if (watchId) {{
-                    navigator.geolocation.clearWatch(watchId);
-                    startBackgroundGPS();
-                }}
-            }} else {{
-                console.log('📱 App back to foreground - Switching to high accuracy GPS');
-                // Restore high accuracy GPS
-                if (watchId) {{
-                    navigator.geolocation.clearWatch(watchId);
-                    startForegroundGPS();
-                }}
-            }}
-        }});
-
-        // Request background permission
-        function requestBackgroundPermission() {{
-            if ('permissions' in navigator) {{
-                navigator.permissions.query({{name: 'background-sync'}})
-                    .then(permissionStatus => {{
-                        console.log('Background sync permission:', permissionStatus.state);
-                    }});
-            }}
-
-            if ('serviceWorker' in navigator) {{
-                navigator.serviceWorker.register('/sw.js')
-                    .then(registration => {{
-                        console.log('Service Worker registered');
-                    }});
-            }}
-
-            alert('Please enable background location in browser settings:\\n\\nChrome: Settings → Site Settings → Location → Allow in background');
-        }}
-
-        // Start GPS in foreground (high accuracy)
-        function startForegroundGPS() {{
-            const options = {{
-                enableHighAccuracy: true,
-                maximumAge: 0,
-                timeout: 10000
-            }};
-
-            watchId = navigator.geolocation.watchPosition(
-                handlePositionUpdate,
-                handlePositionError,
-                options
-            );
-
-            console.log('📍 Foreground GPS started (high accuracy)');
-        }}
-
-        // Start GPS in background (battery optimized)
-        function startBackgroundGPS() {{
-            const options = {{
-                enableHighAccuracy: false,  // Save battery
-                maximumAge: 30000,  // Accept older positions
-                timeout: 15000
-            }};
-
-            watchId = navigator.geolocation.watchPosition(
-                handlePositionUpdate,
-                handlePositionError,
-                options
-            );
-
-            console.log('📍 Background GPS started (battery optimized)');
-        }}
-
-        // Main GPS start function
         function startGPS() {{
-            const startBtn = document.getElementById('startBtn');
-            const stopBtn = document.getElementById('stopBtn');
-            const status = document.getElementById('status');
+            const startBtn = document.getElementById("startBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const status = document.getElementById("status");
 
+            // ✅ GPS support check
             if (!navigator.geolocation) {{
                 status.innerHTML = "❌ इस ब्राउज़र में GPS सपोर्ट नहीं है";
                 return;
@@ -765,431 +1252,304 @@ def driver(sid):
 
             startBtn.disabled = true;
             stopBtn.disabled = false;
-            startBtn.innerHTML = '<span>⏳</span> GPS चालू हो रहा है...';
+            startBtn.innerHTML = "⏳ GPS चालू हो रहा है...";
             status.innerHTML = "📡 GPS खोज रहे हैं...";
 
-            // Start heartbeat
-            startHeartbeat();
+            watchId = navigator.geolocation.watchPosition(
+                function (pos) {{
+                    const lat = pos.coords.latitude.toFixed(6);
+                    const lng = pos.coords.longitude.toFixed(6);
 
-            // Start based on current state
-            if (appState === 'foreground') {{
-                startForegroundGPS();
-            }} else {{
-                startBackgroundGPS();
-            }}
+                    const data = {{
+                        sid: {sid},
+                        lat: lat,
+                        lng: lng
+                    }};
 
-            // Store GPS points when in background
-            setInterval(() => {{
-                if (appState === 'background' && lastLocation) {{
-                    backgroundPoints.push({{
-                        lat: lastLocation.lat,
-                        lng: lastLocation.lng,
-                        speed: lastLocation.speed,
-                        timestamp: new Date().toISOString()
-                    }});
+                    socket.emit("driver_gps", data);
 
-                    // Keep only last 50 points
-                    if (backgroundPoints.length > 50) {{
-                        backgroundPoints = backgroundPoints.slice(-50);
-                    }}
+                    status.innerHTML = "✅ LIVE GPS<br>Latitude: " + lat + "<br>Longitude: " + lng;
+                    startBtn.innerHTML = "🚗 Live GPS चल रहा है";
+                }},
+                function (err) {{
+                    status.innerHTML = "❌ GPS Error: " + err.message;
+                    startBtn.disabled = false;
+                    stopBtn.disabled = true;
+                    startBtn.innerHTML = "🔄 GPS फिर शुरू करें";
+                }},
+                {{
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 5000
                 }}
-            }}, 10000);  // Every 10 seconds in background
-
-            // Sync background points when back to foreground
-            setInterval(() => {{
-                if (appState === 'foreground' && backgroundPoints.length > 0) {{
-                    console.log(`🔄 Syncing ${{backgroundPoints.length}} background GPS points`);
-                    socket.emit('gps_sync_background', {{
-                        sid: SID,
-                        points: backgroundPoints
-                    }});
-                    backgroundPoints = [];
-                }}
-            }}, 30000);  // Every 30 seconds
-        }}
-
-        function handlePositionUpdate(pos) {{
-            const lat = pos.coords.latitude.toFixed(6);
-            const lng = pos.coords.longitude.toFixed(6);
-            const speed = pos.coords.speed || 0;
-            const accuracy = pos.coords.accuracy.toFixed(1);
-
-            lastLocation = {{ lat, lng, speed }};
-
-            // Update UI
-            document.getElementById('lat').textContent = lat;
-            document.getElementById('lng').textContent = lng;
-            document.getElementById('speed').textContent = (speed * 3.6).toFixed(1) + ' km/h';
-            document.getElementById('accuracy').textContent = accuracy + ' m';
-            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-            document.getElementById('appState').textContent = appState;
-
-            document.getElementById('status').innerHTML = 
-                `✅ <span style="color:#4CAF50">LIVE GPS</span> - ${{appState === 'background' ? 'Background Mode' : 'Foreground Mode'}}`;
-
-            // Send to server
-            const data = {{
-                sid: SID,
-                lat: parseFloat(lat),
-                lng: parseFloat(lng),
-                speed: (speed * 3.6).toFixed(1),
-                app_state: appState,
-                timestamp: new Date().toISOString()
-            }};
-
-            socket.emit("driver_gps", data);
-
-            // Update button
-            document.getElementById('startBtn').innerHTML = '<span>🚗</span> Live GPS चल रहा है';
-
-            // Store in localStorage as backup
-            localStorage.setItem(`last_gps_${{SID}}`, JSON.stringify({{
-                ...data,
-                stored_at: Date.now()
-            }}));
-        }}
-
-        function handlePositionError(err) {{
-            console.error('GPS Error:', err);
-            document.getElementById('status').innerHTML = 
-                `❌ GPS Error: ${{err.message}}`;
-            document.getElementById('startBtn').disabled = false;
-            document.getElementById('stopBtn').disabled = true;
-            document.getElementById('startBtn').innerHTML = '<span>🔄</span> GPS फिर शुरू करें';
+            );
         }}
 
         function stopGPS() {{
-            const startBtn = document.getElementById('startBtn');
-            const stopBtn = document.getElementById('stopBtn');
-            const status = document.getElementById('status');
+            const startBtn = document.getElementById("startBtn");
+            const stopBtn = document.getElementById("stopBtn");
+            const status = document.getElementById("status");
 
             if (watchId !== null) {{
                 navigator.geolocation.clearWatch(watchId);
                 watchId = null;
             }}
 
-            // Stop heartbeat
-            stopHeartbeat();
-
-            // Sync any remaining background points
-            if (backgroundPoints.length > 0) {{
-                socket.emit('gps_sync_background', {{
-                    sid: SID,
-                    points: backgroundPoints
-                }});
-                backgroundPoints = [];
-            }}
+            socket.emit("driver_gps_stop", {{ sid: {sid} }});
 
             startBtn.disabled = false;
             stopBtn.disabled = true;
-            startBtn.innerHTML = '<span>🚀</span> GPS शुरू करें';
+            startBtn.innerHTML = "🚀 GPS शुरू करें";
             status.innerHTML = "🛑 GPS बंद कर दिया गया";
         }}
-
-        function startHeartbeat() {{
-            heartbeatInterval = setInterval(() => {{
-                // Send heartbeat to keep connection alive
-                fetch('/heartbeat');
-
-                // Update heartbeat indicator
-                const heartbeat = document.getElementById('heartbeat');
-                heartbeat.textContent = 'Heartbeat: ' + (heartbeat.textContent.includes('♥') ? '♡' : '♥');
-
-                // Check if we have location in background
-                if (appState === 'background' && !lastLocation) {{
-                    navigator.geolocation.getCurrentPosition(
-                        (pos) => {{
-                            // Just to keep GPS active
-                            console.log('Background heartbeat check - GPS active');
-                        }},
-                        null,
-                        {{ enableHighAccuracy: false }}
-                    );
-                }}
-            }}, 10000);  // Every 10 seconds
-        }}
-
-        function stopHeartbeat() {{
-            if (heartbeatInterval) {{
-                clearInterval(heartbeatInterval);
-                heartbeatInterval = null;
-            }}
-        }}
-
-        // Initialize
-        window.addEventListener('load', () => {{
-            // Check for previous GPS data
-            const storedGPS = localStorage.getItem(`last_gps_${{SID}}`);
-            if (storedGPS) {{
-                const data = JSON.parse(storedGPS);
-                console.log('Loaded previous GPS data:', data);
-            }}
-
-            // Detect initial app state
-            appState = document.hidden ? 'background' : 'foreground';
-            document.getElementById('appState').textContent = appState;
-        }});
-
-        // Prevent sleep on mobile
-        if ('wakeLock' in navigator) {{
-            let wakeLock = null;
-            async function requestWakeLock() {{
-                try {{
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    console.log('Wake Lock active');
-                }} catch (err) {{
-                    console.log('Wake Lock failed:', err);
-                }}
-            }}
-            requestWakeLock();
-        }}
     </script>
+
 </body>
 </html>
 """
 
 
-# ================= SERVICE WORKER FOR BACKGROUND SYNC =================
-@app.route('/sw.js')
-def service_worker():
-    return """
-// Service Worker for Background GPS
-const CACHE_NAME = 'gps-driver-v1';
-
-self.addEventListener('install', (event) => {
-    event.waitUntil(
-        caches.open(CACHE_NAME)
-            .then(cache => cache.addAll([
-                '/',
-                '/driver/1'
-            ]))
-    );
-});
-
-self.addEventListener('fetch', (event) => {
-    event.respondWith(
-        caches.match(event.request)
-            .then(response => response || fetch(event.request))
-    );
-});
-
-// Background Sync
-self.addEventListener('sync', (event) => {
-    if (event.tag === 'gps-sync') {
-        event.waitUntil(syncGPSData());
-    }
-});
-
-async function syncGPSData() {
-    // Get stored GPS data from IndexedDB or localStorage
-    const storedData = await getStoredGPSData();
-
-    for (const data of storedData) {
-        try {
-            await fetch('/api/gps-backup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            });
-            // Remove after successful sync
-            await removeStoredGPSData(data.id);
-        } catch (err) {
-            console.error('Sync failed:', err);
-        }
-    }
-}
-
-async function getStoredGPSData() {
-    return new Promise((resolve) => {
-        const request = indexedDB.open('GPS_DB', 1);
-        request.onsuccess = (event) => {
-            const db = event.target.result;
-            const tx = db.transaction('locations', 'readonly');
-            const store = tx.objectStore('locations');
-            const allData = store.getAll();
-            allData.onsuccess = () => resolve(allData.result || []);
-        };
-        request.onerror = () => resolve([]);
-    });
-}
-
-async function removeStoredGPSData(id) {
-    return new Promise((resolve) => {
-        const request = indexedDB.open('GPS_DB', 1);
-        request.onsuccess = (event) => {
-            const db = event.target.result;
-            const tx = db.transaction('locations', 'readwrite');
-            const store = tx.objectStore('locations');
-            store.delete(id);
-            resolve();
-        };
-    });
-}
-""", 200, {'Content-Type': 'application/javascript'}
-
-
-# ================= GPS BACKUP API =================
-@app.route('/api/gps-backup', methods=['POST'])
+@app.route("/live-bus/<int:sid>")
 @safe_db
-def gps_backup_api():
-    """API for background GPS sync"""
-    try:
-        data = request.get_json()
+def live_bus(sid):
+    conn, cur = get_db()
 
-        conn, cur = get_db()
-        cur.execute("""
-            INSERT INTO gps_backup (bus_id, lat, lng, speed, source, app_state)
-            VALUES (%s, %s, %s, %s, %s, 'background')
-        """, (
-            data.get('bus_id') or data.get('sid'),
-            data['lat'],
-            data['lng'],
-            data.get('speed', 0),
-            data.get('source', 'background_sync')
-        ))
+    # Bus + Route info
+    cur.execute("""
+        SELECT s.id, s.bus_name, s.departure_time,
+               r.id as route_id, r.route_name, r.distance_km,
+               s.current_lat as lat, s.current_lng as lng
+        FROM schedules s 
+        JOIN routes r ON s.route_id = r.id 
+        WHERE s.id = %s
+    """, (sid,))
+    bus = cur.fetchone()
 
-        # Update current location if this is the latest
-        bus_id = data.get('bus_id') or data.get('sid')
-        timestamp = data.get('timestamp') or data.get('stored_at')
+    if not bus:
+        return "Bus not found", 404
 
-        if timestamp:
-            # Check if this is newer than current location
-            cur.execute("""
-                SELECT last_gps_update FROM schedules WHERE id = %s
-            """, (bus_id,))
-            schedule = cur.fetchone()
+    lat = float(bus.get('lat', 27.2))
+    lng = float(bus.get('lng', 74.2))
 
-            if not schedule or not schedule['last_gps_update'] or \
-                    (timestamp > schedule['last_gps_update'].timestamp() * 1000):
-                cur.execute("""
-                    UPDATE schedules 
-                    SET current_lat = %s, current_lng = %s, last_gps_update = NOW()
-                    WHERE id = %s
-                """, (data['lat'], data['lng'], bus_id))
+    # Route Stations for Polyline
+    cur.execute("""
+        SELECT lat, lng, station_name
+        FROM route_stations
+        WHERE route_id=%s
+        ORDER BY station_order
+    """, (bus['route_id'],))
+    stations = cur.fetchall()
 
-                # Emit to clients
-                socketio.emit('bus_location', {
-                    'sid': bus_id,
-                    'lat': data['lat'],
-                    'lng': data['lng'],
-                    'speed': data.get('speed', 0),
-                    'app_state': 'background',
-                    'timestamp': data.get('timestamp', datetime.now().isoformat())
-                })
+    import json
+    stations_json = json.dumps(stations)  # ✅ Python side JSON
 
-        conn.commit()
+    content = f'''
+    <style>
+    #map{{height:70vh;width:100%;border-radius:20px;box-shadow:0 20px 40px rgba(0,0,0,0.3);}}
+    .live-bus{{animation:pulse 2s infinite;width:30px;height:30px;background:#ff4444;border-radius:50%;border:3px solid #fff;box-shadow:0 0 20px #ff4444;}}
+    @keyframes pulse{{0%,100%{{transform:scale(1);}}50%{{transform:scale(1.2);}}}}
+    .stats-card{{background:rgba(255,255,255,0.95);backdrop-filter:blur(20px);padding:15px;}}
+    </style>
 
-        return jsonify({'ok': True, 'message': 'GPS backup saved'})
+    <div class="text-center mb-5">
+        <h2 class="display-5 fw-bold mb-2">🚌 {bus['bus_name']}</h2>
+        <h5 class="text-muted mb-1">{bus['route_name']} ({bus['distance_km']}km)</h5>
+        <div class="h6 {'text-success' if bus.get('lat') else 'text-warning'} mb-3">
+            {"🟢 LIVE GPS" if bus.get('lat') else "📡 Waiting for GPS..."}
+        </div>
+    </div>
 
-    except Exception as e:
-        print(f"GPS backup error: {e}")
-        return jsonify({'ok': False, 'error': str(e)}), 500
+    <div class="row g-4">
+        <div class="col-lg-12">
+            <div id="map" class="rounded-4"></div>
+        </div>
+    </div>
 
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
-# ================= GET LAST KNOWN LOCATION =================
-@app.route('/api/last-location/<int:bus_id>')
-@safe_db
-def get_last_location(bus_id):
-    """Get last known location of a bus"""
-    try:
-        conn, cur = get_db()
+    <script>
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
 
-        # First try from schedules
-        cur.execute("""
-            SELECT current_lat as lat, current_lng as lng, 
-                   last_gps_update, bus_name
-            FROM schedules 
-            WHERE id = %s AND current_lat IS NOT NULL
-        """, (bus_id,))
-        schedule = cur.fetchone()
+// ✅ Carto clear streets + highways
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+</script>
 
-        if schedule:
-            return jsonify({
-                'ok': True,
-                'lat': schedule['lat'],
-                'lng': schedule['lng'],
-                'last_update': schedule['last_gps_update'].isoformat() if schedule['last_gps_update'] else None,
-                'bus_name': schedule['bus_name'],
-                'source': 'realtime'
-            })
+    // ===== ROUTE POLYLINE =====
+    const stations = {stations_json};
+    let routePoints = [];
 
-        # Fallback to GPS backup table
-        cur.execute("""
-            SELECT lat, lng, created_at
-            FROM gps_backup 
-            WHERE bus_id = %s 
-            ORDER BY created_at DESC 
-            LIMIT 1
-        """, (bus_id,))
-        backup = cur.fetchone()
+    stations.forEach(st => {{
+        const lat = parseFloat(st.lat);
+        const lng = parseFloat(st.lng);
+        if(!isNaN(lat) && !isNaN(lng)){{
+            routePoints.push([lat,lng]);
+            // Station markers
+            L.marker([lat,lng]).addTo(map).bindPopup("📍 " + st.station_name);
+        }}
+    }});
 
-        if backup:
-            return jsonify({
-                'ok': True,
-                'lat': backup['lat'],
-                'lng': backup['lng'],
-                'last_update': backup['created_at'].isoformat(),
-                'source': 'backup'
-            })
+    let routeLine = null;
+    if(routePoints.length > 1){{
+        routeLine = L.polyline(routePoints, {{
+            color: 'blue',   // thick red polyline
+            weight: 8,
+            opacity: 0.9
+        }}).addTo(map);
+        map.fitBounds(routeLine.getBounds());
+    }}
 
-        # Fallback to memory cache
-        key = f"bus_{bus_id}"
-        if key in gps_backup_store:
-            data = gps_backup_store[key]
-            return jsonify({
-                'ok': True,
-                'lat': data['lat'],
-                'lng': data['lng'],
-                'last_update': datetime.fromtimestamp(data['timestamp']).isoformat(),
-                'source': 'memory_cache'
-            })
+    // ===== BUS ICON =====
+    const busIcon = L.divIcon({{
+        html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+        className: 'bus-icon',
+        iconSize: [60,60]
+    }});
+    let busMarker = L.marker(routePoints[0] || [{lat},{lng}], {{icon: busIcon}}).addTo(map);
 
-        return jsonify({'ok': False, 'message': 'No location data available'})
+    // ===== SOCKET LIVE UPDATE =====
+    const sid = {sid};
+   const socket = io(window.location.origin);
 
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
+    socket.on('connect', () => {{
+        console.log('✅ Socket Connected');
+    }});
 
+    socket.on('bus_location', data => {{
+        if(data.sid == sid){{
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat,lng]);
+            if(routeLine) map.panTo([lat,lng], {{animate:true}});
+        }}
+    }});
+    </script>
+    '''
 
-# ================= HEARTBEAT ENDPOINT =================
-@app.route('/heartbeat')
-def heartbeat():
-    """Keep connection alive"""
-    return jsonify({'status': 'alive', 'timestamp': datetime.now().isoformat()})
+    return render_template_string(BASE_HTML, content=content)
 
 
-# ================= WEB APP MANIFEST =================
-@app.route('/manifest.json')
-def manifest():
+@app.route("/create-payment", methods=["POST"])
+def create_payment():
+    if not RAZORPAY_ENABLED:
+        return jsonify({
+            "ok": False,
+            "error": "Payment gateway not configured"
+        }), 400
+
+    data = request.get_json()
+
+    order = razor_client.order.create({
+        "amount": int(data['fare']) * 100,
+        "currency": "INR",
+        "receipt": f"seat_{data['sid']}_{data['seat']}",
+        "payment_capture": 1
+    })
+
     return jsonify({
-        "name": "Bus Driver GPS",
-        "short_name": "DriverGPS",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#1a1a2e",
-        "theme_color": "#4cc9f0",
-        "icons": [
-            {
-                "src": "/static/icon-192.png",
-                "sizes": "192x192",
-                "type": "image/png"
-            },
-            {
-                "src": "/static/icon-512.png",
-                "sizes": "512x512",
-                "type": "image/png"
-            }
-        ]
+        "ok": True,
+        "order_id": order['id'],
+        "key": os.getenv("RAZORPAY_KEY_ID")
     })
 
 
-# ================= REST OF YOUR ROUTES =================
-# (Keep all your existing routes like /, /dashboard, /login, /counter, /seats, etc.)
-# They remain the same as in your original code
+@app.route("/verify-payment", methods=["POST"])
+@safe_db
+def verify():
+    data = request.get_json()
 
-# ... [YOUR EXISTING ROUTES HERE - KEEP THEM AS IS] ...
+    conn, cur = get_db()
+
+    # ✅ If Razorpay enabled → verify
+    if RAZORPAY_ENABLED:
+        try:
+            razor_client.utility.verify_payment_signature({
+                'razorpay_order_id': data['order_id'],
+                'razorpay_payment_id': data['payment_id'],
+                'razorpay_signature': data['signature']
+            })
+        except:
+            return jsonify({"ok": False, "error": "Invalid payment"}), 400
+
+    # ✅ Common confirm logic
+    cur.execute("""
+        UPDATE seat_bookings
+        SET status='confirmed'
+        WHERE schedule_id=%s AND seat_number=%s
+    """, (data['sid'], data['seat']))
+
+    conn.commit()
+
+    socketio.emit("seat_update", {
+        "sid": data['sid'],
+        "seat": data['seat']
+    })
+
+    return jsonify({"ok": True})
+
+
+@app.route("/search", methods=["POST"])
+@safe_db
+def search():
+    fs_input = request.form.get("from", "").strip()
+    ts_input = request.form.get("to", "").strip()
+    travel_date = request.form.get("date", date.today().isoformat())
+    session["from"] = fs_input
+    session["to"] = ts_input
+    session["date"] = travel_date
+    if not fs_input or not ts_input:
+        return "Please select both From and To stations", 400
+
+    fs = fs_input.lower()
+    ts = ts_input.lower()
+
+    conn, cur = get_db()
+
+    # Step 1: Find routes containing both stations
+    cur.execute("""
+        SELECT DISTINCT route_id
+        FROM route_stations
+        WHERE LOWER(station_name) = %s OR LOWER(station_name) = %s
+    """, (fs, ts))
+
+    candidate_routes = [r["route_id"] for r in cur.fetchall()]
+
+    if not candidate_routes:
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No buses for {fs_input} → {ts_input}</h3>"
+        )
+
+    # Step 2: Check correct order
+    cur.execute("""
+        SELECT r.id
+        FROM routes r
+        JOIN route_stations rs_from ON rs_from.route_id = r.id
+        JOIN route_stations rs_to   ON rs_to.route_id = r.id
+        WHERE r.id = ANY(%s::int[])
+          AND LOWER(rs_from.station_name) = %s
+          AND LOWER(rs_to.station_name) = %s
+          AND rs_from.station_order < rs_to.station_order
+        LIMIT 1
+    """, (candidate_routes, fs, ts))
+
+    route = cur.fetchone()
+
+    if not route:
+        return render_template_string(
+            BASE_HTML,
+            content=f"<h3 class='text-center mt-5 text-danger'>🚫 No valid route for {fs_input} → {ts_input}</h3>"
+        )
+
+    # 🔥 DIRECT REDIRECT
+    return redirect(f"/buses/{route['id']}")
+
 
 if __name__ == "__main__":
-    print("🚀 Bus Booking App Starting... (Enhanced GPS Support)")
-    print("📍 Background GPS is now enabled")
-    print("📱 Mobile/Windows GPS will continue in background")
+    print("🚀 Bus Booking App Starting... (Live Updates 100% Working)")
     socketio.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=True)
