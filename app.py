@@ -10,7 +10,7 @@ from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
-import face_recognition
+#import face_recognition
 import pickle
 import numpy as np
 import requests
