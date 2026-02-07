@@ -10,7 +10,6 @@ from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
-import mysql.connector
 import atexit
 import razorpay
 
