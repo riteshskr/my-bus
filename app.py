@@ -581,6 +581,45 @@ def home():
 
     return render_template_string(BASE_HTML, stations=stations, routes=routes, content=None)
 
+@app.route("/driver-app")
+def driver_app():
+    bus_id = request.args.get("bus_id", 1)
+    return render_template_string(open("driver-app.html").read())
+
+
+@app.route("/api/gps-backup", methods=["POST"])
+@safe_db
+def gps_backup():
+    data = request.get_json()
+
+    conn, cur = get_db()
+    cur.execute("""
+        INSERT INTO gps_backup (bus_id, lat, lng, speed, recorded_at)
+        VALUES (%s, %s, %s, %s, NOW())
+    """, (data['busId'], data['lat'], data['lng'], data['speed']))
+    conn.commit()
+
+    return jsonify({"ok": True})
+
+
+# Manifest file
+@app.route("/manifest.json")
+def manifest():
+    return jsonify({
+        "name": "Bus Driver GPS",
+        "short_name": "DriverGPS",
+        "start_url": "/driver-app",
+        "display": "standalone",
+        "background_color": "#000000",
+        "theme_color": "#4CAF50",
+        "icons": [
+            {
+                "src": "/static/icon-192.png",
+                "sizes": "192x192",
+                "type": "image/png"
+            }
+        ]
+    })
 
 @app.route("/dashboard")
 def dashboard():
