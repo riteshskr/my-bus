@@ -10,6 +10,7 @@ from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+import mysql.connector
 import atexit
 import razorpay
 
@@ -57,12 +58,18 @@ def shutdown_pool():
 def get_db():
     if 'db_conn' not in g:
         g.db_conn = pool.getconn()
-    return g.db_conn, g.db_conn.cursor(row_factory=dict_row)
+    if 'db_cur' not in g:
+        g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+    return g.db_conn, g.db_cur
 
 
 @app.teardown_appcontext
 def close_db(error=None):
+    cur = g.pop('db_cur', None)
     conn = g.pop('db_conn', None)
+
+    if cur:
+        cur.close()
     if conn:
         pool.putconn(conn)
 
@@ -72,19 +79,23 @@ def safe_db(func):
     def wrapper(*a, **kw):
         try:
             return func(*a, **kw)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)})
+        finally:
+            close_db()  # चाहे error आये या न आये
 
     return wrapper
 
 
 def admin_required(f):
+    @wraps(f)
     def wrap(*a, **k):
-        if "admin" not in session:
-            return redirect("/admin/login")
+        if not session.get("user_logged_in"):
+            return redirect("/login")
+
+        if session.get("role") != "admin":
+            return "Access Denied", 403
+
         return f(*a, **k)
 
-    wrap.__name__ = f.__name__
     return wrap
 
 
@@ -95,12 +106,35 @@ def init_db():
         cur = conn.cursor()
 
         # ===== TABLES =====
+        # cur.execute("DROP TABLE IF EXISTS admin CASCADE;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS faces (
+                id SERIAL PRIMARY KEY,
+                bus_id INT NOT NULL,
+                face_data BYTEA NOT NULL,
+                face_image BYTEA NOT NULL
+            );
+            """)
+
+        # face_logs table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS face_logs (
+                id SERIAL PRIMARY KEY,
+                face_id INT NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+                bus_id INT NOT NULL,
+                entry_time TIMESTAMP NOT NULL,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION
+            );
+            """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS admins (
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE,
             password VARCHAR(100),
-            role VARCHAR(20) DEFAULT 'admin'
+            role VARCHAR(20) DEFAULT 'admin',
+            counter_no INTEGER DEFAULT 0
         )
         """)
         cur.execute("SELECT COUNT(*) FROM admins ")
@@ -176,6 +210,13 @@ def init_db():
         conn.commit()
 
         # ===== DEFAULT DATA =====
+        cur.execute("SELECT COUNT(*) FROM admins")
+        count = cur.fetchone()[0]
+
+        if count == 0:
+            cur.execute(""" INSERT INTO  admins(username, password, role, counter_no)
+            VALUES('admin', 'admin123', 'admin', 1);""")
+
         cur.execute("SELECT COUNT(*) FROM routes")
         count = cur.fetchone()[0]
 
@@ -226,14 +267,18 @@ def init_db():
 
             conn.commit()
 
-        cur.close()
-        pool.putconn(conn)
+            cur.close()
+            pool.putconn(conn)  # ✅ सबसे important line
 
-        print("✅ DB Init Complete!")
+            print("✅ DB Init Complete!")
+
 
     except Exception as e:
+
         import traceback
+
         print("❌ DB INIT REAL ERROR ↓")
+
         traceback.print_exc()
 
         try:
@@ -442,8 +487,6 @@ function searchBus(){
   }
   alert("Searching buses from " + f + " to " + t + " on " + d);
 }
-
-}
 </script>
 """
 
@@ -548,6 +591,44 @@ def home():
 
     content = hero_section + routes_section + live_section
     return render_template_string(BASE_HTML, content=content)
+
+
+@app.route("/dashboard")
+def dashboard():
+    if not session.get("user_logged_in"):
+        return redirect("/login")
+
+    role = session.get("role", "user")
+
+    # Admin को extra links
+    admin_links = ""
+    if role.lower() == "admin":
+        admin_links = """
+        <div class="mt-3">
+            <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
+            <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
+            <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
+            <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
+
+        </div>
+        """
+
+    return render_template_string(
+        BASE_HTML,
+        content=f"""
+        <div class="text-center mt-5">
+            <h2>Welcome 🎉</h2>
+            <h4>Role: <b>{role.upper()}</b></h4>
+
+            <div class="mt-4">
+                <a href="/" class="btn btn-primary">🏠 Home</a>
+                <a href="/logout" class="btn btn-danger ms-2">🚪 Logout</a>
+            </div>
+
+            {admin_links}
+        </div>
+        """
+    )
 
 
 @app.route("/buses/<int:rid>")
@@ -667,19 +748,102 @@ def buses(rid):
     return render_template_string(BASE_HTML, content=html)
 
 
+# **** create counter ******
+@app.route("/create-counter", methods=["GET", "POST"])
+@admin_required
+def create_counter():
+    error = ""
+    success = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+        counter_no = request.form.get("counter_no")
+
+        if not username or not password or not counter_no:
+            error = "सभी fields भरें"
+        else:
+            try:
+                conn, cur = get_db()
+                cur.execute("""
+                    INSERT INTO admins (username, password, role, counter_no)
+                    VALUES (%s, %s, 'counter', %s)
+                    ON CONFLICT (username) DO NOTHING
+                """, (username, password, counter_no))
+                conn.commit()
+                success = f"Counter '{username}' सफलतापूर्वक बनाया गया ✅"
+            except Exception as e:
+                conn.rollback()
+                error = str(e)
+
+    form_html = f"""
+    <div class="card mx-auto" style="max-width:500px; margin-top:40px;">
+        <div class="card-body">
+            <h4 class="card-title text-center mb-4">➕ Create New Counter</h4>
+
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" name="username" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Counter Number</label>
+                    <input type="number" name="counter_no" class="form-control" required>
+                </div>
+                <button class="btn btn-success w-100">Create Counter</button>
+            </form>
+
+            {f"<div class='text-success mt-3'>{success}</div>" if success else ""}
+            {f"<div class='text-danger mt-3'>{error}</div>" if error else ""}
+        </div>
+    </div>
+    """
+
+    return render_template_string(BASE_HTML, content=form_html)
+
+
+# ******* login ********
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
 
     if request.method == "POST":
-        u = request.form.get("username")
-        p = request.form.get("password")
+        username = request.form.get("username")
+        password = request.form.get("password")
 
-        # demo credentials
-        if u == "admin" and p == "1234":
-            return redirect("/admin")
-        else:
-            error = "Invalid username or password"
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]
+                session["counter_no"] = user["counter_no"]  # admin / office / conductor
+
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
 
     return render_template_string(
         BASE_HTML,
@@ -748,7 +912,7 @@ def seats(sid):
 
     conn, cur = get_db()
 
-    # ===== STATION ORDER =====
+    # ===== Station Order =====
     cur.execute("""
         SELECT station_name, station_order
         FROM route_stations
@@ -761,150 +925,149 @@ def seats(sid):
     fs_order = station_to_order.get(fs, 1)
     ts_order = station_to_order.get(ts, 2)
 
-    # ===== BOOKED SEATS =====
+    # ===== Booked Seats =====
     cur.execute("""
         SELECT seat_number, from_station, to_station
         FROM seat_bookings
         WHERE schedule_id=%s
-        AND travel_date=%s
-        AND status='confirmed'
+          AND travel_date=%s
+          AND status='confirmed'
     """, (sid, d))
 
-    booked_rows = cur.fetchall()
     booked_seats = set()
+    for r in cur.fetchall():
+        bfs = station_to_order.get(r["from_station"], 0)
+        bts = station_to_order.get(r["to_station"], 0)
+        if not (ts_order <= bfs or fs_order >= bts):
+            booked_seats.add(r["seat_number"])
 
-    for row in booked_rows:
-        b_fs = station_to_order.get(row['from_station'], 0)
-        b_ts = station_to_order.get(row['to_station'], 0)
-
-        if not (ts_order <= b_fs or fs_order >= b_ts):
-            booked_seats.add(row['seat_number'])
-
-    # ===== SEAT BUTTONS =====
+    # ===== Seat Buttons =====
     seat_buttons = ""
-    available_count = 40 - len(booked_seats)
+    total_seats = 40
+    available = total_seats - len(booked_seats)
 
-    for i in range(1, 41):
+    for i in range(1, total_seats + 1):
         if i in booked_seats:
             seat_buttons += '<button class="btn btn-danger seat" disabled>X</button>'
         else:
-            seat_buttons += f'<button class="btn btn-success seat" onclick="bookSeat({i}, this)">{i}</button>'
+            seat_buttons += f'''
+            <button class="btn btn-success seat"
+                    onclick="bookSeat({i}, this)">
+                {i}
+            </button>'''
 
-    # ===== BUS LOCATION =====
-    cur.execute("SELECT current_lat, current_lng, route_id FROM schedules WHERE id=%s", (sid,))
+    # ===== Bus + Map =====
+    cur.execute("""
+        SELECT current_lat, current_lng, route_id
+        FROM schedules WHERE id=%s
+    """, (sid,))
     bus = cur.fetchone()
 
-    lat = float(bus['current_lat'] or 27.2)
-    lng = float(bus['current_lng'] or 75.0)
+    lat = float(bus["current_lat"] or 27.2)
+    lng = float(bus["current_lng"] or 75.0)
 
-    # ===== ROUTE STATIONS FOR MAP =====
     cur.execute("""
         SELECT lat, lng, station_name
         FROM route_stations
         WHERE route_id=%s
         ORDER BY station_order
-    """, (bus['route_id'],))
-
-    stations = cur.fetchall()
+    """, (bus["route_id"],))
     import json
-    stations_json = json.dumps(stations, ensure_ascii=False)
+    stations_json = json.dumps(cur.fetchall(), ensure_ascii=False)
+
+    role = session.get("role", "user")
+    user_id = session.get("user_id", 0)
+    counter_no = session.get("counter_no", None)
 
     # ================= HTML =================
     html = f"""
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <style>
 #seat-map{{height:260px;border-radius:20px;margin-bottom:20px;}}
-.seat{{width:55px;height:55px;margin:4px;font-weight:bold;border-radius:12px;font-size:14px;}}
-.btn-success{{background:#28a745 !important;}}
-.btn-danger{{background:#dc3545 !important;}}
-
-.bus-icon{{
-   width:30px !important;
-   height:30px !important;
-   background:url('https://cdn-icons-png.flaticon.com/512/1048/1048313.png');
-   background-size:contain;
-   background-repeat:no-repeat;
-   filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
-}}
+.seat{{width:52px;height:52px;margin:4px;font-weight:bold;border-radius:12px;}}
 </style>
 
 <div class="text-center mb-3">
-  <h3>🚌 {fs} → {ts}</h3>
-  <h5>📅 {d}</h5>
-  Available: <span class="badge bg-success">{available_count}</span>
+    <h3>🚌 {fs} → {ts}</h3>
+    <h5>📅 {d}</h5>
+    <span class="badge bg-success">Available {available}</span>
 </div>
 
 <div id="seat-map"></div>
 
-<div class="text-center">
-  {seat_buttons}
+<div class="text-center mb-4">
+    {seat_buttons}
 </div>
 
 <script>
 const sid = {sid};
+let bookingLock = false;
 
 // ===== MAP =====
-const map = L.map('seat-map').setView([{lat}, {lng}], 9);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png').addTo(map);
+const map = L.map("seat-map").setView([{lat},{lng}], 9);
+L.tileLayer("https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png").addTo(map);
 
-const stations = {stations_json};
-let routePoints = [];
-
-stations.forEach(st => {{
-    let la = parseFloat(st.lat);
-    let ln = parseFloat(st.lng);
-    if(!isNaN(la) && !isNaN(ln)){{
-        routePoints.push([la, ln]);
-        L.marker([la, ln]).addTo(map).bindPopup(st.station_name);
-    }}
+const busIcon = L.divIcon({{
+    html: '<i class="fa fa-bus" style="font-size:28px;color:green;"></i>',
+    className: 'bus-icon',
+    iconSize: [40,40]
 }});
-
-if(routePoints.length >= 2){{
-    let poly = L.polyline(routePoints,{{color:'blue',weight:6}}).addTo(map);
+let busMarker = L.marker([{lat},{lng}], {{icon: busIcon}}).addTo(map);
+// ===== STATIONS + ROUTE =====
+const stations = {stations_json};
+let routePts = [];
+stations.forEach(s => {{
+    let la = parseFloat(s.lat), ln = parseFloat(s.lng);
+    if(!isNaN(la) && !isNaN(ln)) routePts.push([la, ln]);
+}});
+if(routePts.length>1){{
+    let poly = L.polyline(routePts, {{color:'blue'}}).addTo(map);
     map.fitBounds(poly.getBounds());
 }}
 
-// ===== BUS ICON =====
-let busIcon = L.divIcon({{className:'bus-icon'}});
-let busMarker = L.marker([{lat},{lng}],{{icon:busIcon}}).addTo(map);
 
-// ===== SOCKET =====
 const socket = io();
-
-socket.on("bus_location", d => {{
-   if(d.sid == sid){{
-       busMarker.setLatLng([d.lat, d.lng]);
-   }}
-}});
-
 socket.on("seat_update", d => {{
-   if(d.sid == sid){{
-       markSeatBooked(d.seat);
-   }}
+    if(d.sid == sid) markSeatBooked(d.seat);
 }});
 
-// ===== HELPER =====
 function markSeatBooked(seat){{
-    const btns = document.querySelectorAll(".seat");
-    const btn = btns[seat-1];
+    let btn = document.querySelectorAll(".seat")[seat-1];
     if(btn){{
+        btn.disabled = true;
         btn.classList.remove("btn-success");
         btn.classList.add("btn-danger");
         btn.innerText = "X";
-        btn.disabled = true;
     }}
 }}
 
 // ===== BOOK SEAT =====
 async function bookSeat(seat, btn){{
+    if(bookingLock) return;
+
     let name = prompt("Passenger Name");
     if(!name) return;
 
     let mobile = prompt("Mobile Number");
     if(!mobile) return;
+
+    let payment = "online";  // default
+    let fare = 0;          // default
+
+    let role = "{role}";
+
+    if(role !== "user"){{
+        fare = prompt("Enter fare");
+        payment = confirm("OK = CASH | Cancel = ONLINE") ? "cash" : "online";
+    }}
+
+    bookingLock = true;
+    btn.disabled = true;
 
     let payload = {{
         sid: sid,
@@ -914,9 +1077,11 @@ async function bookSeat(seat, btn){{
         date: "{d}",
         from: "{fs}",
         to: "{ts}",
-        payment_mode: "cash",
-        booked_by_type: "user",
-        booked_by_id: 1
+        payment_mode: payment,
+        fare: fare,   
+        booked_by_type: role,
+        booked_by_id: {user_id},
+        counter_id: {counter_no if counter_no else 'null'}
     }};
 
     let res = await fetch("/book", {{
@@ -929,14 +1094,17 @@ async function bookSeat(seat, btn){{
 
     if(data.ok){{
         markSeatBooked(seat);
-        alert("Seat Booked Successfully ✅");
-    }} 
-    else {{
+        alert("Seat Booked ✅ ("+payment.toUpperCase()+")");
+    }}else{{
         alert(data.error);
+        btn.disabled = false;
     }}
+
+    bookingLock = false;
 }}
 </script>
 """
+
     return render_template_string(BASE_HTML, content=html)
 
 
@@ -953,7 +1121,7 @@ def book():
     ]
 
     for field in required:
-        if field not in data or str(data[field]).strip() == "":
+        if field not in data:
             return jsonify({"ok": False, "error": f"Missing field: {field}"})
 
     conn, cur = get_db()
@@ -972,11 +1140,24 @@ def book():
             return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
         # ===== Temporary Fare =====
-        fare = random.randint(250, 450)
+        role = data['booked_by_type']
+
+        if role == "user":
+            fare = random.randint(250, 450)
+            payment_mode = "online"
+        else:
+            fare = int(data.get("fare", 0))  # ✅ counter/admin ka input
+            payment_mode = data.get("payment_mode", "cash")
 
         # 👉 RAZORPAY IGNORE → ALWAYS CASH
-        status = "confirmed"
-        payment_mode = "cash"
+        role = data['booked_by_type']
+
+        if role == "user":
+            payment_mode = "online"
+            status = "confirmed"  # online payment ke baad confirm
+        else:
+            payment_mode = "cash"
+            status = "confirmed"
 
         # ===== INSERT BOOKING =====
         cur.execute("""
