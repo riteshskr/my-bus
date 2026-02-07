@@ -2,11 +2,10 @@ from dotenv import load_dotenv
 import json
 
 load_dotenv()
-import setuptools
 import os, random
 from datetime import date, datetime
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g, session, abort
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from psycopg_pool import ConnectionPool
@@ -79,64 +78,6 @@ def shutdown_pool():
         pool.close()
 
 
-# ================= DB CONTEXT =================
-def get_db():
-    if not DATABASE_CONNECTED:
-        return None, None
-
-    try:
-        if 'db_conn' not in g:
-            g.db_conn = pool.getconn()
-            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-        return g.db_conn, g.db_cur
-    except Exception as e:
-        print(f"Database connection error: {e}")
-        return None, None
-
-
-@app.teardown_appcontext
-def close_db(error=None):
-    if not DATABASE_CONNECTED:
-        return
-
-    conn = g.pop('db_conn', None)
-    cur = g.pop('db_cur', None)
-
-    if cur:
-        try:
-            cur.close()
-        except:
-            pass
-    if conn:
-        try:
-            pool.putconn(conn)
-        except:
-            pass
-
-
-def safe_db(func):
-    @wraps(func)
-    def wrapper(*a, **kw):
-        try:
-            return func(*a, **kw)
-        finally:
-            close_db()
-
-    return wrapper
-
-
-def admin_required(f):
-    @wraps(f)
-    def wrap(*a, **k):
-        if not session.get("user_logged_in"):
-            return redirect("/login")
-        if session.get("role") != "admin":
-            return "Access Denied", 403
-        return f(*a, **k)
-
-    return wrap
-
-
 # ================= SIMPLE TEMPLATES =================
 BASE_HTML = """
 <!DOCTYPE html>
@@ -149,7 +90,7 @@ BASE_HTML = """
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f8f9fa;
             min-height: 100vh;
             color: #333;
         }
@@ -158,7 +99,7 @@ BASE_HTML = """
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         .hero {
-            background: rgba(0,0,0,0.5);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 100px 20px;
             text-align: center;
@@ -170,6 +111,7 @@ BASE_HTML = """
             border-radius: 15px;
             max-width: 800px;
             margin: 30px auto;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }
         .card {
             border-radius: 12px;
@@ -186,6 +128,16 @@ BASE_HTML = """
         .main-content {
             padding-top: 80px;
             padding-bottom: 50px;
+        }
+        #map {
+            height: 400px;
+            width: 100%;
+            border-radius: 10px;
+            z-index: 1;
+        }
+        .map-container {
+            position: relative;
+            margin: 20px 0;
         }
     </style>
 </head>
@@ -224,7 +176,7 @@ BASE_HTML = """
                         <input type="text" name="to" class="form-control form-control-lg" placeholder="कहाँ तक?" required>
                     </div>
                     <div class="col-md-3">
-                        <input type="date" name="date" class="form-control form-control-lg" required>
+                        <input type="date" name="date" class="form-control form-control-lg" value="{{ date.today().isoformat() }}" required>
                     </div>
                     <div class="col-md-1">
                         <button type="submit" class="btn btn-primary btn-lg w-100">🔍</button>
@@ -301,25 +253,9 @@ def login():
         if not username or not password:
             error = "कृपया यूज़रनेम और पासवर्ड दर्ज करें"
         else:
-            # Try database first
-            if DATABASE_CONNECTED:
-                try:
-                    conn, cur = get_db()
-                    if conn:
-                        cur.execute("""
-                            SELECT id, username, role FROM admins 
-                            WHERE username=%s AND password=%s
-                        """, (username, password))
-                        user = cur.fetchone()
-                    else:
-                        user = None
-                except Exception as e:
-                    print(f"Database login error: {e}")
-                    user = None
-            else:
-                # Check in-memory users
-                user = next((u for u in in_memory_data['users']
-                             if u['username'] == username and u['password'] == password), None)
+            # Check in-memory users
+            user = next((u for u in in_memory_data['users']
+                         if u['username'] == username and u['password'] == password), None)
 
             if user:
                 session.clear()
@@ -337,46 +273,7 @@ def login():
 @app.route("/counter", methods=["GET", "POST"])
 def counter():
     """Counter login"""
-    error = None
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-
-        if not username or not password:
-            error = "कृपया यूज़रनेम और पासवर्ड दर्ज करें"
-        else:
-            # Try database first
-            if DATABASE_CONNECTED:
-                try:
-                    conn, cur = get_db()
-                    if conn:
-                        cur.execute("""
-                            SELECT id, username, role FROM admins 
-                            WHERE username=%s AND password=%s
-                        """, (username, password))
-                        user = cur.fetchone()
-                    else:
-                        user = None
-                except Exception as e:
-                    print(f"Counter login error: {e}")
-                    user = None
-            else:
-                # Check in-memory users
-                user = next((u for u in in_memory_data['users']
-                             if u['username'] == username and u['password'] == password), None)
-
-            if user:
-                session.clear()
-                session["user_logged_in"] = True
-                session["user_id"] = user.get('id', 1)
-                session["username"] = user.get('username', username)
-                session["role"] = user.get('role', 'counter')
-                return redirect("/dashboard")
-            else:
-                error = "गलत यूज़रनेम या पासवर्ड"
-
-    return render_template_string(BASE_HTML, content=render_template_string(LOGIN_HTML, error=error))
+    return login()  # Same as login page
 
 
 @app.route("/dashboard")
@@ -389,7 +286,7 @@ def dashboard():
     role = session.get("role", "user")
 
     # Get stats
-    total_buses = 3  # Example
+    total_buses = len(in_memory_data['buses'])
     total_bookings = len(in_memory_data['bookings'])
 
     admin_links = ""
@@ -436,7 +333,7 @@ def dashboard():
                 <div class="card bg-info text-white">
                     <div class="card-body">
                         <h5>लाइव बसें</h5>
-                        <h2>3</h2>
+                        <h2>{total_buses}</h2>
                     </div>
                 </div>
             </div>
@@ -624,7 +521,7 @@ def buses(bus_id):
 
 @app.route("/seats/<int:bus_id>")
 def seat_page(bus_id):
-    """Seat selection page"""
+    """Seat selection page with map"""
     bus = in_memory_data['buses'].get(bus_id)
 
     if not bus:
@@ -645,10 +542,23 @@ def seat_page(bus_id):
         else:
             seat_buttons += f'<button class="btn btn-success m-1 seat-btn" style="width: 60px;" onclick="selectSeat({seat})">{seat}</button>'
 
+    bus_lat = bus.get('current_lat', 27.5)
+    bus_lng = bus.get('current_lng', 75.0)
+
     content = f"""
     <div class="container">
         <h2>{bus['bus_name']}</h2>
         <p class="text-muted">रूट: {bus['route_name']} | समय: {bus['departure_time']}</p>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5>लाइव लोकेशन</h5>
+                <div class="map-container">
+                    <div id="map"></div>
+                </div>
+                <p class="mt-2"><small>बस की लाइव लोकेशन दिखाई जा रही है</small></p>
+            </div>
+        </div>
 
         <div class="alert alert-info">
             <h5>सीट चुनें</h5>
@@ -682,7 +592,73 @@ def seat_page(bus_id):
         </div>
     </div>
 
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
     <script>
+    // Initialize map
+    function initMap() {{
+        const busLat = {bus_lat};
+        const busLng = {bus_lng};
+
+        // Create map instance
+        const map = L.map('map').setView([busLat, busLng], 15);
+
+        // Add tile layer
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }}).addTo(map);
+
+        // Add bus marker
+        const busIcon = L.divIcon({{
+            html: '<div style="background: #0d6efd; color: white; padding: 8px 12px; border-radius: 50%; font-weight: bold; border: 3px solid white; box-shadow: 0 0 10px rgba(0,0,0,0.3);">🚌</div>',
+            className: 'bus-icon',
+            iconSize: [50, 50]
+        }});
+
+        let busMarker = L.marker([busLat, busLng], {{icon: busIcon}})
+            .addTo(map)
+            .bindPopup('<b>{bus['bus_name']}</b><br>लाइव लोकेशन');
+
+        // Store map and marker globally for updates
+        window.busMap = map;
+        window.busMarker = busMarker;
+
+        console.log('Map initialized at:', busLat, busLng);
+    }}
+
+    // Socket for real-time updates
+    const socket = io();
+    const busId = {bus_id};
+
+    socket.on('connect', () => {{
+        console.log('Connected to server for bus tracking');
+    }});
+
+    socket.on('bus_location', (data) => {{
+        if(data.sid == busId) {{
+            console.log('Received location update:', data);
+
+            // Update map if available
+            if(window.busMarker) {{
+                const lat = parseFloat(data.lat);
+                const lng = parseFloat(data.lng);
+                window.busMarker.setLatLng([lat, lng]);
+                window.busMap.setView([lat, lng], window.busMap.getZoom());
+
+                // Update popup
+                window.busMarker.bindPopup('<b>{bus['bus_name']}</b><br>लाइव लोकेशन<br>गति: ' + data.speed + ' km/h').openPopup();
+            }}
+        }}
+    }});
+
+    // Initialize map when page loads
+    document.addEventListener('DOMContentLoaded', initMap);
+
+    // Seat selection functions
     let selectedSeat = null;
 
     function selectSeat(seat) {{
@@ -735,12 +711,393 @@ def seat_page(bus_id):
                     }}
                 }});
                 document.getElementById('bookingForm').style.display = 'none';
+
+                // Emit seat update via socket
+                socket.emit('seat_update', {{
+                    sid: busId,
+                    seat: selectedSeat,
+                    date: new Date().toISOString().split('T')[0]
+                }});
             }} else {{
                 document.getElementById('bookingResult').innerHTML = 
                     '<div class="alert alert-danger">त्रुटि: ' + res.error + '</div>';
             }}
         }});
     }}
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=content)
+
+
+@app.route("/driver/<int:bus_id>")
+def driver(bus_id):
+    """Driver GPS page with working map"""
+    bus = in_memory_data['buses'].get(bus_id)
+
+    if not bus:
+        bus = {'bus_name': f'Bus {bus_id}', 'current_lat': 27.5, 'current_lng': 75.0}
+
+    bus_lat = bus.get('current_lat', 27.5)
+    bus_lng = bus.get('current_lng', 75.0)
+
+    content = f"""
+    <div class="container">
+        <h2>🚗 Driver GPS – {bus['bus_name']}</h2>
+
+        <div class="alert alert-info mb-4">
+            <h5>निर्देश:</h5>
+            <ul>
+                <li>"GPS शुरू करें" बटन पर क्लिक करें</li>
+                <li>ब्राउज़र को location access allow करें</li>
+                <li>GPS background में भी काम करता रहेगा</li>
+                <li>App को background में भी open रखें</li>
+            </ul>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5>लाइव मैप</h5>
+                <div id="map" style="height: 400px;"></div>
+            </div>
+        </div>
+
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <button id="startBtn" class="btn btn-success btn-lg w-100" onclick="startGPS()">
+                    🚀 GPS शुरू करें
+                </button>
+            </div>
+            <div class="col-md-6">
+                <button id="stopBtn" class="btn btn-danger btn-lg w-100" onclick="stopGPS()" disabled>
+                    🛑 GPS बंद करें
+                </button>
+            </div>
+        </div>
+
+        <div id="status" class="card p-3 mb-3">
+            <h5>स्थिति: <span id="statusText">बंद</span></h5>
+        </div>
+
+        <div id="locationInfo" class="card p-3">
+            <h5>लोकेशन विवरण</h5>
+            <div class="row">
+                <div class="col-md-6">
+                    <p><strong>अक्षांश:</strong> <span id="lat">{bus_lat}</span></p>
+                    <p><strong>देशांतर:</strong> <span id="lng">{bus_lng}</span></p>
+                </div>
+                <div class="col-md-6">
+                    <p><strong>गति:</strong> <span id="speed">0 km/h</span></p>
+                    <p><strong>अंतिम अपडेट:</strong> <span id="lastUpdate">-</span></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-4">
+            <a href="/dashboard" class="btn btn-secondary">डैशबोर्ड</a>
+            <a href="/" class="btn btn-primary ms-2">होम</a>
+        </div>
+    </div>
+
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <style>
+    #map {{
+        width: 100%;
+        height: 400px;
+        border-radius: 10px;
+    }}
+    .leaflet-container {{
+        font-family: inherit;
+    }}
+    </style>
+
+    <script>
+    const socket = io();
+    const busId = {bus_id};
+
+    let watchId = null;
+    let map = null;
+    let marker = null;
+
+    // Initialize map
+    function initMap() {{
+        const busLat = {bus_lat};
+        const busLng = {bus_lng};
+
+        // Create map
+        map = L.map('map').setView([busLat, busLng], 15);
+
+        // Add tile layer
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }}).addTo(map);
+
+        // Add initial marker
+        const busIcon = L.divIcon({{
+            html: '<div style="background: #198754; color: white; padding: 10px 15px; border-radius: 50%; font-weight: bold; border: 3px solid white; box-shadow: 0 0 15px rgba(0,0,0,0.4);">🚌</div>',
+            className: 'bus-icon',
+            iconSize: [60, 60]
+        }});
+
+        marker = L.marker([busLat, busLng], {{icon: busIcon}})
+            .addTo(map)
+            .bindPopup('<b>{bus['bus_name']}</b><br>ड्राइवर GPS');
+
+        console.log('Driver map initialized');
+    }}
+
+    // Start GPS tracking
+    function startGPS() {{
+        if (!navigator.geolocation) {{
+            alert('इस ब्राउज़र में GPS सपोर्ट नहीं है');
+            return;
+        }}
+
+        const options = {{
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 10000
+        }};
+
+        watchId = navigator.geolocation.watchPosition(
+            (position) => {{
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                const speed = position.coords.speed || 0;
+
+                // Update UI
+                document.getElementById('statusText').textContent = 'चालू';
+                document.getElementById('status').className = 'card p-3 mb-3 bg-success text-white';
+                document.getElementById('lat').textContent = lat.toFixed(6);
+                document.getElementById('lng').textContent = lng.toFixed(6);
+                document.getElementById('speed').textContent = (speed * 3.6).toFixed(1) + ' km/h';
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+
+                // Update map
+                if (map && marker) {{
+                    marker.setLatLng([lat, lng]);
+                    map.setView([lat, lng], map.getZoom());
+                    marker.bindPopup('<b>{bus['bus_name']}</b><br>लाइव GPS<br>गति: ' + (speed * 3.6).toFixed(1) + ' km/h').openPopup();
+                }}
+
+                // Send to server
+                socket.emit('driver_gps', {{
+                    sid: busId,
+                    lat: lat,
+                    lng: lng,
+                    speed: speed * 3.6,
+                    timestamp: new Date().toISOString()
+                }});
+
+                // Update buttons
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+            }},
+            (error) => {{
+                document.getElementById('statusText').textContent = 'त्रुटि: ' + error.message;
+                document.getElementById('status').className = 'card p-3 mb-3 bg-danger text-white';
+                console.error('GPS Error:', error);
+            }},
+            options
+        );
+    }}
+
+    // Stop GPS tracking
+    function stopGPS() {{
+        if (watchId) {{
+            navigator.geolocation.clearWatch(watchId);
+            watchId = null;
+        }}
+
+        document.getElementById('statusText').textContent = 'बंद';
+        document.getElementById('status').className = 'card p-3 mb-3 bg-secondary text-white';
+        document.getElementById('startBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+    }}
+
+    // Initialize map when page loads
+    document.addEventListener('DOMContentLoaded', initMap);
+
+    // Listen for location updates from other drivers
+    socket.on('bus_location', (data) => {{
+        if(data.sid == busId) {{
+            // Update UI if not actively tracking
+            if(!watchId) {{
+                document.getElementById('lat').textContent = parseFloat(data.lat).toFixed(6);
+                document.getElementById('lng').textContent = parseFloat(data.lng).toFixed(6);
+                document.getElementById('speed').textContent = data.speed + ' km/h';
+                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+
+                // Update map
+                if (map && marker) {{
+                    marker.setLatLng([data.lat, data.lng]);
+                    marker.bindPopup('<b>{bus['bus_name']}</b><br>लाइव अपडेट<br>गति: ' + data.speed + ' km/h');
+                }}
+            }}
+        }}
+    }});
+
+    // App state detection for background GPS
+    document.addEventListener('visibilitychange', () => {{
+        const appState = document.hidden ? 'background' : 'foreground';
+        console.log('App state changed to:', appState);
+    }});
+    </script>
+    """
+
+    return render_template_string(BASE_HTML, content=content)
+
+
+@app.route("/live-bus/<int:bus_id>")
+def live_bus(bus_id):
+    """Live bus tracking with map"""
+    bus = in_memory_data['buses'].get(bus_id)
+    if not bus:
+        bus = {'bus_name': f'Bus {bus_id}', 'current_lat': 27.5, 'current_lng': 75.0}
+
+    bus_lat = bus.get('current_lat', 27.5)
+    bus_lng = bus.get('current_lng', 75.0)
+
+    content = f"""
+    <div class="container">
+        <h2>🚌 Live Tracking - {bus['bus_name']}</h2>
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5>लाइव लोकेशन मैप</h5>
+                <div id="map" style="height: 500px; width: 100%;"></div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5>बस विवरण</h5>
+                        <p><strong>बस नाम:</strong> {bus['bus_name']}</p>
+                        <p><strong>अक्षांश:</strong> <span id="busLat">{bus_lat}</span></p>
+                        <p><strong>देशांतर:</strong> <span id="busLng">{bus_lng}</span></p>
+                        <p><strong>गति:</strong> <span id="busSpeed">0 km/h</span></p>
+                        <p><strong>अंतिम अपडेट:</strong> <span id="busUpdate">-</span></p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-body">
+                        <h5>कंट्रोल्स</h5>
+                        <div class="d-grid gap-2">
+                            <a href="/driver/{bus_id}" class="btn btn-success">ड्राइवर मोड</a>
+                            <a href="/seats/{bus_id}" class="btn btn-primary">सीट बुक करें</a>
+                            <a href="/" class="btn btn-secondary">होम</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <script>
+    const socket = io();
+    const busId = {bus_id};
+
+    let map = null;
+    let marker = null;
+    let routeLine = null;
+
+    // Initialize map
+    function initMap() {{
+        const busLat = {bus_lat};
+        const busLng = {bus_lng};
+
+        // Create map
+        map = L.map('map').setView([busLat, busLng], 13);
+
+        // Add tile layer
+        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }}).addTo(map);
+
+        // Add bus marker with custom icon
+        const busIcon = L.divIcon({{
+            html: '<div style="background: #dc3545; color: white; padding: 12px 18px; border-radius: 50%; font-size: 20px; border: 4px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5);">🚌</div>',
+            className: 'bus-icon',
+            iconSize: [70, 70]
+        }});
+
+        marker = L.marker([busLat, busLng], {{icon: busIcon}})
+            .addTo(map)
+            .bindPopup('<b>{bus['bus_name']}</b><br>लाइव ट्रैकिंग')
+            .openPopup();
+
+        // Add sample route line (for demo)
+        const routePoints = [
+            [27.5, 75.0],
+            [27.6, 75.1],
+            [27.7, 75.2],
+            [27.8, 75.3]
+        ];
+
+        routeLine = L.polyline(routePoints, {{
+            color: '#0d6efd',
+            weight: 4,
+            opacity: 0.7,
+            dashArray: '10, 10'
+        }}).addTo(map);
+
+        console.log('Live tracking map initialized');
+    }}
+
+    // Listen for location updates
+    socket.on('bus_location', (data) => {{
+        if(data.sid == busId) {{
+            const lat = parseFloat(data.lat);
+            const lng = parseFloat(data.lng);
+
+            // Update UI
+            document.getElementById('busLat').textContent = lat.toFixed(6);
+            document.getElementById('busLng').textContent = lng.toFixed(6);
+            document.getElementById('busSpeed').textContent = data.speed + ' km/h';
+            document.getElementById('busUpdate').textContent = new Date().toLocaleTimeString();
+
+            // Update map
+            if (map && marker) {{
+                marker.setLatLng([lat, lng]);
+                map.panTo([lat, lng]);
+                marker.bindPopup('<b>{bus['bus_name']}</b><br>लाइव ट्रैकिंग<br>गति: ' + data.speed + ' km/h').openPopup();
+
+                // Add to route line
+                if(routeLine) {{
+                    const currentLatLngs = routeLine.getLatLngs();
+                    currentLatLngs.push([lat, lng]);
+                    routeLine.setLatLngs(currentLatLngs);
+                }}
+            }}
+        }}
+    }});
+
+    // Initialize map when page loads
+    document.addEventListener('DOMContentLoaded', initMap);
+
+    // Auto-refresh location every 10 seconds
+    setInterval(() => {{
+        if(map && marker) {{
+            // Just to keep map active
+            console.log('Live tracking active');
+        }}
+    }}, 10000);
     </script>
     """
 
@@ -795,351 +1152,6 @@ def book():
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
-
-
-@app.route("/driver/<int:bus_id>")
-def driver(bus_id):
-    """Driver GPS page"""
-    bus = in_memory_data['buses'].get(bus_id)
-
-    if not bus:
-        bus = {'bus_name': f'Bus {bus_id}'}
-
-    content = f"""
-    <div class="container">
-        <h2>🚗 Driver GPS – {bus['bus_name']}</h2>
-
-        <div class="alert alert-info mb-4">
-            <h5>निर्देश:</h5>
-            <ul>
-                <li>"GPS शुरू करें" बटन पर क्लिक करें</li>
-                <li>ब्राउज़र को location access allow करें</li>
-                <li>GPS background में भी काम करता रहेगा</li>
-                <li>App को background में भी open रखें</li>
-            </ul>
-        </div>
-
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <button id="startBtn" class="btn btn-success btn-lg w-100" onclick="startGPS()">
-                    🚀 GPS शुरू करें
-                </button>
-            </div>
-            <div class="col-md-6">
-                <button id="stopBtn" class="btn btn-danger btn-lg w-100" onclick="stopGPS()" disabled>
-                    🛑 GPS बंद करें
-                </button>
-            </div>
-        </div>
-
-        <div id="status" class="card p-3 mb-3">
-            <h5>स्थिति: <span id="statusText">बंद</span></h5>
-        </div>
-
-        <div id="locationInfo" class="card p-3" style="display: none;">
-            <h5>लोकेशन विवरण</h5>
-            <div class="row">
-                <div class="col-md-6">
-                    <p><strong>अक्षांश:</strong> <span id="lat">-</span></p>
-                    <p><strong>देशांतर:</strong> <span id="lng">-</span></p>
-                </div>
-                <div class="col-md-6">
-                    <p><strong>गति:</strong> <span id="speed">0 km/h</span></p>
-                    <p><strong>अंतिम अपडेट:</strong> <span id="lastUpdate">-</span></p>
-                </div>
-            </div>
-        </div>
-
-        <div class="mt-4">
-            <a href="/dashboard" class="btn btn-secondary">डैशबोर्ड</a>
-            <a href="/" class="btn btn-primary ms-2">होम</a>
-        </div>
-    </div>
-
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-    const socket = io();
-    const busId = {bus_id};
-
-    let watchId = null;
-    let appState = document.hidden ? 'background' : 'foreground';
-
-    socket.on('connect', () => {{
-        console.log('Connected to server');
-    }});
-
-    // App state detection
-    document.addEventListener('visibilitychange', () => {{
-        appState = document.hidden ? 'background' : 'foreground';
-        console.log('App state:', appState);
-    }});
-
-    function startGPS() {{
-        if (!navigator.geolocation) {{
-            alert('इस ब्राउज़र में GPS सपोर्ट नहीं है');
-            return;
-        }}
-
-        const options = {{
-            enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 10000
-        }};
-
-        watchId = navigator.geolocation.watchPosition(
-            (position) => {{
-                const lat = position.coords.latitude;
-                const lng = position.coords.longitude;
-                const speed = position.coords.speed || 0;
-
-                // Update UI
-                document.getElementById('statusText').textContent = 'चालू';
-                document.getElementById('status').className = 'card p-3 mb-3 bg-success text-white';
-                document.getElementById('locationInfo').style.display = 'block';
-                document.getElementById('lat').textContent = lat.toFixed(6);
-                document.getElementById('lng').textContent = lng.toFixed(6);
-                document.getElementById('speed').textContent = (speed * 3.6).toFixed(1) + ' km/h';
-                document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
-
-                // Send to server
-                socket.emit('driver_gps', {{
-                    sid: busId,
-                    lat: lat,
-                    lng: lng,
-                    speed: speed * 3.6,
-                    timestamp: new Date().toISOString()
-                }});
-
-                // Update buttons
-                document.getElementById('startBtn').disabled = true;
-                document.getElementById('stopBtn').disabled = false;
-            }},
-            (error) => {{
-                document.getElementById('statusText').textContent = 'त्रुटि: ' + error.message;
-                document.getElementById('status').className = 'card p-3 mb-3 bg-danger text-white';
-            }},
-            options
-        );
-    }}
-
-    function stopGPS() {{
-        if (watchId) {{
-            navigator.geolocation.clearWatch(watchId);
-            watchId = null;
-        }}
-
-        document.getElementById('statusText').textContent = 'बंद';
-        document.getElementById('status').className = 'card p-3 mb-3 bg-secondary text-white';
-        document.getElementById('startBtn').disabled = false;
-        document.getElementById('stopBtn').disabled = true;
-        document.getElementById('locationInfo').style.display = 'none';
-    }}
-    </script>
-    """
-
-    return render_template_string(BASE_HTML, content=content)
-
-
-@app.route("/create-counter", methods=["GET", "POST"])
-@admin_required
-def create_counter():
-    """Create counter account"""
-    if not session.get("role") == "admin":
-        return redirect("/login")
-
-    error = ""
-    success = ""
-
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
-
-        if not username or not password:
-            error = "कृपया सभी फील्ड भरें"
-        else:
-            if DATABASE_CONNECTED:
-                try:
-                    conn, cur = get_db()
-                    if conn:
-                        cur.execute("""
-                            INSERT INTO admins (username, password, role)
-                            VALUES (%s, %s, 'counter')
-                        """, (username, password))
-                        conn.commit()
-                        success = f"Counter '{username}' सफलतापूर्वक बनाया गया"
-                    else:
-                        error = "Database connection failed"
-                except Exception as e:
-                    error = f"Database error: {str(e)}"
-            else:
-                # Add to in-memory users
-                new_id = max([u['id'] for u in in_memory_data['users']], default=0) + 1
-                in_memory_data['users'].append({
-                    'id': new_id,
-                    'username': username,
-                    'password': password,
-                    'role': 'counter'
-                })
-                success = f"Counter '{username}' सफलतापूर्वक बनाया गया (in-memory)"
-
-    form_html = f"""
-    <div class="row justify-content-center">
-        <div class="col-md-6">
-            <div class="card">
-                <div class="card-body">
-                    <h3 class="text-center mb-4">नया काउंटर बनाएं</h3>
-                    <form method="POST">
-                        <div class="mb-3">
-                            <label class="form-label">यूज़रनेम</label>
-                            <input type="text" name="username" class="form-control" required>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">पासवर्ड</label>
-                            <input type="password" name="password" class="form-control" required>
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100">काउंटर बनाएं</button>
-                    </form>
-
-                    {f'<div class="alert alert-success mt-3">{success}</div>' if success else ''}
-                    {f'<div class="alert alert-danger mt-3">{error}</div>' if error else ''}
-
-                    <div class="mt-3 text-center">
-                        <a href="/dashboard" class="btn btn-secondary">डैशबोर्ड</a>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    """
-
-    return render_template_string(BASE_HTML, content=form_html)
-
-
-# Missing routes from original code
-@app.route("/routes")
-@admin_required
-def routes():
-    """Manage routes"""
-    return render_template_string(BASE_HTML, content="""
-        <div class="container">
-            <h2>Routes Management</h2>
-            <p class="text-muted">This feature is under development</p>
-            <a href="/dashboard" class="btn btn-secondary">Back to Dashboard</a>
-        </div>
-    """)
-
-
-@app.route("/schedules")
-@admin_required
-def schedules():
-    """Manage schedules"""
-    return render_template_string(BASE_HTML, content="""
-        <div class="container">
-            <h2>Schedules Management</h2>
-            <p class="text-muted">This feature is under development</p>
-            <a href="/dashboard" class="btn btn-secondary">Back to Dashboard</a>
-        </div>
-    """)
-
-
-@app.route("/bookings")
-@admin_required
-def bookings():
-    """View bookings"""
-    return render_template_string(BASE_HTML, content="""
-        <div class="container">
-            <h2>All Bookings</h2>
-            <p class="text-muted">This feature is under development</p>
-            <a href="/dashboard" class="btn btn-secondary">Back to Dashboard</a>
-        </div>
-    """)
-
-
-@app.route("/select/<int:sid>")
-def select(sid):
-    """Select bus - redirect to seats"""
-    return redirect(f"/seats/{sid}")
-
-
-@app.route("/live-bus/<int:sid>")
-def live_bus(sid):
-    """Live bus tracking"""
-    bus = in_memory_data['buses'].get(sid)
-    if not bus:
-        bus = {'bus_name': f'Bus {sid}'}
-
-    content = f"""
-    <div class="container">
-        <h2>🚌 Live Tracking - {bus['bus_name']}</h2>
-
-        <div class="card">
-            <div class="card-body">
-                <h5>लाइव लोकेशन</h5>
-                <div id="map" style="height: 400px; width: 100%; border-radius: 10px; background: #e9ecef;"></div>
-            </div>
-        </div>
-
-        <div class="card mt-3">
-            <div class="card-body">
-                <h5>बस विवरण</h5>
-                <p><strong>बस नाम:</strong> {bus['bus_name']}</p>
-                <p><strong>लोकेशन:</strong> <span id="busLocation">Loading...</span></p>
-                <p><strong>गति:</strong> <span id="busSpeed">0 km/h</span></p>
-                <p><strong>अंतिम अपडेट:</strong> <span id="busUpdate">-</span></p>
-            </div>
-        </div>
-
-        <div class="mt-4">
-            <a href="/driver/{sid}" class="btn btn-primary">ड्राइवर मोड</a>
-            <a href="/seats/{sid}" class="btn btn-success ms-2">सीट बुक करें</a>
-            <a href="/" class="btn btn-secondary ms-2">होम</a>
-        </div>
-    </div>
-
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-    const socket = io();
-    const busId = {sid};
-
-    socket.on('connect', () => {{
-        console.log('Connected to live tracking');
-    }});
-
-    socket.on('bus_location', (data) => {{
-        if(data.sid == busId) {{
-            document.getElementById('busLocation').textContent = 
-                data.lat.toFixed(6) + ', ' + data.lng.toFixed(6);
-            document.getElementById('busSpeed').textContent = data.speed + ' km/h';
-            document.getElementById('busUpdate').textContent = new Date().toLocaleTimeString();
-
-            // Update map display
-            updateMap(data.lat, data.lng);
-        }}
-    }});
-
-    function updateMap(lat, lng) {{
-        const mapDiv = document.getElementById('map');
-        mapDiv.innerHTML = `
-            <div style="padding: 20px;">
-                <h6>लाइव लोकेशन</h6>
-                <p><strong>अक्षांश:</strong> ${{lat.toFixed(6)}}</p>
-                <p><strong>देशांतर:</strong> ${{lng.toFixed(6)}}</p>
-                <div style="width:100%;height:200px;background:#007bff;border-radius:5px;margin-top:10px;display:flex;align-items:center;justify-content:center;color:white;">
-                    <h5>📍 बस की लाइव लोकेशन</h5>
-                </div>
-            </div>
-        `;
-    }}
-    </script>
-    """
-
-    return render_template_string(BASE_HTML, content=content)
-
-
-@app.route("/heartbeat")
-def heartbeat():
-    """Keep connection alive"""
-    return jsonify({"status": "alive", "timestamp": datetime.now().isoformat()})
 
 
 # ================= SOCKET EVENTS =================
@@ -1206,18 +1218,11 @@ if __name__ == "__main__":
     print("🚀 Bus Booking System Starting...")
     print("🌐 Server will run on: http://localhost:10000")
     print("📍 GPS Background Tracking: Enabled")
-    print("💾 Data Mode:", "Database" if DATABASE_CONNECTED else "In-Memory")
-    print("\nAvailable Routes:")
-    print("  /              - Home page")
-    print("  /login         - Login page")
-    print("  /counter       - Counter login")
-    print("  /dashboard     - Dashboard")
-    print("  /search        - Search buses")
-    print("  /buses/<id>    - Bus details")
-    print("  /seats/<id>    - Seat selection")
-    print("  /driver/<id>   - Driver GPS")
-    print("  /live-bus/<id> - Live tracking")
-    print("  /create-counter - Create counter (admin)")
+    print("🗺️ Maps: Working with Leaflet")
+    print("\nAvailable Routes with Maps:")
+    print("  /seats/<id>    - Seat selection with bus location map")
+    print("  /driver/<id>   - Driver GPS with live tracking map")
+    print("  /live-bus/<id> - Live bus tracking with route map")
 
     socketio.run(app,
                  host="0.0.0.0",
