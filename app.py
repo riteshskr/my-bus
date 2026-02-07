@@ -47,13 +47,34 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("DATABASE_URL environment variable is missing!")
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=10, timeout=20)
+# IMPROVED POOL CONFIGURATION
+pool = ConnectionPool(
+    conninfo=DATABASE_URL,
+    min_size=1,           # Minimum connections
+    max_size=5,           # ✅ REDUCE from 10 to 5 (Render.com free tier के लिए)
+    timeout=30,           # ✅ INCREASE from 20 to 30
+    open=False            # Don't open immediately
+)
+pool.open()  # Manually open pool
 print("✅ Connection pool ready")
 
 
-@atexit.register
-def shutdown_pool():
-    pool.close()
+@app.teardown_appcontext
+def close_db(error=None):
+    cur = g.pop('db_cur', None)
+    conn = g.pop('db_conn', None)
+
+    if cur:
+        try:
+            cur.close()
+        except:
+            pass
+
+    if conn:
+        try:
+            pool.putconn(conn)
+        except:
+            pass
 
 
 # ================= DB CONTEXT =================
@@ -64,8 +85,14 @@ def get_db():
         if 'db_cur' not in g:
             g.db_cur = g.db_conn.cursor(row_factory=dict_row)
         return g.db_conn, g.db_cur
-    except:
-        pool.closeall()
+    except Exception as e:
+        # FIXED: Use correct method
+        try:
+            pool.close()  # ✅ close() use करें, closeall() नहीं
+        except:
+            pass
+
+        # New connection
         g.db_conn = pool.getconn()
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
         return g.db_conn, g.db_cur
@@ -87,9 +114,12 @@ def safe_db(func):
     def wrapper(*a, **kw):
         try:
             return func(*a, **kw)
+        except Exception as e:
+            print(f"Database error in {func.__name__}: {e}")
+            raise e
         finally:
-            close_db()  # चाहे error आये या न आये
-
+            # Ensure connection is returned to pool
+            close_db()
     return wrapper
 
 
