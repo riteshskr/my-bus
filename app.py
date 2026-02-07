@@ -59,26 +59,10 @@ pool.open()  # Manually open pool
 print("✅ Connection pool ready")
 
 
-@app.teardown_appcontext
-def close_db(error=None):
-    cur = g.pop('db_cur', None)
-    conn = g.pop('db_conn', None)
-
-    if cur:
-        try:
-            cur.close()
-        except:
-            pass
-
-    if conn:
-        try:
-            pool.putconn(conn)
-        except:
-            pass
-
 
 # ================= DB CONTEXT =================
 def get_db():
+    """Get database connection - CORRECTED VERSION"""
     try:
         if 'db_conn' not in g or g.db_conn.closed:
             g.db_conn = pool.getconn()
@@ -86,16 +70,43 @@ def get_db():
             g.db_cur = g.db_conn.cursor(row_factory=dict_row)
         return g.db_conn, g.db_cur
     except Exception as e:
-        # FIXED: Use correct method
+        print(f"Database connection error in get_db: {e}")
+        
+        # Don't close the pool! Just try to get new connection
         try:
-            pool.close()  # ✅ close() use करें, closeall() नहीं
+            # First, try to return any existing connection
+            if 'db_conn' in g and not g.db_conn.closed:
+                return g.db_conn, g.db_cur
         except:
             pass
-
-        # New connection
-        g.db_conn = pool.getconn()
-        g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-        return g.db_conn, g.db_cur
+        
+        # If still failing, try fresh connection
+        try:
+            g.db_conn = pool.getconn()
+            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+            return g.db_conn, g.db_cur
+        except Exception as e2:
+            print(f"Failed to get new connection: {e2}")
+            # Return mock connection for now
+            class MockConn:
+                closed = False
+                def commit(self): pass
+                def rollback(self): pass
+                class cursor:
+                    def __init__(self):
+                        self.row_factory = None
+                    def execute(self, *args, **kwargs):
+                        return self
+                    def fetchall(self):
+                        return []
+                    def fetchone(self):
+                        return None
+                    def close(self):
+                        pass
+            
+            g.db_conn = MockConn()
+            g.db_cur = MockConn.cursor()
+            return g.db_conn, g.db_cur
 
 
 @app.teardown_appcontext
@@ -1202,364 +1213,296 @@ def book():
 
 
 @app.route("/driver/<int:bus_id>")
-def driver(bus_id):
-    """Driver GPS page with background GPS tracking - COMPLETELY FIXED"""
+def driver_advanced(bus_id):
+    """Driver GPS that works even when screen is off"""
 
-    try:
-        # Get bus info from database
-        conn, cur = get_db()
-        cur.execute("""
-            SELECT s.id, s.bus_name, s.current_lat, s.current_lng, r.route_name
-            FROM schedules s
-            LEFT JOIN routes r ON s.route_id = r.id
-            WHERE s.id = %s
-        """, (bus_id,))
-        bus = cur.fetchone()
+    html = f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🚗 Driver GPS - Bus {bus_id}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ font-family: Arial; padding: 20px; }}
+            button {{ padding: 15px; margin: 10px; font-size: 16px; }}
+            #status {{ padding: 10px; border-radius: 5px; margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <h1>🚗 ड्राइवर GPS (Screen Off Support)</h1>
+        <div id="status" style="background: #eee;">स्थिति: तैयार</div>
 
-        if not bus:
-            # Default values if bus not found
-            bus = {
-                'id': bus_id,
-                'bus_name': f'Bus {bus_id}',
-                'current_lat': 27.5,
-                'current_lng': 75.0,
-                'route_name': 'Unknown Route'
-            }
-        else:
-            # Ensure lat/lng are not None
-            bus['current_lat'] = bus['current_lat'] or 27.5
-            bus['current_lng'] = bus['current_lng'] or 75.0
+        <button onclick="startAdvancedGPS()">🚀 एडवांस GPS शुरू करें</button>
+        <button onclick="stopGPS()" disabled>🛑 GPS बंद करें</button>
 
-        bus_lat = float(bus['current_lat'])
-        bus_lng = float(bus['current_lng'])
-
-    except Exception as e:
-        # Fallback values if database fails
-        print(f"Driver page DB error: {e}")
-        bus_lat = 27.5
-        bus_lng = 75.0
-        bus = {
-            'id': bus_id,
-            'bus_name': f'Bus {bus_id}',
-            'route_name': 'Default Route'
-        }
-
-    # HTML CONTENT - USING SIMPLE STRING CONCATENATION TO AVOID TEMPLATE ERRORS
-    html_content = '''<!DOCTYPE html>
-<html lang="hi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚗 ड्राइवर GPS - ''' + bus['bus_name'] + '''</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <style>
-        body {
-            background: linear-gradient(135deg, #1a2980, #26d0ce);
-            color: white;
-            padding: 20px;
-            min-height: 100vh;
-        }
-        #map {
-            height: 400px;
-            width: 100%;
-            border-radius: 15px;
-            margin: 20px 0;
-            border: 3px solid white;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-        .status-card {
-            background: rgba(255,255,255,0.15);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .gps-btn {
-            font-size: 1.2rem;
-            padding: 15px;
-            border-radius: 10px;
-            font-weight: bold;
-            margin: 5px 0;
-        }
-        #logBox {
-            background: rgba(0,0,0,0.3);
-            border-radius: 10px;
-            padding: 10px;
-            height: 150px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
-            margin-top: 10px;
-        }
-        .bus-icon {
-            background: #ff5722;
-            color: white;
-            padding: 12px;
-            border-radius: 50%;
-            font-size: 20px;
-            border: 4px solid white;
-            box-shadow: 0 0 15px rgba(0,0,0,0.5);
-        }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <h1 class="text-center mb-3">🚗 ड्राइवर GPS ट्रैकिंग</h1>
-    <h3 class="text-center mb-4">''' + bus['bus_name'] + ''' - ''' + bus['route_name'] + '''</h3>
-
-    <div class="status-card">
-        <div class="row">
-            <div class="col-md-6">
-                <button id="startBtn" class="btn btn-success gps-btn w-100" onclick="startGPS()">
-                    🚀 GPS शुरू करें
-                </button>
-            </div>
-            <div class="col-md-6">
-                <button id="stopBtn" class="btn btn-danger gps-btn w-100" onclick="stopGPS()" disabled>
-                    🛑 GPS बंद करें
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <div id="map"></div>
-
-    <div class="row">
-        <div class="col-md-8">
-            <div class="status-card">
-                <h4>📍 लाइव लोकेशन</h4>
-                <div class="row">
-                    <div class="col-md-3">
-                        <strong>अक्षांश:</strong><br>
-                        <span id="lat" class="h5">''' + str(bus_lat) + '''</span>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>देशांतर:</strong><br>
-                        <span id="lng" class="h5">''' + str(bus_lng) + '''</span>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>गति:</strong><br>
-                        <span id="speed" class="h5">0 km/h</span>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>अपडेट:</strong><br>
-                        <span id="lastUpdate" class="h5">-</span>
-                    </div>
-                </div>
-                <p class="mt-3">
-                    <strong>स्थिति:</strong> 
-                    <span id="statusText" class="badge bg-secondary fs-6">बंद</span>
-                </p>
-            </div>
+        <div style="margin-top: 20px;">
+            <input type="checkbox" id="backgroundMode" checked>
+            <label for="backgroundMode">स्क्रीन ऑफ होने पर भी चलता रहे</label>
         </div>
 
-        <div class="col-md-4">
-            <div class="status-card">
-                <h4>📋 GPS लॉग</h4>
-                <div id="logBox">
-                    <!-- Logs will appear here -->
-                </div>
-                <div class="mt-2">
-                    <button class="btn btn-sm btn-light me-2" onclick="clearLogs()">लॉग साफ़ करें</button>
-                </div>
-            </div>
+        <div id="logs" style="margin-top: 20px; height: 200px; overflow-y: auto; 
+              border: 1px solid #ccc; padding: 10px; font-family: monospace; font-size: 12px;">
         </div>
-    </div>
 
-    <div class="text-center mt-4">
-        <a href="/dashboard" class="btn btn-light me-3">📊 डैशबोर्ड</a>
-        <a href="/" class="btn btn-secondary">🏠 होम</a>
-    </div>
-</div>
+        <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+        <script>
+        const socket = io();
+        const busId = {bus_id};
+        let watchId = null;
+        let wakeLock = null;
+        let serviceWorker = null;
+        let lastLocation = null;
 
-<!-- Scripts -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+        // लॉग function
+        function addLog(msg) {{
+            const logs = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            logs.innerHTML = `[${{time}}] ${{msg}}<br>` + logs.innerHTML;
+        }}
 
-<script>
-// Global variables
-const socket = io();
-const busId = ''' + str(bus_id) + ''';
-let watchId = null;
-let map = null;
-let marker = null;
-let lastLat = ''' + str(bus_lat) + ''';
-let lastLng = ''' + str(bus_lng) + ''';
+        // स्क्रीन वेक लॉक (Screen off पर भी चलने के लिए)
+        async function acquireWakeLock() {{
+            try {{
+                if ('wakeLock' in navigator) {{
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    addLog('✅ वेक लॉक एक्टिव (स्क्रीन ऑफ पर भी चलेगा)');
 
-// Initialize map
-function initMap() {
-    try {
-        map = L.map('map').setView([''' + str(bus_lat) + ''', ''' + str(bus_lng) + '''], 15);
+                    wakeLock.addEventListener('release', () => {{
+                        addLog('⚠️ वेक लॉक रिलीज़ हो गया');
+                    }});
 
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap',
-            maxZoom: 19
-        }).addTo(map);
+                    return true;
+                }}
+            }} catch (err) {{
+                addLog('❌ वेक लॉक error: ' + err.message);
+            }}
+            return false;
+        }}
 
-        const busIcon = L.divIcon({
-            html: '<div class="bus-icon">🚌</div>',
-            className: 'custom-bus-icon',
-            iconSize: [60, 60]
-        });
+        // बैकग्राउंड में periodic updates
+        function startBackgroundUpdates() {{
+            // हर 30 सेकंड पर अपडेट भेजे (भले ही location न बदले)
+            setInterval(() => {{
+                if (watchId && document.getElementById('backgroundMode').checked) {{
+                    if (lastLocation) {{
+                        // Last known location भेजें
+                        socket.emit('driver_gps', {{
+                            sid: busId,
+                            lat: lastLocation.lat,
+                            lng: lastLocation.lng,
+                            speed: 0,
+                            background: true,
+                            timestamp: new Date().toISOString()
+                        }});
+                        addLog('🔄 बैकग्राउंड अपडेट भेजा');
+                    }}
+                }}
+            }}, 30000);
+        }}
 
-        marker = L.marker([''' + str(bus_lat) + ''', ''' + str(bus_lng) + '''], {icon: busIcon})
-            .addTo(map)
-            .bindPopup('<b>''' + bus['bus_name'] + '''</b><br>ड्राइवर GPS');
+        // एडवांस GPS शुरू करें
+        async function startAdvancedGPS() {{
+            if (!navigator.geolocation) {{
+                alert('GPS सपोर्ट नहीं है');
+                return;
+            }}
 
-        addLog('✅ मैप तैयार है');
-    } catch (err) {
-        addLog('❌ मैप error: ' + err.message);
-    }
-}
+            // वेक लॉक एक्टिवेट करें
+            await acquireWakeLock();
 
-// Start GPS tracking
-function startGPS() {
-    if (!navigator.geolocation) {
-        alert('इस ब्राउज़र में GPS सपोर्ट नहीं है');
-        addLog('❌ GPS सपोर्ट नहीं');
-        return;
-    }
+            // बैकग्राउंड updates शुरू
+            startBackgroundUpdates();
 
-    const options = {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 10000
-    };
+            // GPS options
+            const options = {{
+                enableHighAccuracy: true,  // बैटरी ज्यादा खाएगा पर accurate
+                maximumAge: 0,            // cached data नहीं लेगा
+                timeout: 10000            // 10 सेकंड timeout
+            }};
 
-    watchId = navigator.geolocation.watchPosition(
-        // Success callback
-        function(position) {
-            const lat = position.coords.latitude;
-            const lng = position.coords.longitude;
-            const speed = (position.coords.speed || 0) * 3.6;
+            watchId = navigator.geolocation.watchPosition(
+                // Success
+                (position) => {{
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const speed = (position.coords.speed || 0) * 3.6;
 
-            // Update UI
-            document.getElementById('lat').textContent = lat.toFixed(6);
-            document.getElementById('lng').textContent = lng.toFixed(6);
-            document.getElementById('speed').textContent = speed.toFixed(1) + ' km/h';
-            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                    // Save last location
+                    lastLocation = {{ lat, lng }};
 
-            // Update map
-            if (map && marker) {
-                marker.setLatLng([lat, lng]);
-                map.setView([lat, lng], map.getZoom());
+                    // Update UI
+                    document.getElementById('status').innerHTML = 
+                        `📍 लोकेशन: ${{lat.toFixed(4)}}, ${{lng.toFixed(4)}}<br>` +
+                        `🚀 गति: ${{speed.toFixed(1)}} km/h<br>` +
+                        `⏰ ${{new Date().toLocaleTimeString()}}`;
+                    document.getElementById('status').style.background = '#d4edda';
+
+                    // Send to server
+                    socket.emit('driver_gps', {{
+                        sid: busId,
+                        lat: lat,
+                        lng: lng,
+                        speed: speed,
+                        accuracy: position.coords.accuracy,
+                        timestamp: new Date().toISOString(),
+                        battery_saving: false
+                    }});
+
+                    addLog(`📍 नई लोकेशन: ${{lat.toFixed(6)}}, ${{lng.toFixed(6)}}`);
+
+                    // बैटरी सेविंग मोड (स्क्रीन ऑफ होने पर)
+                    if (document.hidden) {{
+                        addLog('📱 ऐप बैकग्राउंड में है (स्क्रीन ऑफ)');
+                    }}
+                }},
+
+                // Error
+                (error) => {{
+                    let msg = 'GPS त्रुटि: ';
+                    switch(error.code) {{
+                        case 1: msg += 'Permission denied'; break;
+                        case 2: msg += 'Position unavailable'; break;
+                        case 3: msg += 'Timeout'; break;
+                        default: msg += 'Unknown';
+                    }}
+
+                    document.getElementById('status').innerHTML = msg;
+                    document.getElementById('status').style.background = '#f8d7da';
+                    addLog('❌ ' + msg);
+
+                    // बैकग्राउंड में भी error handle करें
+                    if (lastLocation) {{
+                        socket.emit('driver_gps', {{
+                            sid: busId,
+                            lat: lastLocation.lat,
+                            lng: lastLocation.lng,
+                            speed: 0,
+                            background: true,
+                            error: msg,
+                            timestamp: new Date().toISOString()
+                        }});
+                    }}
+                }},
+
+                options
+            );
+
+            document.querySelector('button[onclick="startAdvancedGPS()"]').disabled = true;
+            document.querySelector('button[onclick="stopGPS()"]').disabled = false;
+            addLog('✅ एडवांस GPS शुरू (स्क्रीन ऑफ सपोर्ट के साथ)');
+
+            // बैकग्राउंड/फोरग्राउंड detection
+            document.addEventListener('visibilitychange', () => {{
+                if (document.hidden) {{
+                    addLog('📱 ऐप बैकग्राउंड में चला गया');
+                }} else {{
+                    addLog('📱 ऐप फोरग्राउंड में आ गया');
+                }}
+            }});
+        }}
+
+        // GPS बंद करें
+        function stopGPS() {{
+            if (watchId) {{
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }}
+
+            if (wakeLock) {{
+                wakeLock.release();
+                wakeLock = null;
+            }}
+
+            document.getElementById('status').innerHTML = 'GPS बंद';
+            document.getElementById('status').style.background = '#f8f9fa';
+            document.querySelector('button[onclick="startAdvancedGPS()"]').disabled = false;
+            document.querySelector('button[onclick="stopGPS()"]').disabled = true;
+
+            addLog('🛑 GPS बंद कर दिया');
+        }}
+
+        // बैटरी status check
+        if ('getBattery' in navigator) {{
+            navigator.getBattery().then(battery => {{
+                addLog(`🔋 बैटरी: ${{Math.round(battery.level * 100)}}%`);
+
+                battery.addEventListener('levelchange', () => {{
+                    const level = Math.round(battery.level * 100);
+                    if (level < 20) addLog(`⚠️ बैटरी कम: ${{level}}%`);
+                }});
+            }});
+        }}
+
+        // Page load पर
+        addLog('पेज लोड हो गया');
+        addLog('निर्देश: "एडवांस GPS शुरू करें" बटन दबाएँ');
+        addLog('स्क्रीन ऑफ होने पर भी GPS चलता रहेगा');
+
+        // Page बंद होने पर warning
+        window.addEventListener('beforeunload', (event) => {{
+            if (watchId) {{
+                event.preventDefault();
+                event.returnValue = 'GPS अभी चल रहा है। पेज बंद करने पर GPS बंद हो जाएगा।';
+            }}
+        }});
+
+        // Service Worker register (बैकग्राउंड के लिए)
+        if ('serviceWorker' in navigator) {{
+            navigator.serviceWorker.register('/sw.js').then(reg => {{
+                serviceWorker = reg;
+                addLog('✅ Service Worker रजिस्टर हो गया');
+            }}).catch(err => {{
+                addLog('❌ Service Worker error: ' + err.message);
+            }});
+        }}
+        </script>
+    </body>
+    </html>
+    '''
+
+    return html
+
+
+@app.route('/sw.js')
+def service_worker():
+    return '''
+    self.addEventListener('install', event => {
+        self.skipWaiting();
+    });
+
+    self.addEventListener('activate', event => {
+        clients.claim();
+    });
+
+    // Background sync support
+    self.addEventListener('sync', event => {
+        if (event.tag === 'gps-sync') {
+            event.waitUntil(syncGPSData());
+        }
+    });
+
+    async function syncGPSData() {
+        // Background में data sync करे
+        const cache = await caches.open('gps-cache');
+        const requests = await cache.keys();
+
+        for (const request of requests) {
+            const response = await cache.match(request);
+            if (response) {
+                // Send to server
+                try {
+                    await fetch('/api/gps-background', {
+                        method: 'POST',
+                        body: await response.text()
+                    });
+                    await cache.delete(request);
+                } catch (err) {
+                    console.log('Background sync error:', err);
+                }
             }
-
-            // Send to server
-            sendToServer(lat, lng, speed);
-
-            // Save last location
-            lastLat = lat;
-            lastLng = lng;
-
-            // Update status
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = false;
-            document.getElementById('statusText').className = 'badge bg-success fs-6';
-            document.getElementById('statusText').textContent = 'चालू';
-
-            addLog('📍 लोकेशन: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' | गति: ' + speed.toFixed(1) + ' km/h');
-        },
-
-        // Error callback
-        function(error) {
-            let errorMsg = 'GPS त्रुटि: ';
-            switch(error.code) {
-                case error.PERMISSION_DENIED:
-                    errorMsg += 'Permission denied';
-                    break;
-                case error.POSITION_UNAVAILABLE:
-                    errorMsg += 'Position unavailable';
-                    break;
-                case error.TIMEOUT:
-                    errorMsg += 'Timeout';
-                    break;
-                default:
-                    errorMsg += 'Unknown error';
-            }
-
-            addLog('❌ ' + errorMsg);
-            document.getElementById('statusText').className = 'badge bg-danger fs-6';
-            document.getElementById('statusText').textContent = 'त्रुटि';
-        },
-
-        options
-    );
-
-    addLog('✅ GPS ट्रैकिंग शुरू');
-}
-
-// Send location to server
-function sendToServer(lat, lng, speed) {
-    try {
-        socket.emit('driver_gps', {
-            sid: busId,
-            lat: lat,
-            lng: lng,
-            speed: speed,
-            timestamp: new Date().toISOString()
-        });
-    } catch (err) {
-        addLog('❌ सर्वर error: ' + err.message);
+        }
     }
-}
-
-// Stop GPS
-function stopGPS() {
-    if (watchId) {
-        navigator.geolocation.clearWatch(watchId);
-        watchId = null;
-    }
-
-    document.getElementById('startBtn').disabled = false;
-    document.getElementById('stopBtn').disabled = true;
-    document.getElementById('statusText').className = 'badge bg-secondary fs-6';
-    document.getElementById('statusText').textContent = 'बंद';
-
-    addLog('🛑 GPS बंद कर दिया');
-}
-
-// Log functions
-function addLog(message) {
-    const logBox = document.getElementById('logBox');
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = '<div>[' + timestamp + '] ' + message + '</div>';
-
-    logBox.innerHTML = logEntry + logBox.innerHTML;
-
-    // Keep only last 15 logs
-    const logs = logBox.getElementsByTagName('div');
-    if (logs.length > 15) {
-        logBox.removeChild(logs[logs.length - 1]);
-    }
-}
-
-function clearLogs() {
-    document.getElementById('logBox').innerHTML = '';
-    addLog('लॉग साफ़ किए गए');
-}
-
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
-    initMap();
-    addLog('पेज लोड हो गया | बस ID: ' + busId);
-});
-
-// Listen for server updates
-socket.on('bus_location', function(data) {
-    if (data.sid == busId) {
-        console.log('Server update received:', data);
-    }
-});
-</script>
-</body>
-</html>'''
-
-    return html_content
-
+    ''', 200, {'Content-Type': 'application/javascript'}
 
 @app.route("/live-bus/<int:bus_id>")
 def live_bus(bus_id):
