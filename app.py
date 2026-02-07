@@ -14,8 +14,8 @@ from psycopg.rows import dict_row
 import mysql.connector
 import atexit
 import razorpay
-import psycopg2
 
+# import psycopg2
 razor_client = razorpay.Client(auth=(
     os.getenv("RAZORPAY_KEY_ID"),
     os.getenv("RAZORPAY_KEY_SECRET")
@@ -58,11 +58,17 @@ def shutdown_pool():
 
 # ================= DB CONTEXT =================
 def get_db():
-    if 'db_conn' not in g:
+    try:
+        if 'db_conn' not in g or g.db_conn.closed:
+            g.db_conn = pool.getconn()
+        if 'db_cur' not in g:
+            g.db_cur = g.db_conn.cursor(row_factory=dict_row)
+        return g.db_conn, g.db_cur
+    except:
+        pool.closeall()
         g.db_conn = pool.getconn()
-    if 'db_cur' not in g:
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
-    return g.db_conn, g.db_cur
+        return g.db_conn, g.db_cur
 
 
 @app.teardown_appcontext
@@ -309,23 +315,26 @@ def gps(data):
 
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
-    # Save to DB
     try:
         with app.app_context():
             conn, cur = get_db()
             cur.execute("""
-                   UPDATE schedules 
-                   SET current_lat=%s, current_lng=%s
-                   WHERE id=%s
-               """, (lat, lng, sid))
+                UPDATE schedules 
+                SET current_lat=%s, current_lng=%s
+                WHERE id=%s
+            """, (lat, lng, sid))
             conn.commit()
     except:
         pass
 
-    emit("bus_location", {
-        "sid": sid, "lat": lat, "lng": lng, "speed": speed,
+    # 🔥 यही main fix है
+    socketio.emit("bus_location", {
+        "sid": sid,
+        "lat": lat,
+        "lng": lng,
+        "speed": speed,
         "timestamp": data.get('timestamp', '')
-    }, broadcast=True)
+    })
 
 
 # ================= HTML BASE =================
@@ -436,8 +445,7 @@ body{background:#f5f7fb;color:#222;}
 <div class="navbar">
   <div class="logo">🚌 My Bus AI</div>
   <div>
-    <a href="/login">User Login</a>
-    <a href="/admin">Admin</a>
+    <a href="/login">Admin login</a>
     <a href="/counter">Counter</a>
   </div>
 </div>
@@ -705,9 +713,12 @@ def buses(rid):
                             <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
                             <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
                         </div>
-                        <a href="/live-bus/{{ bus.id }}" class="btn btn-primary float-end mt-2">🗺️ Live GPS</a>
-                        <a href="/select/{{ bus.id }}" class="btn btn-success float-end mt-2">🎫 Book Seat</a>
-                    </div>
+
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
+                            <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
+                        </div>
+
                     {% endfor %}
                 {% else %}
                     <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
@@ -829,11 +840,46 @@ def login():
     )
 
 
-@app.route("/admin")
-def admin():
+# ******* counter ********
+@app.route("/counter", methods=["GET", "POST"])
+def counter():
+    error = ""
+
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        try:
+            conn, cur = get_db()
+            # ✅ IMPORTANT
+            cur.execute("SELECT * FROM admins")
+            user = cur.fetchone()
+            print(user)
+            cur.execute("""
+                SELECT id, role FROM admins
+                WHERE username=%s AND password=%s
+            """, (username, password))
+
+            user = cur.fetchone()
+
+            if user:
+                session.clear()  # ✅ clean old session
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["role"] = user["role"]  # admin / office / conductor
+                return redirect("/dashboard")
+            else:
+                error = "गलत यूज़रनेम या पासवर्ड"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print("LOGIN ERROR:", e)
+            error = "सर्वर में समस्या"
+
     return render_template_string(
         BASE_HTML,
-        content="<h2 class='text-center mt-5'>Welcome Admin 🎉</h2>"
+        content=render_template_string(BASE_HTML, error=error)
     )
 
 
@@ -850,124 +896,187 @@ def select(sid):
     return redirect(f"/seats/{sid}?fs={fs}&ts={ts}&d={d}")
 
 
-@app.route("/seats/<int:schedule_id>")
+@app.route("/seats/<int:sid>")
 @safe_db
-def seat_page(schedule_id):
+def seat_page(sid):
     conn, cur = get_db()
 
-    # Schedule details, route info, bus info
+    # ===== Schedule details =====
     cur.execute("""
-        SELECT s.id, s.bus_name, s.departure_time, r.route_name, r.id as route_id, s.current_lat, s.current_lng
+        SELECT s.id, s.bus_name, s.departure_time, r.route_name,
+               r.id as route_id, s.current_lat, s.current_lng
         FROM schedules s
         JOIN routes r ON s.route_id = r.id
         WHERE s.id = %s
-    """, (schedule_id,))
+    """, (sid,))
     schedule = cur.fetchone()
-
     if not schedule:
         return "Schedule not found", 404
 
-    # Route stations
+    # ===== Route stations =====
     cur.execute("""
         SELECT station_name, station_order
-        FROM route_stations WHERE route_id=%s
+        FROM route_stations
+        WHERE route_id=%s
         ORDER BY station_order
     """, (schedule['route_id'],))
     stations = cur.fetchall()
-    stations_map = {r['station_name']: r['station_order'] for r in stations}
 
-    # Booked seats for today
+    # ===== Already booked seats =====
     today = date.today().isoformat()
     cur.execute("""
-        SELECT seat_number, from_station, to_station
+        SELECT seat_number
         FROM seat_bookings
         WHERE schedule_id=%s AND travel_date=%s AND status='confirmed'
-    """, (schedule_id, today))
+    """, (sid, today))
     booked = cur.fetchall()
+    booked_seats = set(r['seat_number'] for r in booked)
 
-    booked_seats = set()
-    for r in booked:
-        booked_seats.add(r['seat_number'])
-
-    total_seats = 40
-    seat_buttons_html = ""
-
-    # Generate seat buttons with color coding
-    for i in range(1, total_seats + 1):
+    # ===== Seat buttons =====
+    seat_buttons = ""
+    for i in range(1, 41):  # Total 40 seats
         if i in booked_seats:
-            seat_buttons_html += f'<button class="btn btn-danger m-1" disabled>{i}</button>'
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-danger seat" disabled>X{i}</button>
+            '''
         else:
-            seat_buttons_html += f'<button class="btn btn-success" onclick="bookSeat({i})">{i}</button>'
+            seat_buttons += f'''
+            <button id="seat-{i}" class="btn btn-success seat" onclick="bookSeat({i})">{i}</button>
+            '''
 
-    # Google Maps iframe for live bus location
-    bus_lat = schedule['current_lat'] or 0
-    bus_lon = schedule['current_lng'] or 0
-    counter_js = "null"
-    if session.get("role") == "counter":
-        counter_js = session.get("user_id")
-    map_iframe = f"""
-    <iframe
-        width="100%"
-        height="300"
-        frameborder="0" style="border:0"
-        src="https://www.google.com/maps?q={bus_lat},{bus_lon}&hl=es;z=14&output=embed"
-        allowfullscreen>
-    </iframe>
+    # ===== Bus default location =====
+    bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
+    bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
+    counter_js = session.get("user_id") if session.get("role") == "counter" else "null"
+
+    # ===== Map div =====
+    map_div = """
+    <div id="map" style="
+        width:100%;
+        max-width:900px;
+        height:300px;
+        border-radius:12px;
+        overflow:hidden;
+        box-shadow:0 4px 10px rgba(0,0,0,0.2);
+    "></div>
     """
 
-    # Complete HTML
+    # ===== Full HTML =====
     html_content = f"""
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
     <div class="container" style="max-width:900px;margin:auto;">
-        <h2 style="margin-top:20px;">Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
+        <h2>बस: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
 
-        <!-- Live Bus Location -->
-        <div style="margin-top:30px;">
-            <h5>Bus Live Location</h5>
-            {map_iframe}
-        </div>
+        <h5>Live Location</h5>
+        {map_div}
 
-        <!-- Seat Selection -->
-        <div style="margin-top:40px;">
-            <h5>Select Your Seat</h5>
-            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-top:15px;">
-                {seat_buttons_html}
-            </div>
+        <h5 style="margin-top:30px;">Select Seat</h5>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;">
+            {seat_buttons}
         </div>
     </div>
 
     <script>
+   const socket = io(window.location.origin);
+    const SID = {sid};
+    const TODAY = "{today}";
+    const BUS_LAT = {bus_lat};
+    const BUS_LNG = {bus_lon};
+    const COUNTER_ID = {counter_js};
 
-    async function bookSeat(seatNumber){{
-        const passengerName = prompt("Enter Passenger Name:");
-        if(!passengerName) return;
-        const mobile = prompt("Enter Mobile Number:");
+    // ===== Leaflet Map Init =====
+    const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15); // zoom 15 = city/highway level
+
+    L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }}).addTo(map);
+
+    let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
+
+    // ===== Bus location update =====
+    socket.on("bus_location", data => {{
+        if(data.sid == SID){{
+            let lat = parseFloat(data.lat);
+            let lng = parseFloat(data.lng);
+            busMarker.setLatLng([lat, lng]);
+            map.flyTo([lat,lng], map.getZoom());;
+        }}
+    }});
+
+    // ===== Seat update realtime =====
+    socket.on("seat_update", function(data) {{
+        if(SID != data.sid || TODAY != data.date) return;
+
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn){{
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerText = "X" + data.seat;
+        }}
+    }});
+     setInterval(()=>{{
+    fetch("/heartbeat");
+    }}, 30000);
+
+    // ===== Seat Booking =====
+    function bookSeat(seatId){{
+        let name = prompt("Passenger Name:");
+        if(!name) return;
+
+        let mobile = prompt("Mobile Number:");
         if(!mobile) return;
 
-        const response = await fetch('/book', {{
-            method: 'POST',
-            headers: {{'Content-Type': 'application/json'}},
-            body: JSON.stringify({
-    schedule_id: {schedule_id},
-                seat_number: seatNumber,
-                passenger_name: passengerName,
+        let btn = document.getElementById("seat-" + seatId);
+        let oldText = btn.innerText;
+        btn.innerText = "⏳ Booking...";
+        btn.disabled = true;
+
+        fetch("/book", {{
+            method: "POST",
+            headers: {{ "Content-Type":"application/json" }},
+            body: JSON.stringify({{
+                schedule_id: SID,
+                seat_number: seatId,
+                passenger_name: name,
                 mobile: mobile,
-                date: "{today}",
-                counter_id: {counter_js}
-            })
+                date: TODAY,
+                counter_id: COUNTER_ID
+            }})
+        }})
+        .then(r => r.json())
+        .then(res => {{
+            if(res.ok){{
+                alert("Seat booked! Fare: ₹" + res.fare);
+            }} else {{
+                alert(res.error || res.msg);
+                btn.innerText = oldText;
+                btn.disabled = false;
+            }}
+        }})
+        .catch(err => {{
+            console.error(err);
+            btn.innerText = oldText;
+            btn.disabled = false;
         }});
-        const result = await response.json();
-        if(result.ok){{
-            alert("Seat Booked Successfully!");
-            location.reload();
-        }} else {{
-            alert("Error: " + result.error);
-        }}
     }}
+
+
     </script>
     """
 
     return render_template_string(BASE_HTML, content=html_content)
+
+
+@app.route("/heartbeat")
+def heartbeat():
+    return "ok"
 
 
 @app.route("/book", methods=["POST"])
@@ -1022,6 +1131,11 @@ def book():
         ))
 
         conn.commit()
+        socketio.emit("seat_update", {
+            "sid": data['schedule_id'],  # schedule_id को sid की जगह
+            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
+            "date": data['date']
+        })
         return jsonify({"ok": True, "fare": fare})
 
     except Exception as e:
@@ -1095,7 +1209,7 @@ def driver(sid):
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io({{ transports: ["websocket", "polling"] }});
+        const socket = io(window.location.origin);
         let watchId = null;
 
         function startGPS() {{
@@ -1229,10 +1343,15 @@ def live_bus(sid):
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <script>
-    const map = L.map('map').setView([{lat}, {lng}], {13 if bus.get('lat') else 10});
-    L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        attribution: '© OpenStreetMap'
-    }}).addTo(map);
+const map = L.map('map').setView([{{ lat }}, {{ lng }}], 13);
+
+// ✅ Carto clear streets + highways
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO',
+    subdomains: 'abcd',
+    maxZoom: 19
+}).addTo(map);
+</script>
 
     // ===== ROUTE POLYLINE =====
     const stations = {stations_json};
@@ -1251,7 +1370,7 @@ def live_bus(sid):
     let routeLine = null;
     if(routePoints.length > 1){{
         routeLine = L.polyline(routePoints, {{
-            color: 'Blue',   // thick red polyline
+            color: 'blue',   // thick red polyline
             weight: 8,
             opacity: 0.9
         }}).addTo(map);
@@ -1268,7 +1387,7 @@ def live_bus(sid):
 
     // ===== SOCKET LIVE UPDATE =====
     const sid = {sid};
-    const socket = io({{transports:["websocket","polling"]}});
+   const socket = io(window.location.origin);
 
     socket.on('connect', () => {{
         console.log('✅ Socket Connected');
