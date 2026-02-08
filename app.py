@@ -126,6 +126,7 @@ try:
         open=True,
         max_idle=300,
         num_workers=2
+       kwargs={"keepalives": 1, "keepalives_idle": 30}
     )
     print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
 except Exception as e:
@@ -137,32 +138,32 @@ db_context = threading.local()
 
 @contextmanager
 def get_db_connection():
-    """Safe database connection context manager"""
+    if not pool:
+        raise Exception("Database pool not initialized")
+
     conn = None
     cur = None
     try:
-        if pool is None or (hasattr(pool, 'closed') and pool.closed):
-            raise Exception("Database pool is not available")
-        
         conn = pool.getconn()
         cur = conn.cursor(row_factory=dict_row)
         yield cur
         conn.commit()
     except Exception as e:
+        if "connection is lost" in str(e).lower():
+            print("🔄 Reconnecting DB...")
+            pool.close()
+            pool.open()
+
         if conn:
             conn.rollback()
         raise e
     finally:
         if cur:
-            try:
-                cur.close()
-            except:
-                pass
+            try: cur.close()
+            except: pass
         if conn:
-            try:
-                pool.putconn(conn)
-            except:
-                pass
+            try: pool.putconn(conn)
+            except: pass
 
 # ================= CLEANUP FUNCTIONS =================
 @app.teardown_appcontext
