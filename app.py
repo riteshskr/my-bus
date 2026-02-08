@@ -125,7 +125,7 @@ try:
         timeout=30,
         open=True,
         max_idle=300,
-        num_workers=2
+        num_workers=2,
        kwargs={"keepalives": 1, "keepalives_idle": 30}
     )
     print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
