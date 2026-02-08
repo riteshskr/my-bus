@@ -680,12 +680,8 @@ LOGIN_HTML = """
 @app.route("/")
 @limiter.limit("100 per minute")
 def home():
-    if not session.get("initialized"):
-        session.clear()
-        session["initialized"] = True
+    if "role" not in session:
         session["role"] = "guest"
-        session["date"] = date.today().isoformat()
-
     return render_template_string(BASE_HTML, content=None)
 
 @app.route("/dashboard")
