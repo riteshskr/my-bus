@@ -1155,12 +1155,10 @@ def heartbeat():
 
 @app.route("/book", methods=["POST"])
 @limiter.limit("20 per minute")
-booked_by_id = session.get("user_id")
-if not booked_by_id:
-    booked_by_id = 0
 def book():
     data = request.get_json()
-    booked_by_id = session.get("user_id", 0)
+    booked_by_id = session.get("user_id", 0)  # ✅ फ़ंक्शन के अंदर ले जाएँ
+    
     try:
         with get_db_connection() as cur:
             # Check if seat already booked
@@ -1204,8 +1202,8 @@ def book():
                 'confirmed',
                 payment_mode,
                 user_role,
-               int(booked_by_id)
-               int(data.get("counter_id") or 0)
+                int(booked_by_id),  # ✅ यहाँ प्रयोग करें
+                int(data.get("counter_id") or 0)
             ))
 
             # Emit seat update
