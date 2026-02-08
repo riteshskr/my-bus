@@ -1,4 +1,5 @@
 import eventlet
+eventlet.monkey_patch()
 from dotenv import load_dotenv
 import json
 import time
@@ -93,20 +94,70 @@ SOCKET_RATE_LIMITS = {}
 # ================= DATABASE POOL OPTIMIZED =================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise Exception("DATABASE_URL environment variable is missing!")
+    print("❌ DATABASE_URL environment variable is missing!")
+    print("⚠️ Using in-memory database for testing only")
+    
+    # For testing - temporary in-memory database
+    DATABASE_URL = "postgresql://user:pass@localhost/test"
+    
+    # OR create a simple fallback
+    import sqlite3
+    import tempfile
+    
+    # Create temp sqlite database for emergency
+    temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+    DATABASE_URL = f"sqlite:///{temp_db.name}"
+    print(f"📁 Using temporary SQLite database: {temp_db.name}")
 
-# OPTIMIZED CONNECTION POOL WITH LEAK PROTECTION
-pool = ConnectionPool(
-    conninfo=DATABASE_URL,
-    min_size=2,
-    max_size=10,  # Render.com free tier के लिए optimize
-    timeout=30,
-    open=True,
-    max_idle=300,
-    num_workers=2
-)
-
-print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
+# Now create pool with error handling
+try:
+    # OPTIMIZED CONNECTION POOL WITH LEAK PROTECTION
+    pool = ConnectionPool(
+        conninfo=DATABASE_URL,
+        min_size=1,  # Reduce for testing
+        max_size=5,  # Reduce for testing
+        timeout=30,
+        open=True,
+        max_idle=300,
+        num_workers=1
+    )
+    
+    print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
+    
+except Exception as e:
+    print(f"❌ Failed to create connection pool: {e}")
+    print("⚠️ Creating emergency fallback pool")
+    
+    # Emergency fallback - simple connection
+    class EmergencyPool:
+        def __init__(self):
+            self.closed = False
+            self._used = 0
+            self._idle = 0
+            
+        def getconn(self):
+            import psycopg
+            self._used += 1
+            try:
+                conn = psycopg.connect(DATABASE_URL)
+                cur = conn.cursor(row_factory=dict_row)
+                return conn, cur
+            except Exception as e:
+                print(f"Emergency connection failed: {e}")
+                return None, None
+                
+        def putconn(self, conn):
+            if conn:
+                try:
+                    conn.close()
+                except:
+                    pass
+            self._used -= 1
+            
+        def close(self):
+            self.closed = True
+    
+    pool = EmergencyPool()
 
 # ================= CONNECTION LEAK PREVENTION =================
 db_context = threading.local()
@@ -117,78 +168,50 @@ def get_db_connection():
     conn = None
     cur = None
     try:
-        conn = pool.getconn()
-        cur = conn.cursor(row_factory=dict_row)
+        # Check if pool exists and is not closed
+        if pool is None or (hasattr(pool, 'closed') and pool.closed):
+            raise Exception("Database pool is not available")
+            
+        # Try to get connection from pool
+        if hasattr(pool, 'getconn'):
+            conn = pool.getconn()
+        else:
+            # Fallback for emergency pool
+            conn, cur = pool.getconn()
+            
+        if conn is None:
+            raise Exception("Failed to get database connection")
+            
+        if cur is None:
+            cur = conn.cursor(row_factory=dict_row)
+            
         yield cur
-        conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        raise e
-    finally:
-        # GUARANTEED CLEANUP
-        if cur:
-            try:
-                cur.close()
-            except:
-                pass
-        if conn:
-            try:
-                pool.putconn(conn)
-            except:
-                pass
-
-def get_db():
-    """Simple connection getter with leak protection"""
-    if hasattr(db_context, 'conn') and db_context.conn and not db_context.conn.closed:
-        return db_context.conn, db_context.cur
-
-    try:
-        db_context.conn = pool.getconn()
-        db_context.cur = db_context.conn.cursor(row_factory=dict_row)
-        return db_context.conn, db_context.cur
+        
+        if conn and not hasattr(pool, 'putconn'):
+            conn.commit()
+            
     except Exception as e:
         print(f"❌ Database connection error: {e}")
-        # Emergency fallback
-        return None, None
-
-@app.teardown_appcontext
-def close_db(error=None):
-    """Leak-proof connection cleanup"""
-    # Clear Flask g context
-    cur = g.pop('db_cur', None)
-    conn = g.pop('db_conn', None)
-
-    if cur:
+        if conn:
+            try:
+                conn.rollback()
+            except:
+                pass
+        raise e
+        
+    finally:
+        # GUARANTEED CLEANUP
         try:
-            cur.close()
+            if cur:
+                cur.close()
         except:
             pass
-
-    if conn:
+            
         try:
-            pool.putconn(conn)
+            if conn and hasattr(pool, 'putconn'):
+                pool.putconn(conn)
         except:
             pass
-
-    # Clear thread local
-    if hasattr(db_context, 'conn'):
-        try:
-            if db_context.conn and not db_context.conn.closed:
-                pool.putconn(db_context.conn)
-        except:
-            pass
-        finally:
-            db_context.conn = None
-            db_context.cur = None
-
-def safe_db(func):
-    """Decorator with guaranteed connection cleanup"""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        with get_db_connection() as cur:
-            return func(cur, *args, **kwargs)
-    return wrapper
 
 # ================= CONNECTION MONITORING =================
 connection_monitor = {
@@ -372,6 +395,9 @@ def admin_required(f):
 def init_db():
     """Initialize database tables"""
     print("🔄 Initializing database...")
+   if pool is None:
+        print("❌ Database pool not available, skipping initialization")
+        return		
 
     try:
         with get_db_connection() as cur:
@@ -473,8 +499,9 @@ def init_db():
             """)
 
             # ===== DEFAULT DATA =====
-            cur.execute("SELECT COUNT(*) FROM admins")
-            if cur.fetchone()[0] == 0:
+            cur.execute("SELECT COUNT(*) as count FROM admins")
+            result = cur.fetchone()
+             if result and result['count'] == 0:
                 cur.execute("""
                     INSERT INTO admins (username, password, role, counter_no)
                     VALUES ('admin', 'admin123', 'admin', 1)
@@ -759,6 +786,11 @@ def dashboard():
 @app.route("/buses/<int:rid>")
 @limiter.limit("30 per minute")
 def buses(rid):
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         with get_db_connection() as cur:
             cur.execute("""
@@ -882,7 +914,11 @@ def buses(rid):
 def create_counter():
     error = ""
     success = ""
-
+    if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -931,7 +967,11 @@ def create_counter():
 @limiter.limit("20 per minute")
 def login():
     error = ""
-
+    if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -967,7 +1007,11 @@ def login():
 @limiter.limit("20 per minute")
 def counter():
     error = ""
-
+    if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -1002,6 +1046,11 @@ def counter():
 @app.route("/seats/<int:sid>")
 @limiter.limit("30 per minute")
 def seat_page(sid):
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         with get_db_connection() as cur:
             # Get schedule details
@@ -1206,6 +1255,11 @@ def heartbeat():
 def book():
     """Book a seat with connection leak protection"""
     data = request.get_json()
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
 
     try:
         with get_db_connection() as cur:
@@ -1392,6 +1446,11 @@ def driver_advanced(bus_id):
 @limiter.limit("30 per minute")
 def live_bus(bus_id):
     """Live bus tracking page"""
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         with get_db_connection() as cur:
             cur.execute("""
@@ -1599,6 +1658,11 @@ def live_bus(bus_id):
 @limiter.limit("30 per minute")
 def search():
     """Search for buses"""
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     fs_input = request.form.get("from", "").strip()
     ts_input = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
@@ -1661,6 +1725,11 @@ def search():
 @admin_required
 def admin_monitor():
     """Connection monitoring dashboard"""
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         with get_db_connection() as cur:
             cur.execute("""
@@ -1810,6 +1879,11 @@ def admin_monitor():
 @admin_required
 def clear_connections():
     """Clear all connections"""
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         # Reset socket connections
         socket_connections.clear()
@@ -1844,7 +1918,11 @@ def get_stats():
     """Get live statistics"""
     import psutil
     import os
-
+   if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         # Get memory usage
         process = psutil.Process(os.getpid())
@@ -1867,6 +1945,11 @@ def get_stats():
 @app.route("/health")
 def health_check():
     """Health check endpoint"""
+ if pool is None or (hasattr(pool, 'closed') and pool.closed):
+        return render_template_string(
+            BASE_HTML,
+            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
+        )
     try:
         # Test database
         with get_db_connection() as cur:
@@ -1941,6 +2024,44 @@ def auto_recovery():
 recovery_thread = threading.Thread(target=auto_recovery, daemon=True)
 recovery_thread.start()
 
+#========== startup   ===========
+def startup_check():
+    """Run startup health checks"""
+    print("\n" + "="*50)
+    print("🚀 Starting Health Checks...")
+    
+    # Check environment variables
+    required_env_vars = ['DATABASE_URL', 'SECRET_KEY']
+    for var in required_env_vars:
+        value = os.getenv(var)
+        if value:
+            print(f"✅ {var}: Set")
+        else:
+            print(f"❌ {var}: Missing")
+    
+    # Test database connection
+    try:
+        with get_db_connection() as cur:
+            cur.execute("SELECT version()")
+            db_version = cur.fetchone()
+            print(f"✅ Database: Connected ({db_version['version'][:50]}...)")
+    except Exception as e:
+        print(f"❌ Database: Connection failed - {str(e)[:100]}")
+    
+    # Check Redis
+    if cache:
+        try:
+            cache.ping()
+            print("✅ Redis: Connected")
+        except:
+            print("❌ Redis: Connection failed")
+    else:
+        print("⚠️ Redis: Not configured")
+    
+    print("="*50 + "\n")
+
+# Run startup checks before main
+startup_check()
 # ================= MAIN =================
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting...")
