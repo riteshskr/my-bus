@@ -1191,7 +1191,7 @@ def book():
                 'confirmed',
                 payment_mode,
                 user_role,
-               int(booked_by_id)
+               int(session.get("user_id", 0))
                # int(session.get("user_id", 0)),
                 int(data.get("counter_id") or 0)
             ))
