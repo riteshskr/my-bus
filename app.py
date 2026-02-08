@@ -1,14 +1,16 @@
 import eventlet
+# MUST BE FIRST: Monkey patch before any other imports
 eventlet.monkey_patch()
-from dotenv import load_dotenv
+
 import json
 import time
 from datetime import datetime, date
+from dotenv import load_dotenv
 load_dotenv()
 import setuptools
-import os, random
-from datetime import date
-from functools import wraps
+import os
+import random
+from functools import wraps, lru_cache
 from flask import Flask, request, jsonify, render_template_string, redirect, g, session
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_compress import Compress
@@ -19,28 +21,42 @@ from psycopg.rows import dict_row
 import atexit
 import razorpay
 import threading
-
 from contextlib import contextmanager
-import redis
-from functools import lru_cache
 
-# Monkey patch for eventlet
-eventlet.monkey_patch()
+# ================= SIMPLE IN-MEMORY CACHE =================
+class MemoryCache:
+    def __init__(self):
+        self.store = {}
+        self.ttl = {}
+    
+    def get(self, key):
+        if key in self.store:
+            if key in self.ttl and time.time() > self.ttl[key]:
+                del self.store[key]
+                del self.ttl[key]
+                return None
+            return self.store[key]
+        return None
+    
+    def set(self, key, value, ex=None):
+        self.store[key] = value
+        if ex:
+            self.ttl[key] = time.time() + ex
+    
+    def delete(self, key):
+        if key in self.store:
+            del self.store[key]
+        if key in self.ttl:
+            del self.ttl[key]
+    
+    def flushall(self):
+        self.store.clear()
+        self.ttl.clear()
 
-# Initialize Redis for caching if available
-REDIS_URL = os.getenv("REDIS_URL")
-if REDIS_URL:
-    cache = redis.from_url(REDIS_URL, decode_responses=True, socket_keepalive=True)
-else:
-    cache = None
-    print("⚠️ Redis not configured, using memory cache")
+cache = MemoryCache()
+print("✅ Using in-memory cache")
 
-razor_client = razorpay.Client(auth=(
-    os.getenv("RAZORPAY_KEY_ID"),
-    os.getenv("RAZORPAY_KEY_SECRET")
-))
-
-# ===== PAYMENT CONFIG =====
+# ================= RAZORPAY CLIENT =================
 RAZORPAY_ENABLED = bool(
     os.getenv("RAZORPAY_KEY_ID") and
     os.getenv("RAZORPAY_KEY_SECRET")
@@ -53,10 +69,11 @@ if RAZORPAY_ENABLED:
     ))
 else:
     razor_client = None
+    print("⚠️ Razorpay not configured")
 
-# ================= APP =================
+# ================= APP INITIALIZATION =================
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "super-secret-key")
+app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-change-in-production")
 Compress(app)
 
 # ================= RATE LIMITER =================
@@ -75,7 +92,7 @@ socketio = SocketIO(
     cors_allowed_origins="*",
     async_mode='eventlet',
     logger=True,
-    engineio_logger=False,  # Production में false करें
+    engineio_logger=False,
     ping_timeout=30,
     ping_interval=25,
     max_http_buffer_size=1e8,
@@ -86,160 +103,80 @@ socketio = SocketIO(
     cookie=None
 )
 
-# SocketIO connection tracking with limits
+# SocketIO connection tracking
 socket_connections = {}
-MAX_CONNECTIONS_PER_IP = 15
+MAX_CONNECTIONS_PER_IP = 50
 SOCKET_RATE_LIMITS = {}
 
-# ================= DATABASE POOL OPTIMIZED =================
+# ================= DATABASE CONFIGURATION =================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    print("❌ DATABASE_URL environment variable is missing!")
-    print("⚠️ Using in-memory database for testing only")
-    
-    # For testing - temporary in-memory database
-    DATABASE_URL = "postgresql://user:pass@localhost/test"
-    
-    # OR create a simple fallback
-    import sqlite3
-    import tempfile
-    
-    # Create temp sqlite database for emergency
-    temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
-    DATABASE_URL = f"sqlite:///{temp_db.name}"
-    print(f"📁 Using temporary SQLite database: {temp_db.name}")
+    print("❌ DATABASE_URL not found in environment variables")
+    print("⚠️ Using default PostgreSQL URL for Render.com")
+    # Render.com provides DATABASE_URL automatically
+    DATABASE_URL = "postgresql://localhost/busdb"
 
-# Now create pool with error handling
+# Create connection pool
 try:
-    # OPTIMIZED CONNECTION POOL WITH LEAK PROTECTION
     pool = ConnectionPool(
         conninfo=DATABASE_URL,
-        min_size=1,  # Reduce for testing
-        max_size=5,  # Reduce for testing
+        min_size=2,
+        max_size=10,
         timeout=30,
         open=True,
         max_idle=300,
-        num_workers=1
+        num_workers=2
     )
-    
     print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
-    
 except Exception as e:
     print(f"❌ Failed to create connection pool: {e}")
-    print("⚠️ Creating emergency fallback pool")
-    
-    # Emergency fallback - simple connection
-    class EmergencyPool:
-        def __init__(self):
-            self.closed = False
-            self._used = 0
-            self._idle = 0
-            
-        def getconn(self):
-            import psycopg
-            self._used += 1
-            try:
-                conn = psycopg.connect(DATABASE_URL)
-                cur = conn.cursor(row_factory=dict_row)
-                return conn, cur
-            except Exception as e:
-                print(f"Emergency connection failed: {e}")
-                return None, None
-                
-        def putconn(self, conn):
-            if conn:
-                try:
-                    conn.close()
-                except:
-                    pass
-            self._used -= 1
-            
-        def close(self):
-            self.closed = True
-    
-    pool = EmergencyPool()
+    pool = None
 
-# ================= CONNECTION LEAK PREVENTION =================
+# ================= DATABASE CONNECTION MANAGEMENT =================
 db_context = threading.local()
 
 @contextmanager
 def get_db_connection():
-    """LEAK-PROOF database connection context manager"""
+    """Safe database connection context manager"""
     conn = None
     cur = None
     try:
-        # Check if pool exists and is not closed
         if pool is None or (hasattr(pool, 'closed') and pool.closed):
             raise Exception("Database pool is not available")
-            
-        # Try to get connection from pool
-        if hasattr(pool, 'getconn'):
-            conn = pool.getconn()
-        else:
-            # Fallback for emergency pool
-            conn, cur = pool.getconn()
-            
-        if conn is None:
-            raise Exception("Failed to get database connection")
-            
-        if cur is None:
-            cur = conn.cursor(row_factory=dict_row)
-            
-        yield cur
         
-        if conn and not hasattr(pool, 'putconn'):
-            conn.commit()
-            
+        conn = pool.getconn()
+        cur = conn.cursor(row_factory=dict_row)
+        yield cur
+        conn.commit()
     except Exception as e:
-        print(f"❌ Database connection error: {e}")
         if conn:
+            conn.rollback()
+        raise e
+    finally:
+        if cur:
             try:
-                conn.rollback()
+                cur.close()
             except:
                 pass
-        raise e
-        
-    finally:
-        # GUARANTEED CLEANUP
-        try:
-            if cur:
-                cur.close()
-        except:
-            pass
-            
-        try:
-            if conn and hasattr(pool, 'putconn'):
+        if conn:
+            try:
                 pool.putconn(conn)
+            except:
+                pass
+
+# ================= CLEANUP FUNCTIONS =================
+@app.teardown_appcontext
+def close_db(error=None):
+    """Cleanup database connections"""
+    if hasattr(db_context, 'conn'):
+        try:
+            if db_context.conn and not db_context.conn.closed:
+                pool.putconn(db_context.conn)
         except:
             pass
-
-# ================= CONNECTION MONITORING =================
-connection_monitor = {
-    "active": 0,
-    "total_requests": 0,
-    "leaks_prevented": 0
-}
-
-def monitor_connections():
-    """Monitor and log connection usage"""
-    while True:
-        time.sleep(60)  # Check every minute
-        try:
-            active = pool._used - pool._idle
-            connection_monitor["active"] = active
-
-            print(f"📊 CONNECTION MONITOR: Active={active}, Idle={pool._idle}, "
-                  f"SocketIO Clients={len(socket_connections)}")
-
-            if active > pool.max_size * 0.8:
-                print(f"⚠️ WARNING: High connection usage ({active}/{pool.max_size})")
-
-        except Exception as e:
-            print(f"Monitor error: {e}")
-
-# Start monitoring thread
-monitor_thread = threading.Thread(target=monitor_connections, daemon=True)
-monitor_thread.start()
+        finally:
+            db_context.conn = None
+            db_context.cur = None
 
 # ================= SOCKETIO RATE LIMITING =================
 def check_socket_rate_limit(sid, event_type, max_per_minute=60):
@@ -277,8 +214,7 @@ def handle_connect():
         socket_connections[client_ip] = set()
     socket_connections[client_ip].add(client_id)
 
-    print(f"✅ Client connected: {client_id} from {client_ip} | "
-          f"Total IPs: {len(socket_connections)}")
+    print(f"✅ Client connected: {client_id} from {client_ip}")
     return True
 
 @socketio.on("disconnect")
@@ -313,7 +249,6 @@ def handle_leave_room(data):
 @socketio.on("driver_gps")
 def handle_gps(data):
     """Handle GPS updates with rate limiting"""
-    # Apply rate limiting
     if not check_socket_rate_limit(request.sid, "driver_gps", max_per_minute=30):
         print(f"⚠️ Rate limited GPS from {request.sid}")
         return
@@ -326,7 +261,6 @@ def handle_gps(data):
     print(f"📍 LIVE: Bus-{sid} @ [{lat:.5f},{lng:.5f}] {speed}km/h")
 
     try:
-        # Update database
         with get_db_connection() as cur:
             cur.execute("""
                 UPDATE schedules 
@@ -384,10 +318,8 @@ def admin_required(f):
     def wrap(*a, **k):
         if not session.get("user_logged_in"):
             return redirect("/login")
-
         if session.get("role") != "admin":
             return "Access Denied", 403
-
         return f(*a, **k)
     return wrap
 
@@ -395,13 +327,14 @@ def admin_required(f):
 def init_db():
     """Initialize database tables"""
     print("🔄 Initializing database...")
-   if pool is None:
+    
+    if pool is None:
         print("❌ Database pool not available, skipping initialization")
-        return		
+        return
 
     try:
         with get_db_connection() as cur:
-            # ===== TABLES =====
+            # Create tables if they don't exist
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS faces (
                     id SERIAL PRIMARY KEY,
@@ -498,68 +431,69 @@ def init_db():
                 );
             """)
 
-            # ===== DEFAULT DATA =====
+            # Check if tables are empty and insert default data
             cur.execute("SELECT COUNT(*) as count FROM admins")
-            result = cur.fetchone()
-             if result and result['count'] == 0:
+            admin_count = cur.fetchone()
+            if admin_count and admin_count['count'] == 0:
                 cur.execute("""
                     INSERT INTO admins (username, password, role, counter_no)
                     VALUES ('admin', 'admin123', 'admin', 1)
-                    ON CONFLICT DO NOTHING;
+                    ON CONFLICT (username) DO NOTHING;
                 """)
+                print("✅ Default admin created")
 
-            cur.execute("SELECT COUNT(*) FROM routes")
-            if cur.fetchone()[0] == 0:
-                routes = [
+            cur.execute("SELECT COUNT(*) as count FROM routes")
+            route_count = cur.fetchone()
+            if route_count and route_count['count'] == 0:
+                # Insert default routes
+                routes_data = [
                     (1, 'बीकानेर → जयपुर', 336),
                     (2, 'बीकानेर → जोधपुर', 252),
                     (3, 'जयपुर → जोधपुर', 330)
                 ]
-
-                for r in routes:
+                for route in routes_data:
                     cur.execute(
-                        "INSERT INTO routes VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
-                        r
+                        "INSERT INTO routes (id, route_name, distance_km) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                        route
                     )
 
-                schedules = [
+                # Insert default schedules
+                schedules_data = [
                     (1, 1, 'Volvo AC Sleeper', '08:00'),
                     (2, 1, 'Semi Sleeper AC', '10:30'),
                     (3, 2, 'Volvo AC Seater', '09:00'),
                     (4, 3, 'Deluxe AC', '07:30')
                 ]
-
-                for s in schedules:
+                for schedule in schedules_data:
                     cur.execute("""
-                        INSERT INTO schedules
-                        (id, route_id, bus_name, departure_time, total_seats)
-                        VALUES (%s,%s,%s,%s::time,40)
-                        ON CONFLICT DO NOTHING
-                    """, s)
+                        INSERT INTO schedules (id, route_id, bus_name, departure_time, total_seats)
+                        VALUES (%s, %s, %s, %s::time, 40)
+                        ON CONFLICT (id) DO NOTHING
+                    """, schedule)
 
-                stations = [
-                    (1, 'बीकानेर', 1),
-                    (1, 'जयपुर', 2),
-                    (2, 'बीकानेर', 1),
-                    (2, 'जोधपुर', 2),
-                    (3, 'जयपुर', 1),
-                    (3, 'जोधपुर', 2)
+                # Insert default stations
+                stations_data = [
+                    (1, 'बीकानेर', 1, 27.2, 75.2),
+                    (1, 'जयपुर', 2, 26.9, 75.8),
+                    (2, 'बीकानेर', 1, 27.2, 75.2),
+                    (2, 'जोधपुर', 2, 26.3, 73.0),
+                    (3, 'जयपुर', 1, 26.9, 75.8),
+                    (3, 'जोधपुर', 2, 26.3, 73.0)
                 ]
-
-                for st in stations:
+                for station in stations_data:
                     cur.execute("""
-                        INSERT INTO route_stations
-                        (route_id,station_name,station_order)
-                        VALUES (%s,%s,%s)
+                        INSERT INTO route_stations (route_id, station_name, station_order, lat, lng)
+                        VALUES (%s, %s, %s, %s, %s)
                         ON CONFLICT DO NOTHING
-                    """, st)
+                    """, station)
+                
+                print("✅ Default routes, schedules and stations created")
 
-        print("✅ Database tables initialized successfully!")
+        print("✅ Database initialization completed successfully!")
 
     except Exception as e:
-        print(f"❌ Database initialization error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"⚠️ Database initialization warning: {e}")
+        # Continue anyway - tables might already exist
 
 # Initialize database
 init_db()
@@ -617,12 +551,15 @@ body{background:#f5f7fb;color:#222;}
   border-radius:15px;
   display:flex;
   gap:10px;
+  max-width:800px;
+  margin:0 auto;
 }
 .search-box input{
   padding:12px;
   border:none;
   border-radius:8px;
   outline:none;
+  flex:1;
 }
 .search-box button{
   padding:12px 30px;
@@ -643,26 +580,28 @@ body{background:#f5f7fb;color:#222;}
   margin-bottom:20px;
 }
 
-/* ---------- Mobile Fixes ---------- */
+/* Mobile Responsive */
 @media(max-width:768px){
-
   .navbar{
     flex-direction:column;
     gap:10px;
     padding:10px 20px;
   }
-
+  .navbar a{
+    margin:5px;
+  }
   .search-box{
     flex-direction:column;
-    width:100%;
+    width:90%;
   }
-
   .search-box input,
   .search-box button{
     width:100%;
   }
-
-  .hero h1{font-size:1.6rem;}
+  .hero h1{
+    font-size:1.6rem;
+    padding:0 10px;
+  }
 }
 </style>
 </head>
@@ -741,9 +680,11 @@ LOGIN_HTML = """
 @app.route("/")
 @limiter.limit("100 per minute")
 def home():
-    if "role" not in session:
+    if not session.get("initialized"):
         session.clear()
+        session["initialized"] = True
         session["role"] = "guest"
+        session["date"] = date.today().isoformat()
 
     return render_template_string(BASE_HTML, content=None)
 
@@ -762,7 +703,7 @@ def dashboard():
             <a href="/routes" class="btn btn-info me-2">🛣️ Manage Routes</a>
             <a href="/schedules" class="btn btn-warning me-2">🚌 Manage Schedules</a>
             <a href="/bookings" class="btn btn-success">🎫 View Bookings</a>
-            <a href="/create-counter" class="btn btn-success">🎫 Create Counter</a>
+            <a href="/create-counter" class="btn btn-primary">🎫 Create Counter</a>
         </div>
         """
 
@@ -786,26 +727,33 @@ def dashboard():
 @app.route("/buses/<int:rid>")
 @limiter.limit("30 per minute")
 def buses(rid):
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
     try:
         with get_db_connection() as cur:
+            # Get route details
             cur.execute("""
-                SELECT r.route_name, r.distance_km, 
-                       string_agg(rs.station_name, ' → ' ORDER BY rs.station_order) as stations
+                SELECT r.route_name, r.distance_km
                 FROM routes r 
-                LEFT JOIN route_stations rs ON r.id = rs.route_id 
-                WHERE r.id = %s 
-                GROUP BY r.id, r.route_name, r.distance_km
+                WHERE r.id = %s
             """, (rid,))
             route = cur.fetchone()
 
             if not route:
                 return "Route not found", 404
+            
+            # Get stations for this route
+            cur.execute("""
+                SELECT station_name, station_order
+                FROM route_stations 
+                WHERE route_id = %s 
+                ORDER BY station_order
+            """, (rid,))
+            stations = cur.fetchall()
+            
+            # Format stations string
+            station_names = [s['station_name'] for s in stations]
+            route['stations'] = " → ".join(station_names) if station_names else "Route stations"
 
+            # Get buses for this route
             cur.execute("""
                 SELECT s.id, s.bus_name, s.departure_time, s.total_seats,
                        s.current_lat, s.current_lng,
@@ -824,75 +772,61 @@ def buses(rid):
     except Exception as e:
         return f"Database error: {e}", 500
 
-    html = """
+    html = f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🚌 {{ route.route_name }} - Premium Booking</title>
+    <title>🚌 {route['route_name']} - Premium Booking</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-    body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
-    header { text-align:center; padding:60px 20px 40px; }
-    header h1 { font-size:42px; font-weight:700; margin-bottom:10px; text-shadow:2px 2px 10px rgba(0,0,0,0.3);}
-    header p { font-size:18px; opacity:0.9; }
-    .circle { position:absolute; border-radius:50%; opacity:0.6; animation: float 15s infinite alternate; }
-    .circle1 {width:250px;height:250px;background:#ff6a00;top:-50px;left:-50px;}
-    .circle2 {width:350px;height:350px;background:#ffd500;bottom:-100px;right:-80px;}
-    .circle3 {width:150px;height:150px;background:#00ffb0;top:200px;right:50px;}
-    @keyframes float{0%{transform:translateY(0) translateX(0);}50%{transform:translateY(-40px) translateX(20px);}100%{transform:translateY(0) translateX(0);}}
-    .bus-card {background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; box-shadow:10px 10px 20px rgba(0,0,0,0.2), -10px -10px 20px rgba(255,255,255,0.1); backdrop-filter: blur(10px); transition: transform 0.3s, box-shadow 0.3s;}
-    .bus-card:hover {transform:translateY(-10px); box-shadow:0 20px 40px rgba(0,0,0,0.3);}
-    .bus-card h5 {font-weight:700; font-size:22px;}
-    .bus-card .badge {font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}
-    .bus-card p {margin:5px 0; font-size:15px;}
-    .bus-card .btn {border-radius:50px; font-weight:600; padding:10px 25px; transition: all 0.3s;}
-    .bus-card .btn:hover {transform: scale(1.05);}
-    .bus-info i {margin-right:8px; color:#ffd700;}
-    footer {text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff; backdrop-filter: blur(5px);}
-    @media(max-width:768px){header h1{font-size:28px;} .bus-card h5{font-size:18px;}}
+    body {{ font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; }}
+    header {{ text-align:center; padding:60px 20px 40px; }}
+    header h1 {{ font-size:42px; font-weight:700; margin-bottom:10px; }}
+    header p {{ font-size:18px; opacity:0.9; }}
+    .bus-card {{background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; backdrop-filter: blur(10px); transition: transform 0.3s;}}
+    .bus-card:hover {{transform:translateY(-5px);}}
+    .bus-card h5 {{font-weight:700; font-size:22px;}}
+    .bus-card .badge {{font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}}
+    .bus-card p {{margin:5px 0; font-size:15px;}}
+    .bus-card .btn {{border-radius:50px; font-weight:600; padding:10px 25px;}}
+    .bus-card .btn:hover {{transform: scale(1.05);}}
+    .bus-info i {{margin-right:8px; color:#ffd700;}}
+    footer {{text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff;}}
+    @media(max-width:768px){{header h1{{font-size:28px;}} .bus-card h5{{font-size:18px;}}}}
     </style>
     </head>
     <body>
 
-    <div class="circle circle1"></div>
-    <div class="circle circle2"></div>
-    <div class="circle circle3"></div>
-
     <header>
-        <h1>🚌 {{ route.route_name }} - Premium Booking</h1>
-        <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} km</p>
+        <h1>🚌 {route['route_name']}</h1>
+        <p>📍 {route['stations']} | 🛣️ {route['distance_km']} km</p>
     </header>
 
     <div class="container mt-5">
         <div class="row justify-content-center">
             <div class="col-md-8">
-                {% if buses %}
-                    {% for bus in buses %}
-                    <div class="bus-card">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <h5>{{ bus.bus_name }} <i class="fas fa-bus"></i></h5>
-                            <span class="badge {{ 'bg-success' if bus.current_lat else 'bg-secondary' }}">
-                                {{ '🟢 LIVE' if bus.current_lat else '⚪ Offline' }}
-                            </span>
-                        </div>
-                        <div class="bus-info mt-2">
-                            <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
-                            <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
-                        </div>
-
-                        <div class="d-flex flex-wrap gap-2 mt-3">
-                            <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
-                            <a href="/seats/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
-                        </div>
+                {"".join([f'''
+                <div class="bus-card">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5>{bus['bus_name']} <i class="fas fa-bus"></i></h5>
+                        <span class="badge {'bg-success' if bus['current_lat'] else 'bg-secondary'}">
+                            {'🟢 LIVE' if bus['current_lat'] else '⚪ Offline'}
+                        </span>
                     </div>
-                    {% endfor %}
-                {% else %}
-                    <div class="alert alert-warning text-center">No buses available today</div>
-                {% endif %}
+                    <div class="bus-info mt-2">
+                        <p><i class="fas fa-clock"></i> Departure: {bus['departure_time'].strftime('%H:%M')}</p>
+                        <p><i class="fas fa-chair"></i> Seats Left: {bus['total_seats'] - bus['booked_count']} | Total Seats: {bus['total_seats']}</p>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-3">
+                        <a href="/live-bus/{bus['id']}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
+                        <a href="/seats/{bus['id']}" class="btn btn-success flex-fill">🎫 Book Seat</a>
+                    </div>
+                </div>
+                ''' for bus in buses_data]) if buses_data else '<div class="alert alert-warning text-center">No buses available today</div>'}
             </div>
         </div>
     </div>
@@ -906,7 +840,7 @@ def buses(rid):
     </html>
     """
 
-    return render_template_string(html, route=route, buses=buses_data)
+    return html
 
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
@@ -914,11 +848,7 @@ def buses(rid):
 def create_counter():
     error = ""
     success = ""
-    if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
+
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -967,11 +897,7 @@ def create_counter():
 @limiter.limit("20 per minute")
 def login():
     error = ""
-    if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
+
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -1007,11 +933,7 @@ def login():
 @limiter.limit("20 per minute")
 def counter():
     error = ""
-    if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
+
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
@@ -1046,11 +968,6 @@ def counter():
 @app.route("/seats/<int:sid>")
 @limiter.limit("30 per minute")
 def seat_page(sid):
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
     try:
         with get_db_connection() as cur:
             # Get schedule details
@@ -1066,7 +983,7 @@ def seat_page(sid):
             if not schedule:
                 return "Schedule not found", 404
 
-            # Get booked seats (cached)
+            # Get booked seats
             today = session.get("date", date.today().isoformat())
             booked_seats = set(get_booked_seats(sid, today))
 
@@ -1091,14 +1008,6 @@ def seat_page(sid):
     bus_lat = schedule['current_lat'] if schedule['current_lat'] else 27.5
     bus_lon = schedule['current_lng'] if schedule['current_lng'] else 75.0
 
-    # Role color
-    role_color = {
-        "admin": "red",
-        "counter": "green",
-        "conductor": "blue",
-        "user": "orange"
-    }.get(user_role, "gray")
-
     html_content = f"""
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -1107,9 +1016,7 @@ def seat_page(sid):
     <div class="container" style="max-width:900px;margin:auto;">
         <h2>Bus: {schedule['bus_name']} | Route: {schedule['route_name']}</h2>
         <h4>Departure: {schedule['departure_time'].strftime('%H:%M')}</h4>
-        <h5>
-            Role: <span style="color:{role_color};font-weight:bold;">{user_role.upper()}</span>
-        </h5>
+        <h5>Role: <span style="color:{'red' if user_role=='admin' else 'green' if user_role=='counter' else 'blue'};font-weight:bold;">{user_role.upper()}</span></h5>
         
         <h5>Live Location</h5>
         <div id="map" style="width:100%;height:300px;border-radius:12px;"></div>
@@ -1128,11 +1035,8 @@ def seat_page(sid):
     const BUS_LNG = {bus_lon};
     const COUNTER_ID = {counter_id if counter_id else 'null'};
     
-    // Join rooms for targeted updates
     socket.emit("join_room", {{ room: `bus_${{SID}}` }});
-    socket.emit("join_room", {{ room: `schedule_${{SID}}_date_${{TODAY}}` }});
     
-    // Initialize map
     const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15);
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
         attribution: '© OpenStreetMap',
@@ -1142,7 +1046,6 @@ def seat_page(sid):
     
     let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map);
     
-    // Handle bus location updates
     socket.on("bus_location", data => {{
         if(data.sid == SID){{
             let lat = parseFloat(data.lat);
@@ -1152,7 +1055,6 @@ def seat_page(sid):
         }}
     }});
     
-    // Handle seat updates
     socket.on("seat_update", function(data) {{
         if(SID != data.sid || TODAY != data.date) return;
         
@@ -1165,12 +1067,6 @@ def seat_page(sid):
         }}
     }});
     
-    // Heartbeat to keep connection alive
-    setInterval(()=>{{
-        fetch("/heartbeat").catch(()=>{{}});
-    }}, 30000);
-    
-    // Book seat function
     function bookSeat(seatId){{
         let name = prompt("Passenger Name:");
         if(!name) return;
@@ -1235,10 +1131,8 @@ def seat_page(sid):
         }});
     }}
     
-    // Cleanup on page unload
     window.addEventListener('beforeunload', () => {{
         socket.emit("leave_room", {{ room: `bus_${{SID}}` }});
-        socket.emit("leave_room", {{ room: `schedule_${{SID}}_date_${{TODAY}}` }});
     }});
     </script>
     """
@@ -1247,19 +1141,12 @@ def seat_page(sid):
 
 @app.route("/heartbeat")
 def heartbeat():
-    """Simple heartbeat endpoint"""
     return "ok", 200
 
 @app.route("/book", methods=["POST"])
 @limiter.limit("20 per minute")
 def book():
-    """Book a seat with connection leak protection"""
     data = request.get_json()
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
 
     try:
         with get_db_connection() as cur:
@@ -1308,7 +1195,7 @@ def book():
                 int(data.get("counter_id") or 0)
             ))
 
-            # Emit seat update to specific room
+            # Emit seat update
             room_name = f"schedule_{data['schedule_id']}_date_{data['date']}"
             socketio.emit("seat_update", {
                 "sid": data['schedule_id'],
@@ -1325,7 +1212,6 @@ def book():
 @app.route("/driver/<int:bus_id>")
 @limiter.limit("30 per minute")
 def driver_advanced(bus_id):
-    """Driver GPS page"""
     html = f'''
     <!DOCTYPE html>
     <html>
@@ -1385,7 +1271,6 @@ def driver_advanced(bus_id):
                         `⏰ ${{new Date().toLocaleTimeString()}}`;
                     document.getElementById('status').style.background = '#d4edda';
                     
-                    // Send to server
                     socket.emit('driver_gps', {{
                         sid: busId,
                         lat: lat,
@@ -1445,12 +1330,6 @@ def driver_advanced(bus_id):
 @app.route("/live-bus/<int:bus_id>")
 @limiter.limit("30 per minute")
 def live_bus(bus_id):
-    """Live bus tracking page"""
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
     try:
         with get_db_connection() as cur:
             cur.execute("""
@@ -1591,7 +1470,6 @@ def live_bus(bus_id):
     let map = null;
     let marker = null;
     
-    // Initialize map
     function initMap() {{
         map = L.map('map').setView([{bus_lat}, {bus_lng}], 13);
         
@@ -1600,10 +1478,8 @@ def live_bus(bus_id):
             maxZoom: 19
         }}).addTo(map);
         
-        // Join bus room for updates
         socket.emit("join_room", {{ room: `bus_${{busId}}` }});
         
-        // Custom bus icon
         const busIcon = L.divIcon({{
             html: '<div style="background: linear-gradient(135deg, #ff0000, #ff8800); color: white; padding: 15px; border-radius: 50%; font-size: 24px; border: 4px solid white; box-shadow: 0 0 25px rgba(255,0,0,0.7);">🚌</div>',
             className: 'live-bus-icon',
@@ -1616,20 +1492,17 @@ def live_bus(bus_id):
             .openPopup();
     }}
     
-    // Listen for GPS updates
     socket.on('bus_location', function(data) {{
         if (data.sid == busId) {{
             const lat = parseFloat(data.lat);
             const lng = parseFloat(data.lng);
             const speed = parseFloat(data.speed) || 0;
     
-            // Update UI
             document.getElementById('busLat').textContent = lat.toFixed(6);
             document.getElementById('busLng').textContent = lng.toFixed(6);
             document.getElementById('busSpeed').textContent = speed.toFixed(1) + ' km/h';
             document.getElementById('busUpdate').textContent = new Date().toLocaleTimeString();
     
-            // Update map
             if (map && marker) {{
                 marker.setLatLng([lat, lng]);
                 map.panTo([lat, lng]);
@@ -1638,11 +1511,9 @@ def live_bus(bus_id):
         }}
     }});
     
-    // Initialize on load
     document.addEventListener('DOMContentLoaded', function() {{
         initMap();
         
-        // Cleanup on unload
         window.addEventListener('beforeunload', () => {{
             socket.emit("leave_room", {{ room: `bus_${{busId}}` }});
         }});
@@ -1657,12 +1528,6 @@ def live_bus(bus_id):
 @app.route("/search", methods=["POST"])
 @limiter.limit("30 per minute")
 def search():
-    """Search for buses"""
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
     fs_input = request.form.get("from", "").strip()
     ts_input = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
@@ -1720,47 +1585,11 @@ def search():
     except Exception as e:
         return f"Search error: {e}", 500
 
-# ================= MONITORING & ADMIN ENDPOINTS =================
+# ================= ADMIN ENDPOINTS =================
 @app.route("/admin/monitor")
 @admin_required
 def admin_monitor():
-    """Connection monitoring dashboard"""
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
-    try:
-        with get_db_connection() as cur:
-            cur.execute("""
-                SELECT 
-                    COUNT(*) as total_connections,
-                    (SELECT COUNT(*) FROM pg_stat_activity WHERE state = 'active') as active_connections,
-                    (SELECT COUNT(*) FROM seat_bookings WHERE created_at > NOW() - INTERVAL '1 hour') as recent_bookings,
-                    (SELECT COUNT(*) FROM schedules WHERE current_lat IS NOT NULL) as active_buses
-            """)
-            stats = cur.fetchone()
-    except:
-        stats = {"total_connections": 0, "active_connections": 0, "recent_bookings": 0, "active_buses": 0}
-
-    # Calculate pool stats
-    try:
-        pool_stats = {
-            "pool_size": pool.max_size,
-            "active": pool._used - pool._idle,
-            "idle": pool._idle,
-            "total_used": pool._used
-        }
-    except:
-        pool_stats = {"pool_size": 0, "active": 0, "idle": 0, "total_used": 0}
-
-    # SocketIO stats
-    socket_stats = {
-        "total_clients": len(socket_connections),
-        "connections_per_ip": {ip: len(clients) for ip, clients in socket_connections.items()}
-    }
-
-    html = f"""
+    html = """
     <div class="container mt-4">
         <h2>🚨 System Monitor Dashboard</h2>
         
@@ -1769,131 +1598,48 @@ def admin_monitor():
                 <div class="card">
                     <div class="card-header bg-primary text-white">📊 Database Stats</div>
                     <div class="card-body">
-                        <p>Total Connections: <strong>{stats['total_connections']}</strong></p>
-                        <p>Active Connections: <strong>{stats['active_connections']}</strong></p>
-                        <p>Recent Bookings (1h): <strong>{stats['recent_bookings']}</strong></p>
-                        <p>Active Buses: <strong>{stats['active_buses']}</strong></p>
+                        <p>SocketIO Clients: <strong id="socketClients">0</strong></p>
+                        <p>Active Connections: <strong id="activeConns">0</strong></p>
+                        <p>Memory Usage: <strong id="memoryUsage">0 MB</strong></p>
                     </div>
                 </div>
             </div>
             
-            <div class="col-md-4">
+            <div class="col-md-8">
                 <div class="card">
-                    <div class="card-header bg-success text-white">🔌 Connection Pool</div>
-                    <div class="card-body">
-                        <p>Pool Size: <strong>{pool_stats['pool_size']}</strong></p>
-                        <p>Active Connections: <strong>{pool_stats['active']}</strong></p>
-                        <p>Idle Connections: <strong>{pool_stats['idle']}</strong></p>
-                        <p>Total Used: <strong>{pool_stats['total_used']}</strong></p>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="col-md-4">
-                <div class="card">
-                    <div class="card-header bg-warning text-white">📡 SocketIO Stats</div>
-                    <div class="card-body">
-                        <p>Total IPs Connected: <strong>{socket_stats['total_clients']}</strong></p>
-                        <p>Connections by IP:</p>
-                        <div style="max-height: 150px; overflow-y: auto;">
-                            {"".join([f'<p>{ip}: {count}</p>' for ip, count in socket_stats['connections_per_ip'].items()])}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        
-        <div class="row mt-4">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header bg-danger text-white">⚡ Quick Actions</div>
+                    <div class="card-header bg-success text-white">⚡ Quick Actions</div>
                     <div class="card-body">
                         <div class="d-grid gap-2 d-md-block">
-                            <button class="btn btn-warning me-2" onclick="clearConnections()">🔄 Clear Connections</button>
-                            <button class="btn btn-info me-2" onclick="clearCache()">🗑️ Clear Cache</button>
-                            <button class="btn btn-success" onclick="healthCheck()">🏥 Health Check</button>
+                            <button class="btn btn-warning me-2" onclick="clearCache()">🗑️ Clear Cache</button>
+                            <button class="btn btn-info me-2" onclick="healthCheck()">🏥 Health Check</button>
+                            <a href="/dashboard" class="btn btn-primary">🏠 Dashboard</a>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <div class="mt-4">
-            <h4>📈 Real-time Stats</h4>
-            <div id="liveStats" class="alert alert-info">
-                Loading live statistics...
             </div>
         </div>
     </div>
     
     <script>
-    function clearConnections() {{
-        if(confirm('Are you sure? This will reset all connections.')) {{
-            fetch('/admin/clear-connections', {{method: 'POST'}})
-                .then(r => r.json())
-                .then(data => alert(data.message || data.error))
-                .catch(err => alert('Error: ' + err));
-        }}
-    }}
-    
-    function clearCache() {{
-        fetch('/admin/clear-cache', {{method: 'POST'}})
+    function clearCache() {
+        fetch('/admin/clear-cache', {method: 'POST'})
             .then(r => r.json())
-            .then(data => alert(data.message))
+            .then(data => alert(data.message || data.error))
             .catch(err => alert('Error: ' + err));
-    }}
+    }
     
-    function healthCheck() {{
+    function healthCheck() {
         fetch('/health')
             .then(r => r.json())
-            .then(data => {{
+            .then(data => {
                 let status = data.status === 'healthy' ? '✅ Healthy' : '❌ Unhealthy';
-                alert(`Health Status: ${{status}}\\nDatabase: ${{data.database}}\\nSocketIO: ${{data.socketio}}`);
-            }})
+                alert(`Health Status: ${status}\\nDatabase: ${data.database}\\nSocketIO: ${data.socketio}`);
+            })
             .catch(err => alert('Health check failed: ' + err));
-    }}
-    
-    // Update live stats every 10 seconds
-    function updateLiveStats() {{
-        fetch('/admin/stats')
-            .then(r => r.json())
-            .then(data => {{
-                document.getElementById('liveStats').innerHTML = `
-                    <p>🔄 Last Updated: ${{new Date().toLocaleTimeString()}}</p>
-                    <p>📊 Active Database Connections: <strong>${{data.db_active}}</strong></p>
-                    <p>👥 SocketIO Clients: <strong>${{data.socket_clients}}</strong></p>
-                    <p>💾 Memory Usage: <strong>${{(data.memory_usage || 0).toFixed(2)}} MB</strong></p>
-                `;
-            }})
-            .catch(err => console.error('Stats error:', err));
-    }}
-    
-    setInterval(updateLiveStats, 10000);
-    updateLiveStats();
+    }
     </script>
     """
-
     return render_template_string(BASE_HTML, content=html)
-
-@app.route("/admin/clear-connections", methods=["POST"])
-@admin_required
-def clear_connections():
-    """Clear all connections"""
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
-    try:
-        # Reset socket connections
-        socket_connections.clear()
-
-        # Reset rate limits
-        SOCKET_RATE_LIMITS.clear()
-
-        return jsonify({"message": "Connections cleared successfully"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/admin/clear-cache", methods=["POST"])
 @admin_required
@@ -1903,64 +1649,29 @@ def clear_cache():
         # Clear LRU caches
         get_route_stations.cache_clear()
         get_booked_seats.cache_clear()
-
-        # Clear Redis cache if available
-        if cache:
-            cache.flushall()
-
+        
+        # Clear memory cache
+        cache.flushall()
+        
         return jsonify({"message": "Cache cleared successfully"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/admin/stats")
-@admin_required
-def get_stats():
-    """Get live statistics"""
-    import psutil
-    import os
-   if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
-    try:
-        # Get memory usage
-        process = psutil.Process(os.getpid())
-        memory_usage = process.memory_info().rss / 1024 / 1024  # MB
-
-        return jsonify({
-            "db_active": pool._used - pool._idle,
-            "socket_clients": len(socket_connections),
-            "memory_usage": memory_usage,
-            "timestamp": datetime.now().isoformat()
-        })
-    except:
-        return jsonify({
-            "db_active": 0,
-            "socket_clients": len(socket_connections),
-            "memory_usage": 0,
-            "timestamp": datetime.now().isoformat()
-        })
-
 @app.route("/health")
 def health_check():
     """Health check endpoint"""
- if pool is None or (hasattr(pool, 'closed') and pool.closed):
-        return render_template_string(
-            BASE_HTML,
-            content="<div class='alert alert-danger'>Database temporarily unavailable. Please try again later.</div>"
-        )
     try:
         # Test database
         with get_db_connection() as cur:
-            cur.execute("SELECT 1")
-            db_ok = cur.fetchone()[0] == 1
+            cur.execute("SELECT 1 as test")
+            db_test = cur.fetchone()
+            db_ok = db_test and db_test['test'] == 1
 
         # Test SocketIO
         socket_ok = socketio.async_mode is not None
 
         # Test pool
-        pool_ok = not pool.closed
+        pool_ok = pool is not None and not pool.closed
 
         return jsonify({
             "status": "healthy" if all([db_ok, socket_ok, pool_ok]) else "unhealthy",
@@ -1982,101 +1693,126 @@ def logout():
     session.clear()
     return redirect("/")
 
-# ================= CLEANUP ON EXIT =================
+@app.route("/routes")
+@admin_required
+def manage_routes():
+    """Manage routes page"""
+    try:
+        with get_db_connection() as cur:
+            cur.execute("SELECT * FROM routes ORDER BY id")
+            routes = cur.fetchall()
+    except Exception as e:
+        routes = []
+    
+    routes_html = "<h2>Manage Routes</h2><table class='table'><tr><th>ID</th><th>Route</th><th>Distance</th></tr>"
+    for r in routes:
+        routes_html += f"<tr><td>{r['id']}</td><td>{r['route_name']}</td><td>{r['distance_km']} km</td></tr>"
+    routes_html += "</table>"
+    
+    return render_template_string(BASE_HTML, content=routes_html)
+
+@app.route("/schedules")
+@admin_required
+def manage_schedules():
+    """Manage schedules page"""
+    try:
+        with get_db_connection() as cur:
+            cur.execute("""
+                SELECT s.*, r.route_name 
+                FROM schedules s 
+                LEFT JOIN routes r ON s.route_id = r.id
+                ORDER BY s.id
+            """)
+            schedules = cur.fetchall()
+    except Exception as e:
+        schedules = []
+    
+    schedules_html = "<h2>Manage Schedules</h2><table class='table'><tr><th>ID</th><th>Bus</th><th>Route</th><th>Time</th></tr>"
+    for s in schedules:
+        schedules_html += f"<tr><td>{s['id']}</td><td>{s['bus_name']}</td><td>{s['route_name']}</td><td>{s['departure_time']}</td></tr>"
+    schedules_html += "</table>"
+    
+    return render_template_string(BASE_HTML, content=schedules_html)
+
+@app.route("/bookings")
+@admin_required
+def view_bookings():
+    """View bookings page"""
+    try:
+        with get_db_connection() as cur:
+            cur.execute("""
+                SELECT b.*, s.bus_name, r.route_name
+                FROM seat_bookings b
+                LEFT JOIN schedules s ON b.schedule_id = s.id
+                LEFT JOIN routes r ON s.route_id = r.id
+                ORDER BY b.created_at DESC
+                LIMIT 50
+            """)
+            bookings = cur.fetchall()
+    except Exception as e:
+        bookings = []
+    
+    bookings_html = "<h2>Recent Bookings</h2><table class='table'><tr><th>ID</th><th>Passenger</th><th>Bus</th><th>Route</th><th>Seat</th><th>Fare</th><th>Date</th></tr>"
+    for b in bookings:
+        bookings_html += f"<tr><td>{b['id']}</td><td>{b['passenger_name']}</td><td>{b['bus_name']}</td><td>{b['route_name']}</td><td>{b['seat_number']}</td><td>₹{b['fare']}</td><td>{b['travel_date']}</td></tr>"
+    bookings_html += "</table>"
+    
+    return render_template_string(BASE_HTML, content=bookings_html)
+
+# ================= CLEANUP =================
 def cleanup():
     """Cleanup on application exit"""
     print("🔄 Cleaning up resources...")
-
     try:
-        # Close connection pool
-        if not pool.closed:
+        if pool and not pool.closed:
             pool.close()
-
-        # Clear socket connections
         socket_connections.clear()
-
         print("✅ Cleanup completed")
     except Exception as e:
         print(f"❌ Cleanup error: {e}")
 
-# Register cleanup
 atexit.register(cleanup)
 
-# ================= AUTO-RECOVERY =================
-def auto_recovery():
-    """Auto-recovery for connection issues"""
-    while True:
-        time.sleep(300)  # Check every 5 minutes
-
-        try:
-            # Check database connection
-            with get_db_connection() as cur:
-                cur.execute("SELECT 1")
-
-            # Reset if too many connections
-            if hasattr(pool, '_used') and pool._used > pool.max_size * 0.9:
-                print("🔄 Auto-recovery: High connection usage detected")
-
-        except Exception as e:
-            print(f"⚠️ Auto-recovery error: {e}")
-
-# Start auto-recovery thread
-recovery_thread = threading.Thread(target=auto_recovery, daemon=True)
-recovery_thread.start()
-
-#========== startup   ===========
+# ================= STARTUP =================
 def startup_check():
     """Run startup health checks"""
     print("\n" + "="*50)
     print("🚀 Starting Health Checks...")
     
     # Check environment variables
-    required_env_vars = ['DATABASE_URL', 'SECRET_KEY']
-    for var in required_env_vars:
-        value = os.getenv(var)
-        if value:
-            print(f"✅ {var}: Set")
-        else:
-            print(f"❌ {var}: Missing")
+    if os.getenv("DATABASE_URL"):
+        print("✅ DATABASE_URL: Set")
+    else:
+        print("⚠️ DATABASE_URL: Not set")
     
-    # Test database connection
+    if os.getenv("SECRET_KEY"):
+        print("✅ SECRET_KEY: Set")
+    else:
+        print("⚠️ SECRET_KEY: Not set")
+    
+    # Check database connection
     try:
         with get_db_connection() as cur:
             cur.execute("SELECT version()")
             db_version = cur.fetchone()
-            print(f"✅ Database: Connected ({db_version['version'][:50]}...)")
+            print(f"✅ Database: Connected")
     except Exception as e:
         print(f"❌ Database: Connection failed - {str(e)[:100]}")
     
-    # Check Redis
-    if cache:
-        try:
-            cache.ping()
-            print("✅ Redis: Connected")
-        except:
-            print("❌ Redis: Connection failed")
-    else:
-        print("⚠️ Redis: Not configured")
-    
     print("="*50 + "\n")
 
-# Run startup checks before main
+# Run startup checks
 startup_check()
+
 # ================= MAIN =================
 if __name__ == "__main__":
     print("🚀 Bus Booking App Starting...")
-    print("✅ Connection leak protection: ACTIVE")
-    print("✅ Rate limiting: ACTIVE")
-    print("✅ SocketIO optimization: ACTIVE")
-
     port = int(os.environ.get("PORT", 10000))
-
-    # Run with SocketIO
     socketio.run(
         app,
         host="0.0.0.0",
         port=port,
-        debug=False,  # Production में False रखें
+        debug=False,
         allow_unsafe_werkzeug=True,
         log_output=False
     )
