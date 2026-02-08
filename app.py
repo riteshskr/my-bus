@@ -122,7 +122,7 @@ try:
         conninfo=DATABASE_URL,
         min_size=2,
         max_size=10,
-        timeout=30,
+        timeout=15,
         open=True,
         max_idle=300,
         num_workers=2,
@@ -1142,6 +1142,9 @@ def heartbeat():
 
 @app.route("/book", methods=["POST"])
 @limiter.limit("20 per minute")
+booked_by_id = session.get("user_id")
+if not booked_by_id:
+    booked_by_id = 0
 def book():
     data = request.get_json()
 
@@ -1188,12 +1191,13 @@ def book():
                 'confirmed',
                 payment_mode,
                 user_role,
-                int(session.get("user_id", 0)),
+               int(booked_by_id)
+               # int(session.get("user_id", 0)),
                 int(data.get("counter_id") or 0)
             ))
 
             # Emit seat update
-            room_name = f"schedule_{data['schedule_id']}_date_{data['date']}"
+            room_name = f"bus_{data['schedule_id']}"
             socketio.emit("seat_update", {
                 "sid": data['schedule_id'],
                 "seat": data['seat_number'],
