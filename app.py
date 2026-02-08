@@ -107,7 +107,20 @@ socketio = SocketIO(
 socket_connections = {}
 MAX_CONNECTIONS_PER_IP = 50
 SOCKET_RATE_LIMITS = {}
-
+def cleanup_old_connections():
+    """Clean up old SocketIO connections"""
+    current_time = time.time()
+    for ip in list(socket_connections.keys()):
+        # Remove empty sets
+        if not socket_connections[ip]:
+            del socket_connections[ip]
+    
+    # Clean old rate limits (older than 5 minutes)
+    for key in list(SOCKET_RATE_LIMITS.keys()):
+        SOCKET_RATE_LIMITS[key] = [ts for ts in SOCKET_RATE_LIMITS[key] 
+                                   if current_time - ts < 300]
+        if not SOCKET_RATE_LIMITS[key]:
+            del SOCKET_RATE_LIMITS[key]
 # ================= DATABASE CONFIGURATION =================
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -121,12 +134,12 @@ try:
     pool = ConnectionPool(
         conninfo=DATABASE_URL,
         min_size=2,
-        max_size=10,
-        timeout=15,
+        max_size=15,
+        timeout=30,
         open=True,
-        max_idle=300,
-        num_workers=2,
-       kwargs={"keepalives": 1, "keepalives_idle": 30}
+        max_idle=600,
+        num_workers=3,
+      kwargs={"keepalives": 1, "keepalives_idle": 60, "keepalives_interval": 10}
     )
     print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
 except Exception as e:
@@ -1147,7 +1160,7 @@ if not booked_by_id:
     booked_by_id = 0
 def book():
     data = request.get_json()
-
+    booked_by_id = session.get("user_id", 0)
     try:
         with get_db_connection() as cur:
             # Check if seat already booked
@@ -1191,9 +1204,8 @@ def book():
                 'confirmed',
                 payment_mode,
                 user_role,
-               int(session.get("user_id", 0))
-               # int(session.get("user_id", 0)),
-                int(data.get("counter_id") or 0)
+               int(booked_by_id)
+               int(data.get("counter_id") or 0)
             ))
 
             # Emit seat update
