@@ -133,13 +133,17 @@ if not DATABASE_URL:
 try:
     pool = ConnectionPool(
         conninfo=DATABASE_URL,
-        min_size=2,
+        min_size=3,
         max_size=15,
-        timeout=30,
+        timeout=60,
         open=True,
         max_idle=600,
         num_workers=3,
-      kwargs={"keepalives": 1, "keepalives_idle": 60, "keepalives_interval": 10}
+      kwargs={"keepalives": 1,
+            "keepalives_idle": 60,      # ✅ 30 से 60 सेकेंड
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+            "connect_timeout": 30}
     )
     print(f"✅ Connection pool ready: min={pool.min_size}, max={pool.max_size}")
 except Exception as e:
@@ -156,27 +160,78 @@ def get_db_connection():
 
     conn = None
     cur = None
-    try:
-        conn = pool.getconn()
-        cur = conn.cursor(row_factory=dict_row)
-        yield cur
-        conn.commit()
-    except Exception as e:
-        if "connection is lost" in str(e).lower():
-            print("🔄 Reconnecting DB...")
-            pool.close()
-            pool.open()
+    max_retries = 2
+    
+    for attempt in range(max_retries):
+        try:
+            conn = pool.getconn()
+            cur = conn.cursor(row_factory=dict_row)
+            yield cur
+            conn.commit()
+            break  # Success - loop से बाहर निकलें
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            # Rollback करें
+            if conn:
+                try: 
+                    conn.rollback()
+                except: 
+                    pass
+            
+            # Connection error है तो retry करें
+            if ("connection" in error_str or "closed" in error_str) and attempt < max_retries - 1:
+                print(f"🔄 Database connection lost, retrying... (Attempt {attempt + 1})")
+                time.sleep(1)  # 1 सेकेंड wait
+                
+                # Pool को refresh करने का try करें
+                try:
+                    if pool.closed:
+                        pool.open()
+                except:
+                    pass
+                continue
+            
+            # Final error
+            print(f"❌ Database error: {e}")
+            
+            # Last attempt में connection को pool में वापस डालें
+            if conn:
+                try: 
+                    pool.putconn(conn)
+                except: 
+                    pass
+            raise e
+        finally:
+            if cur:
+                try: 
+                    cur.close()
+                except: 
+                    pass
+            if conn and 'cur' in locals() and 'conn' in locals():
+                try: 
+                    pool.putconn(conn)
+                except: 
+                    pass
+# ================= DATABASE KEEP-ALIVE =================
+def keep_database_alive():
+    """Background thread to keep database connection alive"""
+    import time
+    while True:
+        try:
+            # हर 4 मिनट में database ping करें
+            time.sleep(240)
+            with get_db_connection() as cur:
+                cur.execute("SELECT 1 as heartbeat")
+                print(f"✅ Database heartbeat: {datetime.now().strftime('%H:%M:%S')}")
+        except Exception as e:
+            print(f"⚠️ Database heartbeat failed: {e}")
 
-        if conn:
-            conn.rollback()
-        raise e
-    finally:
-        if cur:
-            try: cur.close()
-            except: pass
-        if conn:
-            try: pool.putconn(conn)
-            except: pass
+# Thread start करें
+import threading
+db_thread = threading.Thread(target=keep_database_alive, daemon=True)
+db_thread.start()
+print("✅ Database keep-alive thread started")
 
 # ================= CLEANUP FUNCTIONS =================
 @app.teardown_appcontext
