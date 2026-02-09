@@ -64,21 +64,19 @@ def get_db():
             g.db_cur = g.db_conn.cursor(row_factory=dict_row)
         return g.db_conn, g.db_cur
     except:
-        pool.closeall()
+        pool.close()
         g.db_conn = pool.getconn()
         g.db_cur = g.db_conn.cursor(row_factory=dict_row)
         return g.db_conn, g.db_cur
 
 
-@app.teardown_appcontext
-def close_db(error=None):
-    cur = g.pop('db_cur', None)
-    conn = g.pop('db_conn', None)
-
-    if cur:
-        cur.close()
-    if conn:
-        pool.putconn(conn)
+def close_db(error):
+    db_conn = g.pop('db_conn', None)
+    db_cur = g.pop('db_cur', None)
+    if db_cur:
+        db_cur.close()
+    if db_conn:
+        pool.putconn(db_conn)
 
 
 def safe_db(func):
