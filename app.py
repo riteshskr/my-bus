@@ -680,7 +680,7 @@ def seat_page(sid):
 
     return render_template(
         "seat.html",
-        bus_name=bus["bus_name"],
+        schedule=bus,  # यहाँ bus object भेज रहे हैं
         seat_html=seat_html,
         sid=sid,
         today=today
