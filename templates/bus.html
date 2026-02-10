@@ -1,16 +1,152 @@
-{% extends "base.html" %}
-{% block content %}
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MyBus - Live Buses</title>
+
+<!-- Fonts & Icons -->
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<style>
+body {
+    font-family: 'Poppins', sans-serif;
+    margin: 0;
+    background: linear-gradient(135deg,#00c6ff,#0072ff);
+    color: #fff;
+    min-height: 100vh;
+}
+
+header {
+    text-align: center;
+    padding: 50px 20px;
+}
+
+header h1 {
+    font-size: 40px;
+    font-weight: 700;
+}
+
+header p {
+    opacity: 0.9;
+}
+
+.container {
+    width: 90%;
+    max-width: 900px;
+    margin: auto;
+}
+
+.bus-card {
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 20px;
+    margin-bottom: 25px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    transition: transform .3s;
+}
+
+.bus-card:hover {
+    transform: translateY(-10px);
+}
+
+.bus-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.bus-top h3 {
+    margin: 0;
+}
+
+.badge {
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 14px;
+}
+
+.live { background: #00ff99; color: #000; }
+.offline { background: #aaa; color: #000; }
+
+.bus-info {
+    margin-top: 10px;
+}
+
+.bus-info p {
+    margin: 6px 0;
+}
+
+footer {
+    text-align: center;
+    padding: 20px;
+    opacity: 0.8;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>🚌 Live Buses</h1>
+    <p id="route-name">Loading route...</p>
+</header>
+
+<div class="container" id="bus-list">
+    <!-- JS will inject cards here -->
+</div>
+
+<footer>
+    © 2026 MyBus System
+</footer>
+
 <script>
- var socket = io();
- function book(id){
-   socket.emit("book_seat",{seat_id:id});
- }
- socket.on("seat_update",()=>location.reload());
+const SUPABASE_URL = "https://YOUR_PROJECT.supabase.co";
+const SUPABASE_KEY = "YOUR_ANON_KEY";
+
+async function loadBuses(routeId) {
+
+    const routeRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/routes?id=eq.${routeId}&select=route_name`,
+        { headers: { "apikey": SUPABASE_KEY } }
+    );
+
+    const routeData = await routeRes.json();
+    document.getElementById("route-name").innerText = routeData[0].route_name;
+
+    const busRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/schedules?route_id=eq.${routeId}&select=bus_name,departure_time,total_seats,current_lat`,
+        { headers: { "apikey": SUPABASE_KEY } }
+    );
+
+    const buses = await busRes.json();
+    const container = document.getElementById("bus-list");
+    container.innerHTML = "";
+
+    buses.forEach(bus => {
+        const live = bus.current_lat ? "live" : "offline";
+        const status = bus.current_lat ? "🟢 LIVE" : "⚪ Offline";
+
+        container.innerHTML += `
+        <div class="bus-card">
+            <div class="bus-top">
+                <h3>${bus.bus_name}</h3>
+                <span class="badge ${live}">${status}</span>
+            </div>
+            <div class="bus-info">
+                <p>⏰ Departure: ${bus.departure_time}</p>
+                <p>💺 Total Seats: ${bus.total_seats}</p>
+            </div>
+        </div>
+        `;
+    });
+}
+
+// Load route 1 by default
+loadBuses(1);
 </script>
 
-{% for s in seats %}
-Seat {{ s.seat_no }} - {{ s.status }}
-<button onclick="book({{ s.id }})">Book</button><br>
-{% endfor %}
-{% endblock %}
+</body>
+</html>

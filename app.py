@@ -632,87 +632,23 @@ def buses(rid):
 
     bus_html = ""
     for bus in buses:
-        html = """
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>🚌 {{ route.route_name }} - Premium Booking</title>
-            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-            <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-            <style>
-            body { font-family:'Poppins',sans-serif; margin:0; background:linear-gradient(135deg,#00c6ff,#0072ff); color:#fff; overflow-x:hidden; }
-            header { text-align:center; padding:60px 20px 40px; }
-            header h1 { font-size:42px; font-weight:700; margin-bottom:10px; text-shadow:2px 2px 10px rgba(0,0,0,0.3);}
-            header p { font-size:18px; opacity:0.9; }
-            .circle { position:absolute; border-radius:50%; opacity:0.6; animation: float 15s infinite alternate; }
-            .circle1 {width:250px;height:250px;background:#ff6a00;top:-50px;left:-50px;}
-            .circle2 {width:350px;height:350px;background:#ffd500;bottom:-100px;right:-80px;}
-            .circle3 {width:150px;height:150px;background:#00ffb0;top:200px;right:50px;}
-            @keyframes float{0%{transform:translateY(0) translateX(0);}50%{transform:translateY(-40px) translateX(20px);}100%{transform:translateY(0) translateX(0);}}
-            .bus-card {background: rgba(255,255,255,0.15); border-radius:20px; padding:20px; margin-bottom:25px; box-shadow:10px 10px 20px rgba(0,0,0,0.2), -10px -10px 20px rgba(255,255,255,0.1); backdrop-filter: blur(10px); transition: transform 0.3s, box-shadow 0.3s;}
-            .bus-card:hover {transform:translateY(-10px); box-shadow:0 20px 40px rgba(0,0,0,0.3);}
-            .bus-card h5 {font-weight:700; font-size:22px;}
-            .bus-card .badge {font-weight:500; padding:8px 14px; font-size:14px; border-radius:12px;}
-            .bus-card p {margin:5px 0; font-size:15px;}
-            .bus-card .btn {border-radius:50px; font-weight:600; padding:10px 25px; transition: all 0.3s;}
-            .bus-card .btn:hover {transform: scale(1.05);}
-            .bus-info i {margin-right:8px; color:#ffd700;}
-            footer {text-align:center; padding:20px 0; background: rgba(0,0,0,0.2); color:#fff; backdrop-filter: blur(5px);}
-            @media(max-width:768px){header h1{font-size:28px;} .bus-card h5{font-size:18px;}}
-            </style>
-            </head>
-            <body>
-
-            <div class="circle circle1"></div>
-            <div class="circle circle2"></div>
-            <div class="circle circle3"></div>
-
-            <header>
-                <h1>🚌 {{ route.route_name }} - Premium Booking</h1>
-                <p>📍 {{ route.stations }} | 🛣️ {{ route.distance_km }} km</p>
-            </header>
-
-            <div class="container mt-5">
-                <div class="row justify-content-center">
-                    <div class="col-md-6">
-                        {% if buses %}
-                            {% for bus in buses %}
-                            <div class="bus-card">
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <h5>{{ bus.bus_name }} <i class="fas fa-bus"></i></h5>
-                                    <span class="badge {{ 'bg-success' if bus.current_lat else 'bg-secondary' }}">
-                                        {{ '🟢 LIVE' if bus.current_lat else '⚪ Offline' }}
-                                    </span>
-                                </div>
-                                <div class="bus-info mt-2">
-                                    <p><i class="fas fa-clock"></i> Departure: {{ bus.departure_time.strftime('%H:%M') }}</p>
-                                    <p><i class="fas fa-chair"></i> Seats Left: {{ bus.total_seats - bus.booked_count }} | Total Seats: {{ bus.total_seats }}</p>
-                                </div>
-
-                                <div class="d-flex flex-wrap gap-2 mt-2">
-                                    <a href="/live-bus/{{ bus.id }}" class="btn btn-primary flex-fill">🗺️ Live GPS</a>
-                                    <a href="/select/{{ bus.id }}" class="btn btn-success flex-fill">🎫 Book Seat</a>
-                                </div>
-
-                            {% endfor %}
-                        {% else %}
-                            <div class="alert alert-warning text-center">आज कोई बस नहीं है</div>
-                        {% endif %}
-                    </div>
-                </div>
+        bus_html += f"""
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5>{bus['bus_name']}</h5>
+                <p>Departure: {bus['departure_time']}</p>
+                <a href="/seats/{bus['id']}" class="btn btn-success">Book</a>
             </div>
+        </div>
+        """
 
-            <footer>
-                &copy; 2026 MyBus. All Rights Reserved.
-            </footer>
-
-            <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-            </body>
-            </html>
-                """
+    content = f"""
+    <div class="container">
+        <h2>{route['route_name']}</h2>
+        {bus_html}
+        <a href="/" class="btn btn-secondary">Home</a>
+    </div>
+    """
 
     return render_template_string(BASE_HTML, content=content)
 
