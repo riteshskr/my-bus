@@ -667,9 +667,9 @@ def seat_page(sid):
         "schedule_id": sid,
         "travel_date": today,
         "status": "confirmed"
-    }) or []
+    }) or []  # अगर empty है तो empty list use होगा
 
-    booked = {b["seat_number"] for b in bookings}
+    booked_seats = {b["seat_number"] for b in bookings}
 
     seat_html = ""
     for i in range(1, 41):
