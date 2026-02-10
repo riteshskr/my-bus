@@ -673,7 +673,7 @@ def seat_page(sid):
 
     seat_html = ""
     for i in range(1, 41):
-        if i in booked:
+        if i in   booked_seats:
             seat_html += f"<button class='booked' disabled>S{i} ❌</button>"
         else:
             seat_html += f"<button class='free' onclick='selectSeat({i})'>S{i}</button>"
