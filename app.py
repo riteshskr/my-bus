@@ -664,7 +664,7 @@ def seat_page(sid):
 
     # departure_time को datetime में convert करना
     if "departure_time" in bus and isinstance(bus["departure_time"], str):
-        bus["departure_time"] = datetime.fromisoformat(bus["departure_time"])
+        bus["departure_time"] = datetime.strptime(bus["departure_time"], "%H:%M:%S").time()
 
     # आज की date या session date use करें
     today = session.get("date", date.today().isoformat())
