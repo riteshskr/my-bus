@@ -655,21 +655,16 @@ def buses(rid):
 
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
-    # 1️⃣ Get bus/schedule info
     bus_data = supabase_query("schedules", filters={"id": sid})
     if not bus_data:
-        return "<h3>Bus not found</h3>"
+        return "<h3>Bus not found</h3>", 404
 
     bus = bus_data[0]
 
-    # 2️⃣ Convert departure_time string to datetime.time
-    # Example: '08:00:00' -> datetime.time(8,0)
+    # ✅ यह सही format है '08:00:00' के लिए
     bus["departure_time"] = datetime.strptime(bus["departure_time"], "%H:%M:%S").time()
 
-    # 3️⃣ Get today's date or session date
     today = session.get("date", date.today().isoformat())
-
-    # 4️⃣ Get booked seats for this schedule and date
     bookings = supabase_query("seat_bookings", filters={
         "schedule_id": sid,
         "travel_date": today,
@@ -677,8 +672,6 @@ def seat_page(sid):
     }) or []
 
     booked_seats = {b["seat_number"] for b in bookings}
-
-    # 5️⃣ Build seat buttons HTML
     seat_html = ""
     for i in range(1, 41):
         if i in booked_seats:
@@ -686,14 +679,7 @@ def seat_page(sid):
         else:
             seat_html += f"<button class='free' onclick='selectSeat({i})'>S{i}</button>"
 
-    # 6️⃣ Render template
-    return render_template(
-        "seat.html",
-        schedule=bus,  # template में schedule use होगा
-        seat_html=seat_html,
-        sid=sid,
-        today=today
-    )
+    return render_template("seat.html", schedule=bus, seat_html=seat_html, sid=sid, today=today)
 
 
 
