@@ -537,110 +537,52 @@ def dashboard():
     role = session.get("role", "user")
     username = session.get("username", "User")
 
-    # Statistics fetch करें
     total_bookings = len(supabase_query("seat_bookings") or [])
     total_buses = len(supabase_query("schedules") or [])
     total_routes = len(supabase_query("routes") or [])
 
-    # Recent bookings
-    recent_bookings = supabase_query("seat_bookings", 
-                                   filters={"status": "confirmed"})
-    if recent_bookings:
-        recent_bookings = recent_bookings[:5]
+    recent_bookings = supabase_query("seat_bookings", filters={"status": "confirmed"}) or []
+    recent_bookings = recent_bookings[:5]
 
     admin_links = ""
     if role == "admin":
         admin_links = """
-        <div class="row mt-4">
-            <div class="col-md-3 mb-2">
-                <a href="/routes" class="btn btn-info w-100">🛣️ Manage Routes</a>
-            </div>
-            <div class="col-md-3 mb-2">
-                <a href="/schedules" class="btn btn-warning w-100">🚌 Manage Schedules</a>
-            </div>
-            <div class="col-md-3 mb-2">
-                <a href="/bookings" class="btn btn-success w-100">🎫 View Bookings</a>
-            </div>
-            <div class="col-md-3 mb-2">
-                <a href="/create-counter" class="btn btn-dark w-100">➕ Create Counter</a>
-            </div>
-        </div>
+        <a href="/routes" class="btn btn-info">Manage Routes</a>
+        <a href="/bookings" class="btn btn-success ms-2">View Bookings</a>
+        <a href="/create-counter" class="btn btn-dark ms-2">Create Counter</a>
         """
 
     counter_links = ""
     if role == "counter":
         counter_links = """
-        <div class="row mt-4">
-            <div class="col-md-6 mb-2">
-                <a href="/counter-bookings" class="btn btn-primary w-100">📋 My Bookings</a>
-            </div>
-            <div class="col-md-6 mb-2">
-                <a href="/counter-buses" class="btn btn-info w-100">🚍 Available Buses</a>
-            </div>
-        </div>
+        <a href="/counter-bookings" class="btn btn-primary">My Bookings</a>
         """
+
+    counter_html = ""
+    if session.get("counter_no"):
+        counter_html = f"<h5>Counter Number: #{session.get('counter_no')}</h5>"
 
     content = f"""
     <div class="container">
-        <div class="text-center mb-5">
-            <h2>Welcome, {username}! 🎉</h2>
-            <h4>Role: <span class="badge bg-primary">{role.upper()}</span></h4>
-            {% if session.get('counter_no') %}
-            <h5>Counter Number: <span class="badge bg-secondary">#{session.get('counter_no')}</span></h5>
-            {% endif %}
+        <h2>Welcome {username}</h2>
+        <h4>Role: {role.upper()}</h4>
+        {counter_html}
+
+        <div class="row mt-4">
+            <div class="col">Bookings: {total_bookings}</div>
+            <div class="col">Buses: {total_buses}</div>
+            <div class="col">Routes: {total_routes}</div>
         </div>
 
-        <!-- Statistics Cards -->
-        <div class="row mb-5">
-            <div class="col-md-4">
-                <div class="card text-center">
-                    <div class="card-body">
-                        <h1>{total_bookings}</h1>
-                        <p>Total Bookings</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card text-center">
-                    <div class="card-body">
-                        <h1>{total_buses}</h1>
-                        <p>Active Buses</p>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-4">
-                <div class="card text-center">
-                    <div class="card-body">
-                        <h1>{total_routes}</h1>
-                        <p>Routes</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Action Links -->
-        {admin_links}
-        {counter_links}
-
-        <!-- Recent Bookings -->
-        <div class="card mt-4">
-            <div class="card-header">
-                <h5>Recent Bookings</h5>
-            </div>
-            <div class="card-body">
-                {render_recent_bookings(recent_bookings)}
-            </div>
-        </div>
-
-        <!-- Navigation -->
-        <div class="text-center mt-4">
-            <a href="/" class="btn btn-outline-primary">🏠 Home</a>
-            <a href="/logout" class="btn btn-outline-danger ms-2">🚪 Logout</a>
+        <div class="mt-4">
+            {admin_links}
+            {counter_links}
         </div>
     </div>
     """
 
     return render_template_string(BASE_HTML, content=content)
+
 
 def render_recent_bookings(bookings):
     if not bookings:
@@ -685,311 +627,88 @@ def render_recent_bookings(bookings):
 
 @app.route("/buses/<int:rid>")
 def buses(rid):
-    # Route details
-    route_data = supabase_query("routes", filters={"id": rid})
-    if not route_data:
-        return "Route not found", 404
-    route = route_data[0]
+    route = supabase_query("routes", filters={"id": rid})[0]
+    buses = supabase_query("schedules", filters={"route_id": rid}) or []
 
-    # Route stations
-    stations_data = supabase_query("route_stations", filters={"route_id": rid})
-    stations = " → ".join([s["station_name"] for s in sorted(stations_data, key=lambda x: x["station_order"])]) if stations_data else ""
-
-    # Buses for this route
-    buses_data = supabase_query("schedules", filters={"route_id": rid})
-    
-    if not buses_data:
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
-            <div class="alert alert-warning text-center">
-                <h3>No buses available for {route['route_name']}</h3>
-                <a href="/" class="btn btn-primary mt-3">Back to Home</a>
+    bus_html = ""
+    for bus in buses:
+        bus_html += f"""
+        <div class="card mb-3">
+            <div class="card-body">
+                <h5>{bus['bus_name']}</h5>
+                <p>Departure: {bus['departure_time']}</p>
+                <a href="/seats/{bus['id']}" class="btn btn-success">Book</a>
             </div>
-            """
-        )
-
-    # Booked seats count for each bus
-    for bus in buses_data:
-        bookings = supabase_query("seat_bookings", filters={
-            "schedule_id": bus["id"],
-            "travel_date": date.today().isoformat(),
-            "status": "confirmed"
-        })
-        bus["booked_count"] = len(bookings) if bookings else 0
-        bus["available_seats"] = bus.get("total_seats", 40) - bus["booked_count"]
+        </div>
+        """
 
     content = f"""
     <div class="container">
-        <div class="text-center mb-5">
-            <h1>🚌 {route['route_name']}</h1>
-            <h5>📍 {stations} | 🛣️ {route['distance_km']} km</h5>
-        </div>
-
-        <div class="row">
-            {% for bus in buses %}
-            <div class="col-md-6 mb-4">
-                <div class="card h-100">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-start">
-                            <h5 class="card-title">{bus['bus_name']}</h5>
-                            <span class="badge {% if bus['current_lat'] %}bg-success{% else %}bg-secondary{% endif %}">
-                                {% if bus['current_lat'] %}🟢 LIVE{% else %}⚪ OFFLINE{% endif %}
-                            </span>
-                        </div>
-                        
-                        <div class="bus-info mt-3">
-                            <p><i class="fas fa-clock"></i> <strong>Departure:</strong> {bus['departure_time']}</p>
-                            <p><i class="fas fa-chair"></i> <strong>Available Seats:</strong> {bus['available_seats']} / {bus.get('total_seats', 40)}</p>
-                            {% if bus['current_lat'] %}
-                            <p><i class="fas fa-map-marker-alt"></i> <strong>Live Location:</strong> Active</p>
-                            {% endif %}
-                        </div>
-
-                        <div class="d-grid gap-2 d-md-flex justify-content-md-start mt-4">
-                            {% if bus['current_lat'] %}
-                            <a href="/live-bus/{bus['id']}" class="btn btn-primary me-md-2">
-                                <i class="fas fa-map"></i> Live GPS
-                            </a>
-                            {% endif %}
-                            <a href="/seats/{bus['id']}" class="btn btn-success">
-                                <i class="fas fa-ticket-alt"></i> Book Seat
-                            </a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <div class="text-center mt-4">
-            <a href="/" class="btn btn-outline-secondary">Back to Home</a>
-        </div>
+        <h2>{route['route_name']}</h2>
+        {bus_html}
+        <a href="/" class="btn btn-secondary">Home</a>
     </div>
     """
 
-    return render_template_string(
-        BASE_HTML,
-        content=render_template_string(content, buses=buses_data, route=route)
-    )
+    return render_template_string(BASE_HTML, content=content)
+
 
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
-    if not session.get("from") or not session.get("to") or not session.get("date"):
-        return redirect("/")
+    bus = supabase_query("schedules", filters={"id": sid})[0]
 
-    # Bus details
-    bus_data = supabase_query("schedules", filters={"id": sid})
-    if not bus_data:
-        return "Bus not found", 404
-    bus = bus_data[0]
-
-    # Route details
-    route_data = supabase_query("routes", filters={"id": bus["route_id"]})
-    route = route_data[0] if route_data else {"route_name": "Unknown Route"}
-
-    # Booked seats for today
     bookings = supabase_query("seat_bookings", filters={
         "schedule_id": sid,
         "travel_date": session.get("date"),
         "status": "confirmed"
-    })
-    booked_seats = set([b["seat_number"] for b in bookings]) if bookings else set()
+    }) or []
 
-    # Seat grid बनाएँ
+    booked = {b["seat_number"] for b in bookings}
+
     seat_html = ""
-    for seat in range(1, 41):  # 40 seats
-        if seat in booked_seats:
-            seat_html += f'<button class="seat seat-booked" disabled>S{seat}</button>'
+    for i in range(1, 41):
+        if i in booked:
+            seat_html += f"<button disabled>S{i} ❌</button>"
         else:
-            seat_html += f'<button class="seat seat-available" onclick="selectSeat({seat})">S{seat}</button>'
-
-    user_role = session.get("role", "user")
-    counter_id = session.get("user_id") if user_role == "counter" else None
+            seat_html += f"<button onclick='selectSeat({i})'>S{i}</button>"
 
     content = f"""
     <div class="container">
-        <div class="card">
-            <div class="card-header bg-primary text-white">
-                <h4 class="mb-0">{bus['bus_name']} - {route['route_name']}</h4>
-                <p class="mb-0">Departure: {bus['departure_time']} | Date: {session.get('date')}</p>
-                <p class="mb-0">From: {session.get('from')} → To: {session.get('to')}</p>
-                <p class="mb-0">Role: <span class="badge bg-info">{user_role.upper()}</span></p>
-            </div>
-            
-            <div class="card-body">
-                <h5>Select Your Seat:</h5>
-                <div class="seat-grid">
-                    {seat_html}
-                </div>
-                
-                <div class="mt-4">
-                    <div class="d-flex gap-2 mb-2">
-                        <div class="seat seat-available" style="width:30px;"></div>
-                        <span>Available</span>
-                    </div>
-                    <div class="d-flex gap-2">
-                        <div class="seat seat-booked" style="width:30px;"></div>
-                        <span>Booked</span>
-                    </div>
-                </div>
-                
-                <div class="mt-4" id="bookingForm" style="display:none;">
-                    <h5>Passenger Details</h5>
-                    <form id="passengerForm">
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label>Passenger Name</label>
-                                <input type="text" id="passengerName" class="form-control" required>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label>Mobile Number</label>
-                                <input type="tel" id="mobileNumber" class="form-control" required>
-                            </div>
-                        </div>
-                        {% if user_role == 'counter' %}
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
-                                <label>Fare (₹)</label>
-                                <input type="number" id="fareAmount" class="form-control" required>
-                            </div>
-                            <div class="col-md-6 mb-3">
-                                <label>Payment Mode</label>
-                                <select id="paymentMode" class="form-control">
-                                    <option value="cash">Cash</option>
-                                    <option value="online">Online</option>
-                                </select>
-                            </div>
-                        </div>
-                        {% endif %}
-                        <input type="hidden" id="selectedSeat">
-                        <button type="button" class="btn btn-success" onclick="confirmBooking()">Confirm Booking</button>
-                    </form>
-                </div>
-            </div>
-        </div>
+        <h3>{bus['bus_name']}</h3>
+        <div>{seat_html}</div>
+
+        <form id="bookForm" style="display:none">
+            <input id="seat">
+            <input id="name" placeholder="Name">
+            <button type="button" onclick="book()">Book</button>
+        </form>
     </div>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    const socket = io(window.location.origin);
-    let selectedSeat = null;
-    const counterId = {counter_id if counter_id else 'null'};
-    const userRole = "{user_role}";
-    
-    function selectSeat(seat) {{
-        if(selectedSeat) {{
-            document.getElementById('seat-' + selectedSeat)?.classList.remove('seat-selected');
-            document.getElementById('seat-' + selectedSeat)?.classList.add('seat-available');
-        }}
-        
-        selectedSeat = seat;
-        document.getElementById('seat-' + seat)?.classList.remove('seat-available');
-        document.getElementById('seat-' + seat)?.classList.add('seat-selected');
-        
-        document.getElementById('selectedSeat').value = seat;
-        document.getElementById('bookingForm').style.display = 'block';
+    let s = null;
+    function selectSeat(x){{
+        s = x;
+        document.getElementById("seat").value = x;
+        document.getElementById("bookForm").style.display = "block";
     }}
-    
-    // Dynamic seat IDs create करें
-    document.addEventListener('DOMContentLoaded', function() {{
-        const seats = document.querySelectorAll('.seat');
-        seats.forEach((seat, index) => {{
-            if(seat.classList.contains('seat-available')) {{
-                const seatNum = index + 1;
-                seat.id = 'seat-' + seatNum;
-            }}
-        }});
-    }});
-    
-    function confirmBooking() {{
-        const name = document.getElementById('passengerName').value;
-        const mobile = document.getElementById('mobileNumber').value;
-        const seat = selectedSeat;
-        
-        if(!name || !mobile || !seat) {{
-            alert('Please fill all details');
-            return;
-        }}
-        
-        let fare = 350;
-        let paymentMode = 'cash';
-        
-        if(userRole === 'counter') {{
-            fare = document.getElementById('fareAmount').value;
-            paymentMode = document.getElementById('paymentMode').value;
-            
-            if(!fare || fare < 1) {{
-                alert('Please enter valid fare');
-                return;
-            }}
-        }}
-        
-        const bookingData = {{
-            schedule_id: {sid},
-            seat_number: seat,
-            passenger_name: name,
-            mobile: mobile,
-            date: "{session.get('date')}",
-            from: "{session.get('from')}",
-            to: "{session.get('to')}",
-            fare: parseInt(fare),
-            payment_mode: paymentMode,
-            counter_id: counterId === 'null' ? null : counterId
-        }};
-        
-        fetch('/book', {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify(bookingData)
-        }})
-        .then(response => response.json())
-        .then(data => {{
-            if(data.ok) {{
-                alert('Booking confirmed! Fare: ₹' + data.fare);
-                // Seat को booked में बदलें
-                const seatBtn = document.getElementById('seat-' + seat);
-                seatBtn.classList.remove('seat-selected');
-                seatBtn.classList.add('seat-booked');
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = 'S' + seat + ' ✓';
-                
-                // Socket से broadcast करें
-                socket.emit('seat_booked', {{
-                    schedule_id: {sid},
-                    seat_number: seat,
-                    date: "{session.get('date')}"
-                }});
-                
-                // Form reset करें
-                document.getElementById('bookingForm').style.display = 'none';
-                selectedSeat = null;
-            }} else {{
-                alert('Error: ' + (data.error || 'Booking failed'));
-            }}
-        }})
-        .catch(error => {{
-            console.error('Error:', error);
-            alert('Network error. Please try again.');
-        }});
+
+    function book(){{
+        fetch("/book", {{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body:JSON.stringify({{
+                schedule_id:{sid},
+                seat_number:s,
+                passenger_name:document.getElementById("name").value,
+                date:"{session.get('date')}"
+            }})
+        }}).then(r=>r.json()).then(d=>alert("Booked"));
     }}
-    
-    // Real-time seat updates
-    socket.on('seat_update', function(data) {{
-        if(data.schedule_id == {sid} && data.date == "{session.get('date')}") {{
-            const seatBtn = document.getElementById('seat-' + data.seat_number);
-            if(seatBtn) {{
-                seatBtn.classList.remove('seat-available');
-                seatBtn.classList.add('seat-booked');
-                seatBtn.disabled = true;
-                seatBtn.innerHTML = 'S' + data.seat_number + ' ✓';
-            }}
-        }}
-    }});
     </script>
     """
-    
+
     return render_template_string(BASE_HTML, content=content)
+
 
 @app.route("/book", methods=["POST"])
 def book():
