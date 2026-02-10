@@ -1,92 +1,72 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Select Seats - SmartBus AI</title>
-<style>
-body{font-family:Poppins;background:#f5f7fb;margin:0;padding:40px;}
-.container{display:flex;gap:40px;}
-.bus{
-  background:white;padding:30px;border-radius:20px;
-  box-shadow:0 10px 25px rgba(0,0,0,.1);
-}
-.row{display:flex;gap:10px;margin-bottom:10px;}
-.seat{
-  width:40px;height:40px;
-  border-radius:8px;
-  background:#ddd;
-  display:flex;align-items:center;justify-content:center;
-  cursor:pointer;font-size:.8rem;
-}
-.seat.selected{background:#4caf50;color:white;}
-.seat.booked{background:#ff5252;color:white;cursor:not-allowed;}
-.summary{
-  background:white;padding:25px;border-radius:20px;
-  box-shadow:0 10px 25px rgba(0,0,0,.1);
-  width:300px;
-}
-button{
-  width:100%;padding:12px;
-  background:#ff512f;color:white;
-  border:none;border-radius:10px;
-  margin-top:20px;font-size:1rem;
-}
-</style>
+    <title>Seat Booking</title>
+    <style>
+        body { font-family: Arial; background:#f5f5f5; }
+        .container { max-width:600px; margin:40px auto; background:white; padding:20px; border-radius:10px; }
+        button { margin:5px; padding:10px 14px; border:none; border-radius:6px; cursor:pointer; }
+        button[disabled] { background:#ccc; cursor:not-allowed; }
+        .free { background:#4caf50; color:white; }
+        .booked { background:#e53935; color:white; }
+    </style>
 </head>
 <body>
 
-<h2>🚌 Volvo AC Sleeper – Delhi → Jaipur</h2>
-
 <div class="container">
-  <div class="bus" id="bus"></div>
+    <h2>बस: {{ bus_name }}</h2>
 
-  <div class="summary">
-    <h3>Booking Summary</h3>
-    <p>Seats: <span id="seats"></span></p>
-    <p>Total: ₹<span id="total">0</span></p>
-    <button onclick="book()">Confirm Booking</button>
-  </div>
+    <div id="seats">
+        {{ seat_html|safe }}
+    </div>
+
+    <hr>
+
+    <form id="bookForm" style="display:none">
+        <h3>Booking Details</h3>
+        <p>Seat: <input id="seat" readonly></p>
+        <p>Name: <input id="name" placeholder="Passenger Name"></p>
+        <button type="button" onclick="book()">Confirm Booking</button>
+    </form>
 </div>
 
 <script>
-let selected=[];
-let price=800;
+let selectedSeat = null;
 
-let bus=document.getElementById("bus");
-
-// 10 rows x 4 seats
-for(let r=1;r<=10;r++){
-  let row=document.createElement("div");
-  row.className="row";
-  for(let s=1;s<=4;s++){
-    let seat=document.createElement("div");
-    seat.className="seat";
-    seat.innerText=r+""+s;
-    seat.onclick=()=>{
-      if(seat.classList.contains("selected")){
-        seat.classList.remove("selected");
-        selected=selected.filter(x=>x!=seat.innerText);
-      }else{
-        seat.classList.add("selected");
-        selected.push(seat.innerText);
-      }
-      document.getElementById("seats").innerText=selected.join(",");
-      document.getElementById("total").innerText=selected.length*price;
-    }
-    row.appendChild(seat);
-  }
-  bus.appendChild(row);
+function selectSeat(x){
+    selectedSeat = x;
+    document.getElementById("seat").value = x;
+    document.getElementById("bookForm").style.display = "block";
 }
 
 function book(){
-  fetch("/book",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({seats:selected})
-  }).then(r=>r.json()).then(d=>{
-    alert("Booking Confirmed!");
-    location.href="/pay";
-  })
+    let name = document.getElementById("name").value;
+    if(!name){
+        alert("नाम डालो");
+        return;
+    }
+
+    fetch("/book", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+            schedule_id: {{ sid }},
+            seat_number: selectedSeat,
+            passenger_name: name,
+            date: "{{ today }}"
+        })
+    })
+    .then(r=>r.json())
+    .then(d=>{
+        if(d.error){
+            alert(d.error);
+        } else {
+            alert("Seat Booked Successfully!");
+            location.reload();
+        }
+    });
 }
 </script>
+
 </body>
 </html>

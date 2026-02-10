@@ -6,7 +6,7 @@ import setuptools
 import os, random
 from datetime import date, datetime
 from functools import wraps
-from flask import Flask, request, jsonify, render_template_string, redirect, g, session
+from flask import Flask, request, jsonify, render_template_string, redirect, g, session, render_template
 from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from supabase import create_client, Client
@@ -657,9 +657,11 @@ def buses(rid):
 def seat_page(sid):
     bus = supabase_query("schedules", filters={"id": sid})[0]
 
+    today = session.get("date")
+
     bookings = supabase_query("seat_bookings", filters={
         "schedule_id": sid,
-        "travel_date": session.get("date"),
+        "travel_date": today,
         "status": "confirmed"
     }) or []
 
@@ -668,46 +670,17 @@ def seat_page(sid):
     seat_html = ""
     for i in range(1, 41):
         if i in booked:
-            seat_html += f"<button disabled>S{i} ❌</button>"
+            seat_html += f"<button class='booked' disabled>S{i} ❌</button>"
         else:
-            seat_html += f"<button onclick='selectSeat({i})'>S{i}</button>"
+            seat_html += f"<button class='free' onclick='selectSeat({i})'>S{i}</button>"
 
-    content = f"""
-    <div class="container">
-        <h3>{bus['bus_name']}</h3>
-        <div>{seat_html}</div>
-
-        <form id="bookForm" style="display:none">
-            <input id="seat">
-            <input id="name" placeholder="Name">
-            <button type="button" onclick="book()">Book</button>
-        </form>
-    </div>
-
-    <script>
-    let s = null;
-    function selectSeat(x){{
-        s = x;
-        document.getElementById("seat").value = x;
-        document.getElementById("bookForm").style.display = "block";
-    }}
-
-    function book(){{
-        fetch("/book", {{
-            method:"POST",
-            headers:{{"Content-Type":"application/json"}},
-            body:JSON.stringify({{
-                schedule_id:{sid},
-                seat_number:s,
-                passenger_name:document.getElementById("name").value,
-                date:"{session.get('date')}"
-            }})
-        }}).then(r=>r.json()).then(d=>alert("Booked"));
-    }}
-    </script>
-    """
-
-    return render_template_string(BASE_HTML, content=content)
+    return render_template(
+        "seat.html",
+        bus_name=bus["bus_name"],
+        seat_html=seat_html,
+        sid=sid,
+        today=today
+    )
 
 
 @app.route("/book", methods=["POST"])
