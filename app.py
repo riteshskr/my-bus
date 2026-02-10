@@ -690,54 +690,10 @@ def seat_page(sid):
 @app.route("/book", methods=["POST"])
 def book():
     try:
-        data = request.get_json()
-        # Validate keys
-        required_keys = ["schedule_id","seat_number","passenger_name","mobile","date"]
-        for key in required_keys:
-            if key not in data:
-                return jsonify({"ok":False,"error":f"{key} missing"}), 400
-
-        # Check if seat already booked
-        existing = supabase_query("seat_bookings", filters={
-            "schedule_id": data["schedule_id"],
-            "seat_number": data["seat_number"],
-            "travel_date": data["date"],
-            "status": "confirmed"
-        })
-        if existing and len(existing) > 0:
-            return jsonify({"ok": False, "error": "Seat already booked"}), 409
-
-        # Insert booking
-        booking_data = {
-            "schedule_id": data["schedule_id"],
-            "seat_number": data["seat_number"],
-            "passenger_name": data["passenger_name"],
-            "mobile": data["mobile"],
-            "from_station": data.get("from", session.get("from","")),
-            "to_station": data.get("to", session.get("to","")),
-            "travel_date": data["date"],
-            "fare": 500,  # default fare
-            "status": "confirmed",
-            "payment_mode": data.get("payment_mode","cash"),
-            "booked_by_type": session.get("role","user"),
-            "booked_by_id": session.get("user_id",0),
-            "counter_id": data.get("counter_id"),
-            "created_at": datetime.now().isoformat()
-        }
-
-        result = supabase_query("seat_bookings", "insert", booking_data)
-
-        if result:
-            # Emit real-time update
-            socketio.emit("seat_update", {
-                "schedule_id": data["schedule_id"],
-                "seat_number": data["seat_number"],
-                "date": data["date"]
-            })
-            return jsonify({"ok":True, "fare": booking_data["fare"], "booking_id": result[0]["id"]})
-        else:
-            return jsonify({"ok": False, "error": "Failed to save booking"}), 500
-
+        data = request.get_json(force=True)  # force=True ensures JSON is parsed
+        if not data:
+            return jsonify({"ok":False,"error":"No JSON received"}), 400
+        # ... rest of booking code
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
