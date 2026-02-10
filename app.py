@@ -657,30 +657,28 @@ def buses(rid):
 def seat_page(sid):
     bus_data = supabase_query("schedules", filters={"id": sid})
     if not bus_data:
-        return "<h3>Bus not found</h3>", 404
+        return "<h3>बस नहीं मिली</h3>", 404
 
     bus = bus_data[0]
 
-    # ✅ यह सही format है '08:00:00' के लिए
-    bus["departure_time"] = datetime.strptime(bus["departure_time"], "%H:%M:%S").time()
+    # ✅ Time object बनाएं (strftime के लिए जरूरी)
+    departure_str = bus["departure_time"]  # '08:00:00'
+    bus["departure_time"] = datetime.strptime(departure_str, "%H:%M:%S").time()
 
     today = session.get("date", date.today().isoformat())
     bookings = supabase_query("seat_bookings", filters={
-        "schedule_id": sid,
-        "travel_date": today,
-        "status": "confirmed"
+        "schedule_id": sid, "travel_date": today, "status": "confirmed"
     }) or []
 
     booked_seats = {b["seat_number"] for b in bookings}
-    seat_html = ""
-    for i in range(1, 41):
-        if i in booked_seats:
-            seat_html += f"<button class='booked' disabled>S{i} ❌</button>"
-        else:
-            seat_html += f"<button class='free' onclick='selectSeat({i})'>S{i}</button>"
 
-    return render_template("seat.html", schedule=bus, seat_html=seat_html, sid=sid, today=today)
-
+    # ✅ सभी जरूरी variables pass करें
+    return render_template("seat.html",
+                           schedule=bus,  # bus dict को schedule के नाम से
+                           booked_seats=booked_seats,
+                           sid=sid,
+                           today=today
+                           )
 
 
 @app.route("/book", methods=["POST"])
