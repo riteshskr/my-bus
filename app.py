@@ -670,7 +670,7 @@ def seat_page(sid):
         "schedule_id": sid, "travel_date": today, "status": "confirmed"
     }) or []
 
-    booked_seats = {b["seat_number"] for b in bookings}
+    booked_seats = {b["seat_number"] for b in bookings if b["status"] == "confirmed"}
 
     # ✅ सभी जरूरी variables pass करें
     return render_template("seat.html",
