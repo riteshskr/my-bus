@@ -683,31 +683,36 @@ def seat_page(sid):
 
 @app.route("/book", methods=["POST"])
 def book():
-    print("BOOK API HIT")
+    try:
+        print("BOOK API HIT")
 
-    data = request.get_json()
-    print("DATA:", data)
+        data = request.get_json()
+        print("DATA:", data)
 
-    booking_data = {
-        "schedule_id": int(data['schedule_id']),
-        "seat_number": int(data['seat_number']),
-        "passenger_name": data['passenger_name'],
-        "mobile": data['mobile'],
-        "travel_date": data['date'],
-        "fare": 300,
-        "status": "confirmed",
-        "payment_mode": "cash"
-    }
+        booking_data = {
+            "schedule_id": int(data['schedule_id']),
+            "seat_number": int(data['seat_number']),
+            "passenger_name": data['passenger_name'],
+            "mobile": data['mobile'],
+            "travel_date": data['date'],
+            "fare": 300,
+            "status": "confirmed",
+            "payment_mode": "cash"
+        }
 
-    res = supabase.table("seat_bookings").insert(booking_data).execute()
+        res = supabase.table("seat_bookings").insert(booking_data).execute()
 
-    print("SUPABASE RESPONSE:", res)
-    print("ERROR:", res.error)
+        print("SUPABASE RESPONSE:", res)
+        print("ERROR:", res.error)
 
-    if res.error:
-        return jsonify({"ok": False, "error": str(res.error)})
+        if res.error:
+            return jsonify({"ok": False, "error": str(res.error)})
 
-    return jsonify({"ok": True, "message": "Seat booked"})
+        return jsonify({"ok": True, "message": "Seat booked"})
+
+    except Exception as e:
+        print("SERVER EXCEPTION:", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/live-bus/<int:sid>")
 def live_bus(sid):
