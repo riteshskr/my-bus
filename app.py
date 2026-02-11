@@ -683,14 +683,17 @@ def seat_page(sid):
 
 @app.route("/book", methods=["POST"])
 def book():
+    print("BOOK API HIT")
+
     data = request.get_json()
+    print("DATA:", data)
 
     required = ['schedule_id', 'seat_number', 'passenger_name', 'mobile', 'date']
     for f in required:
         if not data.get(f):
             return jsonify({"ok": False, "error": f"{f} missing"}), 400
 
-    # पहले check करो seat already booked है या नहीं
+    # Check existing
     existing = supabase_query("seat_bookings", filters={
         "schedule_id": data['schedule_id'],
         "seat_number": data['seat_number'],
@@ -701,17 +704,15 @@ def book():
     if existing:
         return jsonify({"ok": False, "error": "Seat already booked"}), 409
 
-    fare = random.randint(250, 450)
-
     booking_data = {
         "schedule_id": int(data['schedule_id']),
         "seat_number": int(data['seat_number']),
         "passenger_name": data['passenger_name'],
         "mobile": data['mobile'],
-        "from_station": session.get("from", "Unknown"),
-        "to_station": session.get("to", "Unknown"),
+        "from_station": session.get("from", "NA"),
+        "to_station": session.get("to", "NA"),
         "travel_date": data['date'],
-        "fare": fare,
+        "fare": 300,
         "status": "confirmed",
         "payment_mode": "cash",
         "booked_by_type": session.get("role", "user"),
@@ -719,22 +720,10 @@ def book():
         "counter_id": session.get("user_id", 0)
     }
 
-    result = supabase_query("seat_bookings", "insert", booking_data)
+    res = supabase.table("seat_bookings").insert(booking_data).execute()
+    print("SUPABASE RESPONSE:", res)
 
-    if not result:
-        return jsonify({"ok": False, "error": "DB insert failed"}), 500
-
-    socketio.emit("seat_update", {
-        "sid": booking_data["schedule_id"],
-        "seat": booking_data["seat_number"],
-        "date": booking_data["travel_date"]
-    }, broadcast=True)
-
-    return jsonify({
-        "ok": True,
-        "fare": fare,
-        "message": "Seat booked successfully"
-    })
+    return jsonify({"ok": True, "message": "Seat booked"})
 
 @app.route("/live-bus/<int:sid>")
 def live_bus(sid):
