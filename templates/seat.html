@@ -80,7 +80,7 @@ const BUS_LAT = 26.9124;  // Jaipur coords
 const BUS_LNG = 75.7873;
 const SID = {{ sid }};   // ✅ dynamic
 const TODAY = "{{ travel_date }}";
-const COUNTER_ID = {{ session.get("user_id", "null") }};
+const USER_ROLE = "{{ session.get('role', '') }}"; 
 
 // ===== Leaflet Map Init =====
 const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15);
@@ -119,13 +119,13 @@ function bookSeat(seatId) {
     btn.innerText = "⏳ Booking...";
     btn.disabled = true;
     
-    let fare = null;
+    let fare = 0;
     let payment_mode = "cash";
     
     // Counter role - fare input
-    if(COUNTER_ID !== null) {
-        fare = prompt("Fare amount:");
-        if(!fare || isNaN(fare)) {
+   if(USER_ROLE === "counter") {
+        fare = parseInt(prompt("Fare amount:"));
+        if(isNaN(fare) || fare <= 0){
             alert("Invalid fare");
             resetButton();
             return;
@@ -143,7 +143,7 @@ function bookSeat(seatId) {
         btn.disabled = false;
     }
     
-    // Demo booking success
+    //  booking success
     fetch("https://my-bus-hps7.onrender.com/book", {
     method: "POST",
     headers: {
