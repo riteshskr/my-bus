@@ -670,8 +670,12 @@ def seat_page(sid):
         "schedule_id": sid, "travel_date": today, "status": "confirmed"
     }) or []
 
-    booked_seats = {b["seat_number"] for b in bookings if b["status"] == "confirmed"}
+    booked_seats = [
+        {"seat_number": b["seat_number"]}
+        for b in bookings
+    ]
 
+    bus = supabase_query("schedules", filters={"id": sid})[0]
     # ✅ सभी जरूरी variables pass करें
     return render_template("seat.html",
                            schedule=bus,  # bus dict को schedule के नाम से
