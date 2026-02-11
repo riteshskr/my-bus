@@ -75,11 +75,12 @@ xml
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script>
-const SID = 1;  // Schedule ID
-const TODAY = "{{ travel_date }}";
+
 const BUS_LAT = 26.9124;  // Jaipur coords
 const BUS_LNG = 75.7873;
-const COUNTER_ID = 1;  // Demo counter ID
+const SID = {{ sid }};   // ✅ dynamic
+const TODAY = "{{ travel_date }}";
+const COUNTER_ID = {{ session.get("user_id", "null") }};
 
 // ===== Leaflet Map Init =====
 const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15);
@@ -176,10 +177,27 @@ function bookSeat(seatId) {
 });
 }
 
+
+
 // ===== Heartbeat =====
 setInterval(() => {
     console.log("Heartbeat sent");
 }, 30000);
+
+
+
+
+const BOOKED = {{ booked_seats | tojson }};
+
+BOOKED.forEach(b => {
+    let btn = document.getElementById("seat-" + b.seat_number);
+    if(btn){
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-danger");
+        btn.innerText = "X" + b.seat_number;
+        btn.disabled = true;
+    }
+});
 
 </script>
 </body>
