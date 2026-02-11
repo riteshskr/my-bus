@@ -58,7 +58,12 @@ const BUS_LAT = 26.9124;
 const BUS_LNG = 75.7873;
 const SID = {{ sid|default(0) }};
 const TODAY = "{{ travel_date|default('2026-01-01') }}";
-const USER_ROLE = "{{ session.get('role','counter')|e('js') }}".trim();
+const BUS_LAT = 26.9124;
+const BUS_LNG = 75.7873;
+const SID = {{ sid|default(0) }};  // Number safe
+const TODAY = "{{ travel_date|default('2026-02-11') }}";  // String safe
+const USER_ROLE = "{{ session.get('role', 'counter')|e }}";  // ✅ सिर्फ |e 
+const BOOKED = {{ booked_seats|default([])|tojson }};  // JSON safe
 const BOOKED = {{ booked_seats|default([])|tojson }};
 
 // ===== Leaflet Map Init =====
