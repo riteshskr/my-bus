@@ -655,34 +655,45 @@ def buses(rid):
 
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
-    bus_data = supabase_query("schedules", filters={"id": sid})
-    if not bus_data:
-        return "<h3>बस नहीं मिली</h3>", 404
+    try:
+        print(f"🔍 SID={sid}")
 
-    bus = bus_data[0]
+        # Bus check FIRST
+        bus_data = supabase_query("schedules", filters={"id": sid})
+        print(f"Bus data: {bus_data}")
 
-    # ✅ Time object बनाएं (strftime के लिए जरूरी)
-    departure_str = bus["departure_time"]  # '08:00:00'
-    bus["departure_time"] = datetime.strptime(departure_str, "%H:%M:%S").time()
+        if not bus_data or len(bus_data) == 0:
+            return f"<h3>❌ Schedule ID {sid} नहीं मिला। Supabase → schedules table check करें।</h3>", 404
 
-    today = session.get("date", date.today().isoformat())
-    bookings = supabase_query("seat_bookings", filters={
-        "schedule_id": sid, "travel_date": today, "status": "confirmed"
-    }) or []
+        bus = bus_data[0]
 
-    booked_seats = [
-        {"seat_number": b["seat_number"]}
-        for b in bookings
-    ]
+        # Safe departure_time
+        if bus.get("departure_time"):
+            try:
+                bus["departure_time"] = str(datetime.strptime(bus["departure_time"], "%H:%M:%S").time())
+            except:
+                bus["departure_time"] = bus["departure_time"] or "08:30"
 
-    booked_seats = [{"seat_number": b["seat_number"]} for b in bookings]
-    # ✅ सभी जरूरी variables pass करें
-    return render_template("seat.html",
-                           schedule=bus,  # bus dict को schedule के नाम से
-                           booked_seats=booked_seats,
-                           sid=sid,
-                           travel_date=session.get("date")
-                           )
+        today = session.get("date", "2026-02-11")
+        bookings = supabase_query("seat_bookings", filters={
+            "schedule_id": sid,
+            "travel_date": today,
+            "status": "confirmed"
+        }) or []
+
+        booked_seats = [{"seat_number": b["seat_number"]} for b in bookings]
+
+        return render_template("seat.html",
+                               schedule=bus,
+                               booked_seats=booked_seats,
+                               sid=sid,
+                               travel_date=today)
+
+    except Exception as e:
+        print(f"💥 ERROR /seats/{sid}: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"<h3>Server Error: {str(e)}</h3>", 500
 
 
 @app.route("/book", methods=["POST"])
