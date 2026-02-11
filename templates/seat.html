@@ -1,4 +1,3 @@
-xml
 <!DOCTYPE html>
 <html>
 <head>
@@ -31,43 +30,10 @@ xml
     
     <h5 style="margin-top:30px;">Select Seat</h5>
     <div style="display:flex;flex-wrap:wrap;gap:10px;">
-        <!-- Seat Buttons - 36 seats (4x9 layout) -->
-        <button id="seat-1" class="btn btn-success btn-lg m-1" onclick="bookSeat(1)" style="width:60px;height:60px;">1</button>
-        <button id="seat-2" class="btn btn-success btn-lg m-1" onclick="bookSeat(2)" style="width:60px;height:60px;">2</button>
-        <button id="seat-3" class="btn btn-success btn-lg m-1" onclick="bookSeat(3)" style="width:60px;height:60px;">3</button>
-        <button id="seat-4" class="btn btn-success btn-lg m-1" onclick="bookSeat(4)" style="width:60px;height:60px;">4</button>
-        <button id="seat-5" class="btn btn-success btn-lg m-1" onclick="bookSeat(5)" style="width:60px;height:60px;">5</button>
-        <button id="seat-6" class="btn btn-success btn-lg m-1" onclick="bookSeat(6)" style="width:60px;height:60px;">6</button>
-        <button id="seat-7" class="btn btn-success btn-lg m-1" onclick="bookSeat(7)" style="width:60px;height:60px;">7</button>
-        <button id="seat-8" class="btn btn-success btn-lg m-1" onclick="bookSeat(8)" style="width:60px;height:60px;">8</button>
-        <button id="seat-9" class="btn btn-success btn-lg m-1" onclick="bookSeat(9)" style="width:60px;height:60px;">9</button>
-        <button id="seat-10" class="btn btn-success btn-lg m-1" onclick="bookSeat(10)" style="width:60px;height:60px;">10</button>
-        <button id="seat-11" class="btn btn-success btn-lg m-1" onclick="bookSeat(11)" style="width:60px;height:60px;">11</button>
-        <button id="seat-12" class="btn btn-success btn-lg m-1" onclick="bookSeat(12)" style="width:60px;height:60px;">12</button>
-        <button id="seat-13" class="btn btn-success btn-lg m-1" onclick="bookSeat(13)" style="width:60px;height:60px;">13</button>
-        <button id="seat-14" class="btn btn-success btn-lg m-1" onclick="bookSeat(14)" style="width:60px;height:60px;">14</button>
-        <button id="seat-15" class="btn btn-success btn-lg m-1" onclick="bookSeat(15)" style="width:60px;height:60px;">15</button>
-        <button id="seat-16" class="btn btn-success btn-lg m-1" onclick="bookSeat(16)" style="width:60px;height:60px;">16</button>
-        <button id="seat-17" class="btn btn-success btn-lg m-1" onclick="bookSeat(17)" style="width:60px;height:60px;">17</button>
-        <button id="seat-18" class="btn btn-success btn-lg m-1" onclick="bookSeat(18)" style="width:60px;height:60px;">18</button>
-        <button id="seat-19" class="btn btn-success btn-lg m-1" onclick="bookSeat(19)" style="width:60px;height:60px;">19</button>
-        <button id="seat-20" class="btn btn-success btn-lg m-1" onclick="bookSeat(20)" style="width:60px;height:60px;">20</button>
-        <button id="seat-21" class="btn btn-success btn-lg m-1" onclick="bookSeat(21)" style="width:60px;height:60px;">21</button>
-        <button id="seat-22" class="btn btn-success btn-lg m-1" onclick="bookSeat(22)" style="width:60px;height:60px;">22</button>
-        <button id="seat-23" class="btn btn-success btn-lg m-1" onclick="bookSeat(23)" style="width:60px;height:60px;">23</button>
-        <button id="seat-24" class="btn btn-success btn-lg m-1" onclick="bookSeat(24)" style="width:60px;height:60px;">24</button>
-        <button id="seat-25" class="btn btn-success btn-lg m-1" onclick="bookSeat(25)" style="width:60px;height:60px;">25</button>
-        <button id="seat-26" class="btn btn-success btn-lg m-1" onclick="bookSeat(26)" style="width:60px;height:60px;">26</button>
-        <button id="seat-27" class="btn btn-success btn-lg m-1" onclick="bookSeat(27)" style="width:60px;height:60px;">27</button>
-        <button id="seat-28" class="btn btn-success btn-lg m-1" onclick="bookSeat(28)" style="width:60px;height:60px;">28</button>
-        <button id="seat-29" class="btn btn-success btn-lg m-1" onclick="bookSeat(29)" style="width:60px;height:60px;">29</button>
-        <button id="seat-30" class="btn btn-success btn-lg m-1" onclick="bookSeat(30)" style="width:60px;height:60px;">30</button>
-        <button id="seat-31" class="btn btn-success btn-lg m-1" onclick="bookSeat(31)" style="width:60px;height:60px;">31</button>
-        <button id="seat-32" class="btn btn-success btn-lg m-1" onclick="bookSeat(32)" style="width:60px;height:60px;">32</button>
-        <button id="seat-33" class="btn btn-success btn-lg m-1" onclick="bookSeat(33)" style="width:60px;height:60px;">33</button>
-        <button id="seat-34" class="btn btn-success btn-lg m-1" onclick="bookSeat(34)" style="width:60px;height:60px;">34</button>
-        <button id="seat-35" class="btn btn-success btn-lg m-1" onclick="bookSeat(35)" style="width:60px;height:60px;">35</button>
-        <button id="seat-36" class="btn btn-success btn-lg m-1" onclick="bookSeat(36)" style="width:60px;height:60px;">36</button>
+        <!-- 36 Seats -->
+        {% for i in range(1,37) %}
+        <button id="seat-{{ i }}" class="btn btn-success btn-lg m-1" onclick="bookSeat({{ i }})" style="width:60px;height:60px;">{{ i }}</button>
+        {% endfor %}
     </div>
 </div>
 
@@ -75,16 +41,16 @@ xml
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script>
-
 const BUS_LAT = 26.9124;  // Jaipur coords
 const BUS_LNG = 75.7873;
-const SID = {{ sid }};   // ✅ dynamic
+const SID = {{ sid }};   
 const TODAY = "{{ travel_date }}";
-const USER_ROLE = "{{ session.get('role', '') }}"; 
+const USER_ROLE = "{{ session.get('role', '') | e('js') }}".trim();
+
+console.log("USER_ROLE:", USER_ROLE);
 
 // ===== Leaflet Map Init =====
 const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15);
-
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>',
     subdomains: 'abcd',
@@ -95,7 +61,6 @@ let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map)
     .bindPopup('Live Bus Location')
     .openPopup();
 
-// ===== Socket Events (Backend connect करेंगे बाद में) =====
 function simulateBusMovement() {
     setInterval(() => {
         const newLat = BUS_LAT + (Math.random() - 0.5) * 0.01;
@@ -118,20 +83,27 @@ function bookSeat(seatId) {
     let oldText = btn.innerText;
     btn.innerText = "⏳ Booking...";
     btn.disabled = true;
-    
+
     let fare = 0;
     let payment_mode = "cash";
-    
-    // Counter role - fare input
-   const USER_ROLE = "{{ session.get('role', '') | e('js') }}".trim();
-   console.log("USER_ROLE:", USER_ROLE);
-   if(USER_ROLE === "counter") {
-        fare = parseInt(prompt("Fare amount:"));
+
+    function resetButton() {
+        btn.innerText = oldText;
+        btn.disabled = false;
+    }
+
+    // Counter role - safe fare input
+    if(USER_ROLE === "counter") {
+        let fareInput = prompt("Fare amount:");
+        if(fareInput === null) { resetButton(); return; }
+
+        fare = parseInt(fareInput);
         if(isNaN(fare) || fare <= 0){
             alert("Invalid fare");
             resetButton();
             return;
         }
+
         payment_mode = prompt("Payment mode: cash / online", "cash");
         if(payment_mode !== "cash" && payment_mode !== "online") {
             alert("Only cash or online allowed");
@@ -139,58 +111,46 @@ function bookSeat(seatId) {
             return;
         }
     }
-    
-    function resetButton() {
-        btn.innerText = oldText;
-        btn.disabled = false;
-    }
-    
-    //  booking success
+
+    // Booking POST request
     fetch("https://my-bus-hps7.onrender.com/book", {
-    method: "POST",
-    headers: {
-        "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-        schedule_id: SID,
-        seat_number: seatId,
-        passenger_name: name,
-        mobile: mobile,
-        date: TODAY,
-       fare: fare,                 // ✅
-    payment_mode: payment_mode	
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            schedule_id: SID,
+            seat_number: seatId,
+            passenger_name: name,
+            mobile: mobile,
+            date: TODAY,
+            fare: fare,
+            payment_mode: payment_mode
+        })
     })
-})
-.then(r => r.json())
-.then(d => {
-    if(d.ok){
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X" + seatId;
-        alert(d.message || "Seat booked");
-    } else {
-        alert(d.error || "Booking failed");
+    .then(r => r.json())
+    .then(d => {
+        if(d.ok){
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.innerText = "X" + seatId;
+            alert(d.message || "Seat booked");
+        } else {
+            alert(d.error || "Booking failed");
+            resetButton();
+        }
+    })
+    .catch(err => {
+        alert("Server error");
         resetButton();
-    }
-})
-.catch(err => {
-    alert("Server error");
-    resetButton();
-});
+    });
 }
-
-
 
 // ===== Heartbeat =====
 setInterval(() => {
     console.log("Heartbeat sent");
 }, 30000);
 
-
-
-
+// ===== Disable already booked seats =====
 const BOOKED = {{ booked_seats | tojson }};
-
 BOOKED.forEach(b => {
     let btn = document.getElementById("seat-" + b.seat_number);
     if(btn){
@@ -200,7 +160,6 @@ BOOKED.forEach(b => {
         btn.disabled = true;
     }
 });
-
 </script>
 </body>
 </html>
