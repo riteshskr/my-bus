@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 import json
-
+import traceback
 load_dotenv()
 import setuptools
 import os, random
@@ -725,6 +725,7 @@ def book():
 
     except Exception as e:
         print("SERVER EXCEPTION:", e)
+        traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
