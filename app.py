@@ -696,10 +696,13 @@ def book():
             "mobile": data['mobile'],
             "from_station": session.get("from", "NA"),
             "to_station": session.get("to", "NA"),
-            "travel_date": data['date'],
+            "travel_date": session.get("date"),
             "fare": 300,
             "status": "confirmed",
-            "payment_mode": "cash"
+            "payment_mode": "cash",
+            "booked_by_type": session.get("role", "user"),
+            "booked_by_id": session.get("user_id", 0),
+            "counter_id": session.get("user_id", 0)
         }
 
         res = supabase.table("seat_bookings").insert(booking_data).execute()
