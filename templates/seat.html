@@ -95,7 +95,7 @@ let busMarker = L.marker([BUS_LAT, BUS_LNG]).addTo(map)
     .bindPopup('Live Bus Location')
     .openPopup();
 
-// ===== Demo Socket Events (Backend connect करेंगे बाद में) =====
+// ===== Socket Events (Backend connect करेंगे बाद में) =====
 function simulateBusMovement() {
     setInterval(() => {
         const newLat = BUS_LAT + (Math.random() - 0.5) * 0.01;
@@ -123,6 +123,8 @@ function bookSeat(seatId) {
     let payment_mode = "cash";
     
     // Counter role - fare input
+   const USER_ROLE = "{{ session.get('role', '') | e('js') }}".trim();
+   console.log("USER_ROLE:", USER_ROLE);
    if(USER_ROLE === "counter") {
         fare = parseInt(prompt("Fare amount:"));
         if(isNaN(fare) || fare <= 0){
