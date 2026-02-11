@@ -143,13 +143,35 @@ function bookSeat(seatId) {
     }
     
     // Demo booking success
-    setTimeout(() => {
+    fetch("/book", {
+    method: "POST",
+    headers: {
+        "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+        schedule_id: SID,
+        seat_number: seatId,
+        passenger_name: name,
+        mobile: mobile,
+        date: TODAY
+    })
+})
+.then(r => r.json())
+.then(d => {
+    if(d.ok){
         btn.classList.remove("btn-success");
         btn.classList.add("btn-danger");
         btn.innerText = "X" + seatId;
-        alert("✅ Seat " + seatId + " booked! Fare: ₹" + (fare || 250));
-    }, 1000);
-}
+        alert(d.message || "Seat booked");
+    } else {
+        alert(d.error || "Booking failed");
+        resetButton();
+    }
+})
+.catch(err => {
+    alert("Server error");
+    resetButton();
+});
 
 // ===== Heartbeat =====
 setInterval(() => {

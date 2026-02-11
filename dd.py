@@ -1107,68 +1107,93 @@ def heartbeat():
 
 @app.route("/book", methods=["POST"])
 @safe_db
-def book():
+def book(conn, cur):
     data = request.get_json()
 
-    conn, cur = get_db()
+    # Input validation
+    required_fields = ['schedule_id', 'seat_number', 'passenger_name', 'mobile', 'date']
+    missing = [field for field in required_fields if not data.get(field)]
+    if missing:
+        return jsonify({"ok": False, "error": f"Missing fields: {', '.join(missing)}"}), 400
 
     try:
+        # Check seat availability (transaction-safe)
         cur.execute("""
-            SELECT id FROM seat_bookings
+            SELECT id, passenger_name FROM seat_bookings
             WHERE schedule_id=%s 
             AND seat_number=%s 
             AND travel_date=%s
             AND status='confirmed'
         """, (data['schedule_id'], data['seat_number'], data['date']))
 
-        if cur.fetchone():
-            return jsonify({"ok": False, "error": "Seat already booked"}), 409
+        existing_booking = cur.fetchone()
+        if existing_booking:
+            return jsonify({
+                "ok": False,
+                "error": f"Seat {data['seat_number']} already booked by {existing_booking['passenger_name']}"
+            }), 409
 
+        # Role-based fare logic
         user_role = session.get("role", "user")
-
         if user_role == "counter":
             fare = int(data.get("fare", 0))
-            payment_mode = data.get("payment_mode", "cash")
+            if fare <= 0:
+                return jsonify({"ok": False, "error": "Fare must be greater than 0"}), 400
+            payment_mode = data.get("payment_mode", "cash").lower()
+            if payment_mode not in ["cash", "online"]:
+                return jsonify({"ok": False, "error": "Payment mode must be 'cash' or 'online'"}), 400
         else:
             fare = random.randint(250, 450)
             payment_mode = "cash"
 
-        cur.execute("""
-        INSERT INTO seat_bookings
-        (
-         schedule_id, seat_number, passenger_name, mobile,
-         from_station, to_station, travel_date,
-         fare, status, payment_mode,
-         booked_by_type, booked_by_id, counter_id
-        )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
-        %s,%s,%s,%s,%s)
-        """, (
+        # Insert booking data
+        booking_data = (
             int(data['schedule_id']),
             int(data['seat_number']),
-            data['passenger_name'],
-            data['mobile'],
-            session.get("from"),
-            session.get("to"),
+            data['passenger_name'].strip()[:100],
+            data['mobile'].strip()[:15],
+            session.get("from_station", "Jaipur"),
+            session.get("to_station", "Udaipur"),
             data['date'],
             int(fare),
-            'confirmed',  # status
-            payment_mode,  # payment_mode
-            user_role,  # booked_by_type
-            int(session.get("user_id", 0)),
+            'confirmed',
+            payment_mode,
+            user_role,
+            int(session.get("user_id") or 0),
             int(data.get("counter_id") or 0)
-        ))
-        conn.commit()
-        socketio.emit("seat_update", {
-            "sid": data['schedule_id'],  # schedule_id को sid की जगह
-            "seat": data['seat_number'],  # data['seat'] नहीं, data['seat_number']
-            "date": data['date']
-        })
-        return jsonify({"ok": True, "fare": fare})
+        )
 
+        cur.execute("""
+            INSERT INTO seat_bookings (
+                schedule_id, seat_number, passenger_name, mobile,
+                from_station, to_station, travel_date,
+                fare, status, payment_mode,
+                booked_by_type, booked_by_id, counter_id
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, booking_data)
+
+        # Real-time broadcast
+        socketio.emit("seat_update", {
+            "sid": int(data['schedule_id']),
+            "seat": int(data['seat_number']),
+            "date": data['date'],
+            "passenger": data['passenger_name'][:20] + "..."
+        }, broadcast=True)
+
+        print(f"✅ Seat {data['seat_number']} booked by {data['passenger_name']} | ₹{fare}")
+
+        return jsonify({
+            "ok": True,
+            "fare": fare,
+            "message": f"Seat {data['seat_number']} booked successfully!",
+            "booking_id": cur.lastrowid
+        })
+
+    except ValueError as ve:
+        return jsonify({"ok": False, "error": f"Invalid data: {str(ve)}"}), 400
     except Exception as e:
-        conn.rollback()
-        return jsonify({"ok": False, "error": str(e)})
+        print(f"Booking error: {str(e)}")
+        return jsonify({"ok": False, "error": "Booking failed. Please try again"}), 500
 
 
 @app.route("/driver/<int:sid>")
