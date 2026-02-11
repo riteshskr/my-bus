@@ -703,16 +703,17 @@ def book():
         res = supabase.table("seat_bookings").insert(booking_data).execute()
 
         print("SUPABASE RESPONSE:", res)
-        print("ERROR:", res.error)
+        print("DATA:", res.data)
 
-        if res.error:
-            return jsonify({"ok": False, "error": str(res.error)})
+        if not res.data:
+            return jsonify({"ok": False, "error": "Insert failed"})
 
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
         print("SERVER EXCEPTION:", e)
         return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/live-bus/<int:sid>")
 def live_bus(sid):
