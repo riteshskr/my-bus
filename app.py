@@ -694,6 +694,8 @@ def book():
             "seat_number": int(data['seat_number']),
             "passenger_name": data['passenger_name'],
             "mobile": data['mobile'],
+            "from_station": session.get("from", "NA"),
+            "to_station": session.get("to", "NA"),
             "travel_date": data['date'],
             "fare": 300,
             "status": "confirmed",
