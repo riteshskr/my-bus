@@ -690,6 +690,13 @@ def book():
         print("DATA:", data)
         fare = data.get("fare")
         payment_mode = data.get("payment_mode")
+        if fare is None:
+            return jsonify({"ok": False, "error": "fare missing"}), 400
+
+        try:
+            fare = int(fare)
+        except:
+            return jsonify({"ok": False, "error": "invalid fare"}), 400
         booking_data = {
             "schedule_id": int(data['schedule_id']),
             "seat_number": int(data['seat_number']),

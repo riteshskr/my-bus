@@ -76,7 +76,7 @@ xml
 
 <script>
 const SID = 1;  // Schedule ID
-const TODAY = "2026-02-10";
+const TODAY = "{{ travel_date }}";
 const BUS_LAT = 26.9124;  // Jaipur coords
 const BUS_LNG = 75.7873;
 const COUNTER_ID = 1;  // Demo counter ID
@@ -153,7 +153,9 @@ function bookSeat(seatId) {
         seat_number: seatId,
         passenger_name: name,
         mobile: mobile,
-        date: TODAY
+        date: TODAY,
+       fare: fare,                 // ✅
+    payment_mode: payment_mode	
     })
 })
 .then(r => r.json())
