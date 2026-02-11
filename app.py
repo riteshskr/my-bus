@@ -688,40 +688,24 @@ def book():
     data = request.get_json()
     print("DATA:", data)
 
-    required = ['schedule_id', 'seat_number', 'passenger_name', 'mobile', 'date']
-    for f in required:
-        if not data.get(f):
-            return jsonify({"ok": False, "error": f"{f} missing"}), 400
-
-    # Check existing
-    existing = supabase_query("seat_bookings", filters={
-        "schedule_id": data['schedule_id'],
-        "seat_number": data['seat_number'],
-        "travel_date": data['date'],
-        "status": "confirmed"
-    })
-
-    if existing:
-        return jsonify({"ok": False, "error": "Seat already booked"}), 409
-
     booking_data = {
         "schedule_id": int(data['schedule_id']),
         "seat_number": int(data['seat_number']),
         "passenger_name": data['passenger_name'],
         "mobile": data['mobile'],
-        "from_station": session.get("from", "NA"),
-        "to_station": session.get("to", "NA"),
         "travel_date": data['date'],
         "fare": 300,
         "status": "confirmed",
-        "payment_mode": "cash",
-        "booked_by_type": session.get("role", "user"),
-        "booked_by_id": session.get("user_id", 0),
-        "counter_id": session.get("user_id", 0)
+        "payment_mode": "cash"
     }
 
     res = supabase.table("seat_bookings").insert(booking_data).execute()
+
     print("SUPABASE RESPONSE:", res)
+    print("ERROR:", res.error)
+
+    if res.error:
+        return jsonify({"ok": False, "error": str(res.error)})
 
     return jsonify({"ok": True, "message": "Seat booked"})
 
