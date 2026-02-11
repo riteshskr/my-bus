@@ -143,7 +143,7 @@ function bookSeat(seatId) {
     }
     
     // Demo booking success
-    fetch("/book", {
+    fetch("https://my-bus-hps7.onrender.com/book", {
     method: "POST",
     headers: {
         "Content-Type": "application/json"
@@ -172,6 +172,7 @@ function bookSeat(seatId) {
     alert("Server error");
     resetButton();
 });
+}
 
 // ===== Heartbeat =====
 setInterval(() => {
