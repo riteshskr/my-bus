@@ -688,7 +688,8 @@ def book():
 
         data = request.get_json()
         print("DATA:", data)
-
+        fare = data.get("fare")
+        payment_mode = data.get("payment_mode")
         booking_data = {
             "schedule_id": int(data['schedule_id']),
             "seat_number": int(data['seat_number']),
@@ -697,9 +698,9 @@ def book():
             "from_station": session.get("from", "NA"),
             "to_station": session.get("to", "NA"),
             "travel_date": session.get("date"),
-            "fare": 300,
+            "fare": int(fare),
             "status": "confirmed",
-            "payment_mode": "cash",
+            "payment_mode": payment_mode,
             "booked_by_type": session.get("role", "user"),
             "booked_by_id": session.get("user_id", 0),
             "counter_id": session.get("user_id", 0)
