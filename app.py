@@ -675,7 +675,7 @@ def seat_page(sid):
         for b in bookings
     ]
 
-    bus = supabase_query("schedules", filters={"id": sid})[0]
+    booked_seats = [{"seat_number": b["seat_number"]} for b in bookings]
     # ✅ सभी जरूरी variables pass करें
     return render_template("seat.html",
                            schedule=bus,  # bus dict को schedule के नाम से
@@ -692,8 +692,8 @@ def book():
 
         data = request.get_json()
         print("DATA:", data)
-        fare = data.get("fare")
-        payment_mode = data.get("payment_mode")
+        fare = data.get("fare",0)
+        payment_mode = data.get("payment_mode","cash")
         if fare is None:
             return jsonify({"ok": False, "error": "fare missing"}), 400
 
