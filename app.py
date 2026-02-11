@@ -677,7 +677,7 @@ def seat_page(sid):
                            schedule=bus,  # bus dict को schedule के नाम से
                            booked_seats=booked_seats,
                            sid=sid,
-                           today=today
+                           travel_date=session.get("date")
                            )
 
 
