@@ -26,6 +26,7 @@
         Role: 
         <span style="color:green;font-weight:bold;">
      {{ session.get('role','guest').upper() }}
+      </span>
     </h5>
     <h5>Live Location</h5>
     
@@ -80,7 +81,8 @@ const BUS_LAT = 26.9124;  // Jaipur coords
 const BUS_LNG = 75.7873;
 const SID = {{ sid }};   // ✅ dynamic
 const TODAY = "{{ travel_date }}";
-const USER_ROLE = "{{ session.get('role', '') }}"; 
+const USER_ROLE = "{{ session.get('role','guest') }}"; 
+const socket = io();
 
 // ===== Leaflet Map Init =====
 const map = L.map('map').setView([BUS_LAT, BUS_LNG], 15);
@@ -105,6 +107,23 @@ function simulateBusMovement() {
     }, 5000);
 }
 simulateBusMovement();
+
+// ===== Seat update realtime =====
+
+    socket.on("seat_update", function(data) {
+        if(SID != data.sid || TODAY != data.date) return;
+
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn){
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerText = "X" + data.seat;
+        }
+    });
+     setInterval(()=>{
+    fetch("/heartbeat");
+    }, 30000);
 
 // ===== Seat Booking Function =====
 function bookSeat(seatId) {
@@ -143,23 +162,6 @@ function bookSeat(seatId) {
         btn.disabled = false;
     }
     
-// ===== Seat update realtime =====
-    socket.on("seat_update", function(data) {{
-        if(SID != data.sid || TODAY != data.date) return;
-
-        let btn = document.getElementById("seat-" + data.seat);
-        if(btn){{
-            btn.classList.remove("btn-success");
-            btn.classList.add("btn-danger");
-            btn.disabled = true;
-            btn.innerText = "X" + data.seat;
-        }}
-    }});
-     setInterval(()=>{{
-    fetch("/heartbeat");
-    }}, 30000);
-
-
     //  booking success
     fetch("https://my-bus-hps7.onrender.com/book", {
     method: "POST",
@@ -193,15 +195,6 @@ function bookSeat(seatId) {
     resetButton();
 });
 }
-
-
-
-// ===== Heartbeat =====
-setInterval(() => {
-    console.log("Heartbeat sent");
-}, 30000);
-
-
 
 
 const BOOKED = {{ booked_seats | tojson }};
