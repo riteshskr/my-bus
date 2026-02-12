@@ -1,3 +1,5 @@
+from asyncio import transports
+
 import eventlet
 eventlet.monkey_patch()
 from dotenv import load_dotenv
@@ -907,138 +909,83 @@ def driver_page(sid):
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Driver GPS - Bus {sid}</title>
-    <style>
-        body {{
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: #f0f0f0;
-        }}
-        .container {{
-            max-width: 600px;
-            margin: 0 auto;
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }}
-        h2 {{
-            color: #333;
-            text-align: center;
-        }}
-        .btn {{
-            padding: 15px 30px;
-            font-size: 18px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            margin: 10px;
-            width: 100%;
-        }}
-        .btn-start {{
-            background: #28a745;
-            color: white;
-        }}
-        .btn-stop {{
-            background: #dc3545;
-            color: white;
-        }}
-        #status {{
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 5px;
-            margin-top: 20px;
-            font-family: monospace;
-            min-height: 100px;
-        }}
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Driver GPS - Bus {sid}</title>
+<style>
+body {{ font-family: Arial; background:#f0f0f0; padding:20px; }}
+.container {{ max-width:600px;margin:auto;background:white;padding:30px;border-radius:12px; }}
+.btn {{ width:100%; padding:16px; font-size:18px; border:none; border-radius:8px; margin-top:10px; }}
+.start {{ background:#28a745;color:white; }}
+.stop {{ background:#dc3545;color:white; }}
+#status {{ margin-top:20px;padding:15px;background:#f8f9fa;border-radius:8px;font-family:monospace; }}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h2>🚗 Driver GPS - Bus {sid}</h2>
-        
-        <button id="startBtn" class="btn btn-start" onclick="startGPS()">
-            🚀 Start GPS Tracking
-        </button>
-        
-        <button id="stopBtn" class="btn btn-stop" onclick="stopGPS()" disabled>
-            🛑 Stop GPS Tracking
-        </button>
-        
-        <div id="status">
-            GPS is not active. Click "Start GPS Tracking" to begin.
-        </div>
-    </div>
-    
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-        const socket = io(window.location.origin);
-        let watchId = null;
-        
-        function startGPS() {{
-            if (!navigator.geolocation) {{
-                document.getElementById('status').innerHTML = 
-                    '❌ GPS not supported by this browser';
-                return;
-            }}
-            
-            document.getElementById('startBtn').disabled = true;
-            document.getElementById('stopBtn').disabled = false;
-            
-            watchId = navigator.geolocation.watchPosition(
-                (position) => {{
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const speed = position.coords.speed || 0;
-                    
-                    // Send to server
-                    socket.emit('driver_gps', {{
-                        sid: {sid},
-                        lat: lat,
-                        lng: lng,
-                        speed: speed * 3.6, // Convert m/s to km/h
-                        timestamp: new Date().toISOString()
-                    }});
-                    
-                    // Update status
-                    document.getElementById('status').innerHTML = 
-                        `✅ LIVE GPS<br>
-                         Latitude: ${{lat.toFixed(6)}}<br>
-                         Longitude: ${{lng.toFixed(6)}}<br>
-                         Speed: ${{(speed * 3.6).toFixed(1)}} km/h<br>
-                         Time: ${{new Date().toLocaleTimeString()}}`;
-                }},
-                (error) => {{
-                    document.getElementById('status').innerHTML = 
-                        `❌ GPS Error: ${{error.message}}`;
-                    document.getElementById('startBtn').disabled = false;
-                    document.getElementById('stopBtn').disabled = true;
-                }},
-                {{
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 0
-                }}
-            );
-        }}
-        
-        function stopGPS() {{
-            if (watchId !== null) {{
-                navigator.geolocation.clearWatch(watchId);
-                watchId = null;
-            }}
-            
-            document.getElementById('startBtn').disabled = false;
-            document.getElementById('stopBtn').disabled = true;
-            
-            document.getElementById('status').innerHTML = 
-                '🛑 GPS tracking stopped';
-        }}
-    </script>
+
+<div class="container">
+<h2>🚌 Driver GPS - Bus {sid}</h2>
+
+<button id="startBtn" class="btn start" onclick="startGPS()">Start GPS</button>
+<button id="stopBtn" class="btn stop" onclick="stopGPS()" disabled>Stop GPS</button>
+
+<div id="status">GPS not started</div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const socket = io("/", {{ transports:["websocket"] }});
+let watchId = null;
+
+function startGPS() {{
+ if(!navigator.geolocation) {{
+   statusBox("GPS not supported");
+   return;
+ }}
+
+ startBtn.disabled=true;
+ stopBtn.disabled=false;
+
+ watchId = navigator.geolocation.watchPosition(
+   pos => {{
+     const lat = pos.coords.latitude;
+     const lng = pos.coords.longitude;
+     const speed = pos.coords.speed || 0;
+
+     socket.emit("driver_gps", {{
+       sid:{sid},
+       lat:lat,
+       lng:lng,
+       speed:speed*3.6
+     }});
+
+     statusBox(
+       "LIVE GPS\\n" +
+       "Lat: "+lat.toFixed(6)+"\\n" +
+       "Lng: "+lng.toFixed(6)+"\\n" +
+       "Speed: "+(speed*3.6).toFixed(1)+" km/h"
+     );
+   }},
+   err => {{
+     statusBox("Error: "+err.message);
+     stopGPS();
+   }},
+   {{ enableHighAccuracy:true, timeout:10000, maximumAge:0 }}
+ );
+}}
+
+function stopGPS() {{
+ if(watchId) navigator.geolocation.clearWatch(watchId);
+ watchId=null;
+ startBtn.disabled=false;
+ stopBtn.disabled=true;
+ statusBox("GPS stopped");
+}}
+
+function statusBox(t) {{
+ document.getElementById("status").innerText=t;
+}}
+</script>
 </body>
 </html>
 """
