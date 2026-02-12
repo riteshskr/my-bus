@@ -1,3 +1,5 @@
+import eventlet
+eventlet.monkey_patch()
 from dotenv import load_dotenv
 import json
 import traceback
