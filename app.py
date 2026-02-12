@@ -438,7 +438,7 @@ LOGIN_HTML = """
           {% if is_counter %}
             <a href="/login">Admin Login</a>
           {% else %}
-            <a href="/counter">Counter Login</a>
+            <a href="/counter">Counter_Login</a>
           {% endif %}
         </div>
       </div>
@@ -502,7 +502,7 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
-@app.route("/counter login", methods=["GET", "POST"])
+@app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     if request.method == "POST":
         username = request.form.get("username")
