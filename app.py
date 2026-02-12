@@ -750,7 +750,7 @@ def book():
             "sid": schedule_id,
             "seat": seat_number,
             "date": travel_date
-        }, broadcast=True)
+        }, )
 
         return jsonify({"ok": True, "message": "Seat booked"})
 
