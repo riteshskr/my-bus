@@ -24,7 +24,8 @@
     <h4>Departure: 08:30</h4>
     <h5>
         Role: 
-        <span style="color:green;font-weight:bold;">COUNTER</span>
+        <span style="color:green;font-weight:bold;">
+     {{ session.get('role','guest').upper() }}
     </h5>
     <h5>Live Location</h5>
     

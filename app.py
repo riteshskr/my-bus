@@ -331,7 +331,7 @@ body{background:#f5f7fb;color:#222;}
   <div>
     {% if session.get('user_logged_in') %}
       <a href="/dashboard">Dashboard</a>
-      <a href="/logout">Logout ({{ session.get('role', 'user') }})</a>
+      <a href="/logout">Logout ({{ session.get('role', 'guest') }})</a>
     {% else %}
       <a href="/login">Admin Login</a>
       <a href="/counter">Counter Login</a>
