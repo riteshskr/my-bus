@@ -507,6 +507,17 @@ def login():
 def counter_login():
     error = ""
 
+    # Step 1: सभी counter users fetch करें, ताकि dropdown में दिखा सकें
+    try:
+        users_res = supabase.table("admins") \
+            .select("username") \
+            .eq("role", "counter") \
+            .execute()
+        usernames = [u["username"] for u in users_res.data] if users_res.data else []
+    except Exception as e:
+        print("Supabase Error fetching users:", e)
+        usernames = []
+
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
@@ -515,17 +526,13 @@ def counter_login():
             error = "Username और Password दोनों चाहिए"
         else:
             try:
-                # Supabase से counter user fetch
+                # Supabase से username + password + role check करें
                 res = supabase.table("admins") \
                     .select("*") \
                     .eq("username", username) \
                     .eq("password", password) \
                     .eq("role", "counter") \
                     .execute()
-
-                # Debug print
-                print("Supabase Response:", res)
-                print("Data:", res.data)
 
                 if res.data and len(res.data) > 0:
                     user = res.data[0]
@@ -535,21 +542,17 @@ def counter_login():
                     session["user_logged_in"] = True
                     session["user_id"] = user["id"]
                     session["username"] = user["username"]
-                    session["role"] = user["role"]  # हमेशा "counter"
-                    session["counter_no"] = user.get("counter_no", 0)
+                    session["role"] = user["role"]
 
-                    return redirect("/")  # Home या Counter Dashboard
+                    return redirect("/")  # Home / Counter Dashboard
                 else:
-                    error = "Invalid username या password"
+                    error = "Invalid password या username"
 
             except Exception as e:
                 print("Supabase Error:", e)
                 error = "Server Error, try again"
 
-    # GET method या error
-
-
-    # GET request या error आने पर login form show करें
+    # GET request या error पर login form show करें
     login_html = f"""
     <div class="row justify-content-center mt-5">
       <div class="col-md-4">
@@ -557,13 +560,13 @@ def counter_login():
           <div class="card-body p-4">
             <h3 class="text-center mb-4">Counter Login</h3>
 
-            <form method="POST" autocomplete="on">
-              <input type="text" style="display:none">
-              <input type="password" style="display:none">
-
+            <form method="POST" autocomplete="off">
               <div class="mb-3">
                 <label class="form-label">Username</label>
-                <input type="text" name="username" class="form-control" placeholder="Enter username" required>
+                <select name="username" class="form-control" required>
+                  <option value="">Select Username</option>
+                  {''.join([f'<option value="{u}">{u}</option>' for u in usernames])}
+                </select>
               </div>
 
               <div class="mb-3">
@@ -576,19 +579,13 @@ def counter_login():
 
             {f'<div class="alert alert-danger mt-3">{error}</div>' if error else ''}
 
-            <div class="text-center mt-3">
-              <a href="/login">Admin Login</a>
-            </div>
           </div>
         </div>
       </div>
     </div>
     """
 
-    return render_template_string(BASE_HTML,
-                                  content=render_template_string(LOGIN_HTML,
-                                                                 error=error,
-                                                                 is_counter=True))
+    return render_template_string(BASE_HTML, content=login_html)
 
 @app.route("/dashboard")
 def dashboard():
