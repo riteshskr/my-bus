@@ -703,9 +703,12 @@ def book():
 
         schedule_id = int(data["schedule_id"])
         seat_number = int(data["seat_number"])
-        travel_date = data.get("date")
+        travel_date = data.get("date") or session.get("date")
 
-        # 1️⃣ Already booked check
+        if not travel_date:
+            return jsonify({"ok": False, "error": "travel_date missing"}), 400
+
+        # Already booked check
         existing = supabase.table("seat_bookings") \
             .select("id") \
             .eq("schedule_id", schedule_id) \
@@ -716,7 +719,6 @@ def book():
         if existing.data:
             return jsonify({"ok": False, "error": "Seat already booked"})
 
-        # 2️⃣ Role hard validation
         role = session.get("role")
         if role not in ["counter", "admin", "guest"]:
             role = "guest"
@@ -745,18 +747,18 @@ def book():
         if not res.data:
             return jsonify({"ok": False, "error": "Insert failed"})
 
-        # 3️⃣ Broadcast realtime update
+        # 🔥 realtime broadcast
         socketio.emit("seat_update", {
             "sid": schedule_id,
             "seat": seat_number,
             "date": travel_date
-        }, )
+        })
 
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"ok": False, "error": "Server error"}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/live-bus/<int:sid>")
