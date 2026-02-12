@@ -502,36 +502,40 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
-@app.route("/counter", methods=["GET", "POST"])
+@app.route("/counter-login", methods=["GET", "POST"])
 def counter_login():
-    error = ""
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "").strip()
+        username = request.form.get("username")
+        password = request.form.get("password")
 
-        users = supabase_query("admins", filters={
-            "username": username,
-            "password": password,
-            "role": "counter"
-        })
+        # Supabase से user निकालो
+        res = supabase.table("admin") \
+            .select("*") \
+            .eq("username", username) \
+            .eq("password", password) \
+            .execute()
 
-        if users and len(users) > 0:
-            user = users[0]
-            session.clear()
-            session["user_logged_in"] = True
+        if res.data:
+            user = res.data[0]
             session["user_id"] = user["id"]
+            session["role"] = user["role"]   # counter / admin
             session["username"] = user["username"]
-            session["role"] = user["role"]
-            session["counter_no"] = user.get("counter_no", 0)
-            
-            return redirect("/dashboard")
-        else:
-            error = "Invalid counter credentials"
+            return redirect("/")
 
-    return render_template_string(
-        BASE_HTML,
-        content=render_template_string(LOGIN_HTML, error=error, is_counter=True)
-    )
+        return "Invalid username or password"
+
+    return """
+    <html>
+    <body style="font-family:Arial; text-align:center; margin-top:100px;">
+        <h2>Counter Login</h2>
+        <form method="post">
+            <input name="username" placeholder="Username"><br><br>
+            <input name="password" type="password" placeholder="Password"><br><br>
+            <button>Login</button>
+        </form>
+    </body>
+    </html>
+    """
 
 @app.route("/dashboard")
 def dashboard():
