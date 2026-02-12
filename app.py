@@ -509,7 +509,7 @@ def counter_login():
         password = request.form.get("password")
 
         # Supabase से user निकालो
-        res = supabase.table("admin") \
+        res = supabase.table("admins") \
             .select("*") \
             .eq("username", username) \
             .eq("password", password) \
