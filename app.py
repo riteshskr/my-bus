@@ -502,7 +502,7 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
-@app.route("/counter-login", methods=["GET", "POST"])
+@app.route("/counter login", methods=["GET", "POST"])
 def counter_login():
     if request.method == "POST":
         username = request.form.get("username")
