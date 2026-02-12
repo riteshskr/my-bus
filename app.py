@@ -699,49 +699,64 @@ def seat_page(sid):
 @app.route("/book", methods=["POST"])
 def book():
     try:
-        print("BOOK API HIT")
-
         data = request.get_json()
-        print("DATA:", data)
-        fare = data.get("fare",0)
-        payment_mode = data.get("payment_mode","cash")
-        if fare is None:
-            return jsonify({"ok": False, "error": "fare missing"}), 400
 
-        try:
-            fare = int(fare)
-        except:
-            return jsonify({"ok": False, "error": "invalid fare"}), 400
+        schedule_id = int(data["schedule_id"])
+        seat_number = int(data["seat_number"])
+        travel_date = data.get("date")
+
+        # 1️⃣ Already booked check
+        existing = supabase.table("seat_bookings") \
+            .select("id") \
+            .eq("schedule_id", schedule_id) \
+            .eq("seat_number", seat_number) \
+            .eq("travel_date", travel_date) \
+            .execute()
+
+        if existing.data:
+            return jsonify({"ok": False, "error": "Seat already booked"})
+
+        # 2️⃣ Role hard validation
+        role = session.get("role")
+        if role not in ["counter", "admin", "guest"]:
+            role = "guest"
+
+        fare = int(data.get("fare", 0))
+        payment_mode = data.get("payment_mode", "cash")
+
         booking_data = {
-            "schedule_id": int(data['schedule_id']),
-            "seat_number": int(data['seat_number']),
-            "passenger_name": data['passenger_name'],
-            "mobile": data['mobile'],
+            "schedule_id": schedule_id,
+            "seat_number": seat_number,
+            "passenger_name": data["passenger_name"],
+            "mobile": data["mobile"],
             "from_station": session.get("from", "NA"),
             "to_station": session.get("to", "NA"),
-            "travel_date": session.get("date"),
-            "fare": int(fare),
+            "travel_date": travel_date,
+            "fare": fare,
             "status": "confirmed",
             "payment_mode": payment_mode,
-            "booked_by_type": session.get("role", "user"),
+            "booked_by_type": role,
             "booked_by_id": session.get("user_id", 0),
             "counter_id": session.get("user_id", 0)
         }
 
         res = supabase.table("seat_bookings").insert(booking_data).execute()
 
-        print("SUPABASE RESPONSE:", res)
-        print("DATA:", res.data)
-
         if not res.data:
             return jsonify({"ok": False, "error": "Insert failed"})
+
+        # 3️⃣ Broadcast realtime update
+        socketio.emit("seat_update", {
+            "sid": schedule_id,
+            "seat": seat_number,
+            "date": travel_date
+        }, broadcast=True)
 
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
-        print("SERVER EXCEPTION:", e)
         traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": "Server error"}), 500
 
 
 @app.route("/live-bus/<int:sid>")
