@@ -504,38 +504,78 @@ def login():
 
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
+    error = ""
     if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "").strip()
 
-        # Supabase से user निकालो
-        res = supabase.table("admins") \
-            .select("*") \
-            .eq("username", username) \
-            .eq("password", password) \
-            .execute()
+        if not username or not password:
+            error = "Username और Password दोनों जरूरी हैं"
+        else:
+            try:
+                # Supabase से counter check करें
+                res = supabase.table("admins") \
+                    .select("*") \
+                    .eq("username", username) \
+                    .eq("password", password) \
+                    .eq("role", "counter") \
+                    .execute()
 
-        if res.data:
-            user = res.data[0]
-            session["user_id"] = user["id"]
-            session["role"] = user["role"]   # counter / admin
-            session["username"] = user["username"]
-            return redirect("/")
+                if res.data and len(res.data) > 0:
+                    user = res.data[0]
 
-        return "Invalid username or password"
+                    # Session set करें
+                    session.clear()
+                    session["user_logged_in"] = True
+                    session["user_id"] = user["id"]
+                    session["username"] = user["username"]
+                    session["role"] = user["role"]  # हमेशा "counter"
+                    session["counter_no"] = user.get("counter_no", 0)
 
-    return """
-    <html>
-    <body style="font-family:Arial; text-align:center; margin-top:100px;">
-        <h2>Counter Login</h2>
-        <form method="post">
-            <input name="username" placeholder="Username"><br><br>
-            <input name="password" type="password" placeholder="Password"><br><br>
-            <button>Login</button>
-        </form>
-    </body>
-    </html>
+                    return redirect("/counter_dashboard")
+                else:
+                    error = "Invalid username या password"
+
+            except Exception as e:
+                error = f"Error: {str(e)}"
+
+    # GET request या error आने पर login form show करें
+    login_html = f"""
+    <div class="row justify-content-center mt-5">
+      <div class="col-md-4">
+        <div class="card shadow-lg border-0 rounded-4">
+          <div class="card-body p-4">
+            <h3 class="text-center mb-4">Counter Login</h3>
+
+            <form method="POST" autocomplete="on">
+              <input type="text" style="display:none">
+              <input type="password" style="display:none">
+
+              <div class="mb-3">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-control" placeholder="Enter username" required>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+              </div>
+
+              <button class="btn btn-success w-100">Login</button>
+            </form>
+
+            {f'<div class="alert alert-danger mt-3">{error}</div>' if error else ''}
+
+            <div class="text-center mt-3">
+              <a href="/login">Admin Login</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     """
+
+    return render_template_string(BASE_HTML, content=login_html)
 
 @app.route("/dashboard")
 def dashboard():
