@@ -45,7 +45,7 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-12345")
 Compress(app)
 
 # ✅ SocketIO Configuration
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading",
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
                     logger=True, engineio_logger=True, ping_timeout=60)
 
 # ================= DB HELPER FUNCTIONS =================
