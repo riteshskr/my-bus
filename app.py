@@ -502,18 +502,20 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
+
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     error = ""
+
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
 
         if not username or not password:
-            error = "Username और Password दोनों जरूरी हैं"
+            error = "Username और Password दोनों चाहिए"
         else:
             try:
-                # Supabase से counter check करें
+                # Supabase से counter user fetch
                 res = supabase.table("admins") \
                     .select("*") \
                     .eq("username", username) \
@@ -521,10 +523,14 @@ def counter_login():
                     .eq("role", "counter") \
                     .execute()
 
+                # Debug print
+                print("Supabase Response:", res)
+                print("Data:", res.data)
+
                 if res.data and len(res.data) > 0:
                     user = res.data[0]
 
-                    # Session set करें
+                    # ✅ Session set करें
                     session.clear()
                     session["user_logged_in"] = True
                     session["user_id"] = user["id"]
@@ -532,12 +538,16 @@ def counter_login():
                     session["role"] = user["role"]  # हमेशा "counter"
                     session["counter_no"] = user.get("counter_no", 0)
 
-                    return redirect("/counter_dashboard")
+                    return redirect("/")  # Home या Counter Dashboard
                 else:
                     error = "Invalid username या password"
 
             except Exception as e:
-                error = f"Error: {str(e)}"
+                print("Supabase Error:", e)
+                error = "Server Error, try again"
+
+    # GET method या error
+
 
     # GET request या error आने पर login form show करें
     login_html = f"""
@@ -575,7 +585,10 @@ def counter_login():
     </div>
     """
 
-    return render_template_string(BASE_HTML, content=login_html)
+    return render_template_string(BASE_HTML,
+                                  content=render_template_string(LOGIN_HTML,
+                                                                 error=error,
+                                                                 is_counter=True))
 
 @app.route("/dashboard")
 def dashboard():
