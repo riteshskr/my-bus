@@ -143,6 +143,23 @@ function bookSeat(seatId) {
         btn.disabled = false;
     }
     
+// ===== Seat update realtime =====
+    socket.on("seat_update", function(data) {{
+        if(SID != data.sid || TODAY != data.date) return;
+
+        let btn = document.getElementById("seat-" + data.seat);
+        if(btn){{
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.disabled = true;
+            btn.innerText = "X" + data.seat;
+        }}
+    }});
+     setInterval(()=>{{
+    fetch("/heartbeat");
+    }}, 30000);
+
+
     //  booking success
     fetch("https://my-bus-hps7.onrender.com/book", {
     method: "POST",
