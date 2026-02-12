@@ -338,7 +338,7 @@ body{background:#f5f7fb;color:#222;}
       <a href="/logout">Logout ({{ session.get('role', 'guest') }})</a>
     {% else %}
       <a href="/login">Admin Login</a>
-      <a href="/counter">Counter_Login</a>
+      <a href="/counter_login">Counter Login</a>
     {% endif %}
     <a href="/">Home</a>
   </div>
@@ -438,7 +438,7 @@ LOGIN_HTML = """
           {% if is_counter %}
             <a href="/login">Admin Login</a>
           {% else %}
-            <a href="/counter">Counter_Login</a>
+            <a href="/counter_login">Counter Login</a>
           {% endif %}
         </div>
       </div>
