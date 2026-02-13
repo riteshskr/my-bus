@@ -725,7 +725,7 @@ def seatpage(sid):
 
         route_stations = supabase.table('routestations') \
             .select('*') \
-            .eq('routeid', bus['routeid']) \
+            .eq('route_id', bus['route_id']) \
             .execute().data
 
         def get_order(name):
