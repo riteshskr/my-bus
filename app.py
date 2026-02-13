@@ -711,162 +711,112 @@ def buses(rid):
     return render_template_string(BASE_HTML, content=content)
 
 
-@app.route('/seats/<int:sid>')
-def seatpage(sid):
+@app.route("/seats/<int:sid>")
+def seat_page(sid):
     try:
-        bus = supabase.table('schedules').select('*').eq('id', sid).execute().data[0]
+        print(f"🔍 SID={sid}")
 
-        from_station = session.get('from')
-        to_station = session.get('to')
-        today = session.get('date', date.today().isoformat())
+        # Bus check FIRST
+        bus_data = supabase_query("schedules", filters={"id": sid})
+        print(f"Bus data: {bus_data}")
 
-        if not from_station or not to_station:
-            return "Please search route first", 400
+        if not bus_data or len(bus_data) == 0:
+            return f"<h3>❌ Schedule ID {sid} नहीं मिला। Supabase → schedules table check करें।</h3>", 404
 
-        route_stations = supabase.table('routestations') \
-            .select('*') \
-            .eq('route_id', bus['route_id']) \
-            .execute().data
+        bus = bus_data[0]
 
-        def get_order(name):
-            for s in route_stations:
-                if s['stationname'] == name:
-                    return s['stationorder']
-            return None
+        # Safe departure_time
+        if bus.get("departure_time"):
+            try:
+                bus["departure_time"] = str(datetime.strptime(bus["departure_time"], "%H:%M:%S").time())
+            except:
+                bus["departure_time"] = bus["departure_time"] or "08:30"
 
-        from_order = get_order(from_station)
-        to_order = get_order(to_station)
+        today = session.get("date", "2026-02-11")
+        bookings = supabase_query("seat_bookings", filters={
+            "schedule_id": sid,
+            "travel_date": today,
+            "status": "confirmed"
+        }) or []
 
-        if from_order is None or to_order is None or from_order >= to_order:
-            return "Invalid route selection", 400
+        booked_seats = [{"seat_number": b["seat_number"]} for b in bookings]
 
-        bookings = supabase.table('seat_bookings') \
-            .select('*') \
-            .eq('scheduleid', sid) \
-            .eq('traveldate', today) \
-            .in_('status', ['confirmed','booked']) \
-            .execute().data
-
-        blocked = set()
-
-        for b in bookings:
-            b_from = get_order(b['fromstation'])
-            b_to = get_order(b['tostation'])
-
-            # सही overlap check
-            if not (b_to <= from_order or b_from >= to_order):
-                blocked.add(b['seatnumber'])
-
-        return render_template(
-            'seat.html',
-            schedule=bus,
-            bookedseats=list(blocked),
-            sid=sid,
-            traveldate=today,
-            from_station=from_station,
-            to_station=to_station
-        )
+        return render_template("seat.html",
+                               schedule=bus,
+                               booked_seats=booked_seats,
+                               sid=sid,
+                               travel_date=today)
 
     except Exception as e:
+        print(f"💥 ERROR /seats/{sid}: {e}")
         import traceback
         traceback.print_exc()
-        return str(e), 500
+        return f"<h3>Server Error: {str(e)}</h3>", 500
 
 
-@app.route('/book', methods=['POST'])
+@app.route("/book", methods=["POST"])
 def book():
     try:
         data = request.get_json()
-        scheduleid = int(data['scheduleid'])
-        seatnumber = int(data['seatnumber'])
-        traveldate = data.get('date') or session.get('date')
 
-        print(f"Booking: Seat {seatnumber}, Bus {scheduleid}, Date {traveldate}")
+        schedule_id = int(data["schedule_id"])
+        seat_number = int(data["seat_number"])
+        travel_date = data.get("date") or session.get("date")
 
-        # 1. Bus check
-        bus_response = supabase.table('schedules').select('*').eq('id', scheduleid).execute()
-        if not bus_response.data:
-            return jsonify({'ok': False, 'error': 'Bus नही मिला'}), 404
+        if not travel_date:
+            return jsonify({"ok": False, "error": "travel_date missing"}), 400
 
-        bus = bus_response.data[0]
-        from_station = session.get('from')
-        to_station = session.get('to')
-
-        if not from_station or not to_station:
-            return jsonify({'ok': False, 'error': 'From-To select करें'}), 400
-
-        # 2. Route stations
-        stations_response = supabase.table('route_stations').select('*').eq('routeid', bus['routeid']).execute()
-        route_stations = stations_response.data
-
-        # 3. Orders निकालें
-        from_order = next((s['stationorder'] for s in route_stations if s['stationname'] == from_station), None)
-        to_order = next((s['stationorder'] for s in route_stations if s['stationname'] == to_station), None)
-
-        if not from_order or not to_order or from_order >= to_order:
-            return jsonify({'ok': False, 'error': 'Invalid route'}), 400
-
-        # 4. Exact same seat check
-        existing_response = supabase.table('seat_bookings').select('*') \
-            .eq('scheduleid', scheduleid) \
-            .eq('seatnumber', seatnumber) \
-            .eq('traveldate', traveldate) \
+        # Already booked check
+        existing = supabase.table("seat_bookings") \
+            .select("id") \
+            .eq("schedule_id", schedule_id) \
+            .eq("seat_number", seat_number) \
+            .eq("travel_date", travel_date) \
             .execute()
 
-        if existing_response.data:
-            return jsonify({'ok': False, 'error': 'Seat पहले से booked'}), 400
+        if existing.data:
+            return jsonify({"ok": False, "error": "Seat already booked"})
 
-        # 5. Overlap check
-        bookings_response = supabase.table('seat_bookings').select('*') \
-            .eq('scheduleid', scheduleid) \
-            .eq('traveldate', traveldate) \
-            .in_('status', ['confirmed', 'booked']) \
-            .execute()
+        role = session.get("role")
+        if role not in ["counter", "admin", "guest"]:
+            role = "guest"
 
-        all_bookings = bookings_response.data
-        for booking in all_bookings:
-            if booking['seatnumber'] == seatnumber:
-                b_from_station = booking.get('fromstation', '')
-                b_to_station = booking.get('tostation', '')
+        fare = int(data.get("fare", 0))
+        payment_mode = data.get("payment_mode", "cash")
 
-                b_from_order = next((s['stationorder'] for s in route_stations if s['stationname'] == b_from_station),
-                                    0)
-                b_to_order = next((s['stationorder'] for s in route_stations if s['stationname'] == b_to_station), 999)
-
-                # Overlap detect
-                if not (b_to_order <= from_order or b_from_order >= to_order):
-                    return jsonify({'ok': False, 'error': 'Seat इस route पर unavailable'}), 400
-
-        # 6. Safe booking create
-        bookingdata = {
-            'scheduleid': scheduleid,
-            'seatnumber': seatnumber,
-            'passengername': data['passengername'],
-            'mobile': data['mobile'],
-            'fromstation': from_station,
-            'tostation': to_station,
-            'traveldate': traveldate,
-            'fare': int(data.get('fare', 0)),
-            'status': 'confirmed',
-            'paymentmode': data.get('paymentmode', 'cash'),
-            'bookedbytype': session.get('role', 'guest'),
-            'bookedbyid': session.get('userid', 0),
-            'counterid': session.get('user_id', 0)
+        booking_data = {
+            "schedule_id": schedule_id,
+            "seat_number": seat_number,
+            "passenger_name": data["passenger_name"],
+            "mobile": data["mobile"],
+            "from_station": session.get("from", "NA"),
+            "to_station": session.get("to", "NA"),
+            "travel_date": travel_date,
+            "fare": fare,
+            "status": "confirmed",
+            "payment_mode": payment_mode,
+            "booked_by_type": role,
+            "booked_by_id": session.get("user_id", 0),
+            "counter_id": session.get("user_id", 0)
         }
 
-        insert_response = supabase.table('seat_bookings').insert(bookingdata).execute()
+        res = supabase.table("seat_bookings").insert(booking_data).execute()
 
-        # 7. Real-time update
-        socketio.emit('seatupdate', {'sid': scheduleid, 'seat': seatnumber, 'date': traveldate})
+        if not res.data:
+            return jsonify({"ok": False, "error": "Insert failed"})
 
-        print(f"✅ SUCCESS: Seat {seatnumber} booked!")
-        return jsonify({'ok': True, 'message': 'Ticket booked successfully!'})
+        # 🔥 realtime broadcast
+        socketio.emit("seat_update", {
+            "sid": schedule_id,
+            "seat": seat_number,
+            "date": travel_date
+        })
+
+        return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
-        print(f"❌ BOOKING ERROR: {e}")
-        import traceback
         traceback.print_exc()
-        return jsonify({'ok': False, 'error': str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/live-bus/<int:sid>")
