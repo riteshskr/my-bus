@@ -1,109 +1,240 @@
-HOME_HTML = """
+BASE_HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="hi">
 <head>
-<title>MyBus AI</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Bus AI - Smart Bus Booking</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
 <style>
-*{font-family:Poppins;}
-body{margin:0;background:#f4f6fb;}
-.nav{
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Poppins',sans-serif;}
+body{background:#f5f7fb;color:#222;}
+
+/* Navbar */
+.navbar{
+  position:fixed;
+  top:0;left:0;width:100%;
   background:white;
-  padding:15px 8%;
   display:flex;
   justify-content:space-between;
+  align-items:center;
+  padding:15px 8%;
   box-shadow:0 5px 20px rgba(0,0,0,.1);
+  z-index:1000;
 }
-.logo{font-size:22px;font-weight:700;color:#ff3d00;}
+.logo{font-size:1.5rem;font-weight:700;color:#ff512f;}
+.navbar a{margin-left:20px;text-decoration:none;color:#333;font-weight:500;}
 
+/* Hero */
 .hero{
-  padding:50px 8%;
-  background:linear-gradient(135deg,#ff512f,#dd2476);
+  height:100vh;
+  background:
+    linear-gradient(rgba(0,0,0,.6),rgba(0,0,0,.8)),
+    url("https://images.unsplash.com/photo-1544620347-c4fd4a3d5957");
+  background-size:cover;
+  background-position:center;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
   color:white;
+  padding-top:70px;
 }
 
-.search{
+/* Search Box */
+.search-box{
   background:white;
-  margin-top:-40px;
-  padding:25px;
-  border-radius:18px;
-  box-shadow:0 20px 40px rgba(0,0,0,.3);
-  display:grid;
-  grid-template-columns:1fr 1fr 1fr auto;
+  padding:30px;
+  border-radius:20px;
+  display:flex;
   gap:15px;
+  box-shadow:0 20px 40px rgba(0,0,0,.3);
+  max-width:800px;
+  margin:0 auto;
 }
-
-.search input{
-  padding:14px;
+.search-box input, .search-box select{
+  padding:15px;
+  border:2px solid #ddd;
   border-radius:10px;
-  border:none;
-  background:#f1f3f7;
+  outline:none;
+  flex:1;
+  min-width:180px;
 }
-
-.search button{
-  padding:14px 30px;
+.search-box button{
+  padding:15px 40px;
   border:none;
   border-radius:10px;
-  background:#ff3d00;
+  background:linear-gradient(45deg,#ff512f,#dd2476);
   color:white;
   font-weight:600;
+  cursor:pointer;
+  transition:transform 0.3s;
 }
+.search-box button:hover{transform:scale(1.05);}
 
-.section{
-  padding:50px 8%;
-}
-
+/* Cards */
 .card{
   background:white;
-  padding:20px;
   border-radius:15px;
   box-shadow:0 10px 25px rgba(0,0,0,.1);
+  padding:20px;
   margin-bottom:20px;
+  transition:transform 0.3s;
 }
+.card:hover{transform:translateY(-10px);}
+
+/* Mobile Fixes */
+@media(max-width:768px){
+  .navbar{flex-direction:column;gap:10px;padding:10px 20px;}
+  .search-box{flex-direction:column;width:90%;padding:20px;}
+  .hero h1{font-size:1.6rem;}
+}
+
+/* Status Colors */
+.status-live{color:green;}
+.status-offline{color:gray;}
+.status-booked{color:red;}
+.status-available{color:green;}
+
+/* Seat Grid */
+.seat-grid{
+  display:grid;
+  grid-template-columns:repeat(10,1fr);
+  gap:10px;
+  margin:20px 0;
+}
+.seat{
+  padding:12px;
+  border:none;
+  border-radius:8px;
+  text-align:center;
+  cursor:pointer;
+  font-weight:bold;
+  transition:all 0.3s;
+}
+.seat-available{background:#28a745;color:white;}
+.seat-booked{background:#dc3545;color:white;cursor:not-allowed;}
+.seat-selected{background:#007bff;color:white;}
 </style>
 </head>
-
 <body>
 
-<div class="nav">
-  <div class="logo">🚌 MyBus AI</div>
-  <div>Welcome {{session.username}}</div>
-</div>
-
-<div class="hero">
-  <h1>Book Smart. Travel Smarter.</h1>
-  <p>Live seats • AI boarding • Real tracking</p>
-</div>
-
-<div class="section">
-
-  <div class="search">
-    <input id="from" placeholder="From">
-    <input id="to" placeholder="To">
-    <input type="date" id="date">
-    <button onclick="search()">Search</button>
+<div class="navbar">
+  <div class="logo">🚌 My Bus AI</div>
+  <div>
+    {% if session.get('user_logged_in') %}
+      <a href="/dashboard">Dashboard</a>
+      <a href="/logout">Logout ({{ session.get('role', 'guest') }})</a>
+    {% else %}
+      <a href="/login">Admin Login</a>
+      <a href="/counter_login">Counter Login</a>
+    {% endif %}
+    <a href="/">Home</a>
   </div>
-
 </div>
 
-<div class="section">
-  <h2>Why MyBus?</h2>
-  <div class="card">🚀 Face Recognition Boarding</div>
-  <div class="card">📡 Real-time GPS Tracking</div>
-  <div class="card">💺 Live Seat Selection</div>
+{% if not content %}
+<section class="hero">
+  <div style="width:100%;padding:20px;">
+    <h1 style="font-size:3rem;margin-bottom:20px;">भारत का स्मार्ट बस प्लेटफॉर्म</h1>
+    <p style="font-size:1.2rem;margin-bottom:30px;">बुक करें | ट्रैक करें | फेस बोर्डिंग | लाइव सीट्स</p>
+
+    <form class="search-box" action="/search" method="POST">
+      <select name="from" class="form-select" required>
+        <option value="" selected disabled>From (स्टेशन)</option>
+        {% for station in stations %}
+        <option value="{{ station }}">{{ station }}</option>
+        {% endfor %}
+      </select>
+      
+      <select name="to" class="form-select" required>
+        <option value="" selected disabled>To (स्टेशन)</option>
+        {% for station in stations %}
+        <option value="{{ station }}">{{ station }}</option>
+        {% endfor %}
+      </select>
+      
+      <input type="date" name="date" class="form-control" value="{{ today }}" required>
+      <button type="submit">Search Buses 🔍</button>
+    </form>
+  </div>
+</section>
+
+<div class="container mt-5">
+  <h2 class="text-center mb-4">Popular Routes</h2>
+  <div class="row">
+    {% for route in routes %}
+    <div class="col-md-4 mb-3">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">{{ route.route_name }}</h5>
+          <p class="card-text">{{ route.distance_km }} km</p>
+          <a href="/buses/{{ route.id }}" class="btn btn-primary">View Buses</a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
+{% endif %}
 
-<script>
-function search(){
-  let f=from.value;
-  let t=to.value;
-  let d=date.value;
+{% if content %}
+<div style="padding:100px 10%;">
+    {{ content|safe }}
+</div>
+{% endif %}
 
-  if(!f||!t||!d){
-    alert("Fill all fields");
-    return;
-  }
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+"""
 
-  location.href="/search?f="+f+"&t="+t+"&d="+d;
+LOGIN_HTML = """
+<div class="row justify-content-center mt-5">
+  <div class="col-md-4">
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-4">
+        <h3 class="text-center mb-4">
+          {% if is_counter %}Counter Login{% else %}Admin Login{% endif %}
+        </h3>
+
+        <form method="POST" autocomplete="on">
+          <input type="text" style="display:none">
+          <input type="password" style="display:none">
+
+          <div class="mb-3">
+            <label class="form-label">Username</label>
+            <input type="text" name="username" class="form-control" placeholder="Enter username" required>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Password</label>
+            <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+          </div>
+
+          {% if is_counter %}
+          <input type="hidden" name="counter_login" value="true">
+          {% endif %}
+
+          <button class="btn btn-success w-100">Login</button>
+        </form>
+
+        {% if error %}
+          <div class="alert alert-danger mt-3 text-center">{{ error }}</div>
+        {% endif %}
+
+        <div class="text-center mt-3">
+          {% if is_counter %}
+            <a href="/login">Admin Login</a>
+          {% else %}
+            <a href="/counter_login">Counter Login</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
