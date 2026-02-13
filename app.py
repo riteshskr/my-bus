@@ -723,7 +723,7 @@ def seatpage(sid):
             return f"<h3>Schedule ID {sid} not found</h3>", 404
 
         bus = busdata[0]
-        print(f"Bus: {bus['busname']}")
+        #print(f"Bus: {bus['busname']}")
 
         # Session data
         from_station = session.get('from')
