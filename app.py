@@ -714,82 +714,63 @@ def buses(rid):
 @app.route('/seats/<int:sid>')
 def seatpage(sid):
     try:
-        print(f"SID: {sid}")
+        bus = supabase.table('schedules').select('*').eq('id', sid).execute().data[0]
 
-        # Bus details - DIRECT SUPABASE
-        bus_response = supabase.table('schedules').select('*').eq('id', sid).execute()
-        busdata = bus_response.data
-        if not busdata:
-            return f"<h3>Schedule ID {sid} not found</h3>", 404
-
-        bus = busdata[0]
-        #print(f"Bus: {bus['busname']}")
-
-        # Session data
         from_station = session.get('from')
         to_station = session.get('to')
         today = session.get('date', date.today().isoformat())
 
         if not from_station or not to_station:
-            return "<h3>Stations not selected. Please search first.</h3>", 400
+            return "Please search route first", 400
 
-        # Route stations with order
-        stations_response = supabase.table('routestations').select('*').eq('routeid', bus['routeid']).execute()
-        route_stations = stations_response.data
+        route_stations = supabase.table('routestations') \
+            .select('*') \
+            .eq('routeid', bus['routeid']) \
+            .execute().data
 
-        if not route_stations:
-            return "<h3>Route stations not found</h3>", 404
+        def get_order(name):
+            for s in route_stations:
+                if s['stationname'] == name:
+                    return s['stationorder']
+            return None
 
-        # Find orders
-        from_order = next((s['stationorder'] for s in route_stations if s['stationname'] == from_station), None)
-        to_order = next((s['stationorder'] for s in route_stations if s['stationname'] == to_station), None)
+        from_order = get_order(from_station)
+        to_order = get_order(to_station)
 
-        if not from_order or not to_order or from_order >= to_order:
-            return f"<h3>Invalid: {from_station}({from_order}) → {to_station}({to_order})</h3>", 400
+        if from_order is None or to_order is None or from_order >= to_order:
+            return "Invalid route selection", 400
 
-        print(f"Segment: {from_station}({from_order}) → {to_station}({to_order})")
-
-        # All bookings for this bus/date
-        bookings_response = supabase.table('seatbookings').select('*') \
+        bookings = supabase.table('seatbookings') \
+            .select('*') \
             .eq('scheduleid', sid) \
             .eq('traveldate', today) \
-            .in_('status', ['confirmed', 'booked']).execute()
+            .in_('status', ['confirmed','booked']) \
+            .execute().data
 
-        all_bookings = bookings_response.data
+        blocked = set()
 
-        bookedseats = set()
+        for b in bookings:
+            b_from = get_order(b['fromstation'])
+            b_to = get_order(b['tostation'])
 
-        # Check overlap for each booking
-        for booking in all_bookings:
-            b_from_station = booking.get('fromstation', '')
-            b_to_station = booking.get('tostation', '')
+            # सही overlap check
+            if not (b_to <= from_order or b_from >= to_order):
+                blocked.add(b['seatnumber'])
 
-            b_from_order = next((s['stationorder'] for s in route_stations if s['stationname'] == b_from_station), 0)
-            b_to_order = next((s['stationorder'] for s in route_stations if s['stationname'] == b_to_station), 999)
-
-            # Overlap condition
-            if b_from_order <= to_order and b_to_order >= from_order:
-                bookedseats.add(booking['seatnumber'])
-                print(f"Blocked seat {booking['seatnumber']}: {b_from_station}→{b_to_station}")
-
-        print(f"Booked seats: {sorted(bookedseats)}")
-
-        # Return template
-        return render_template('seat.html',
-                               schedule=bus,
-                               bookedseats=sorted(list(bookedseats)),
-                               sid=sid,
-                               traveldate=today,
-                               from_station=from_station,
-                               to_station=to_station,
-                               from_order=from_order,
-                               to_order=to_order)
+        return render_template(
+            'seat.html',
+            schedule=bus,
+            bookedseats=list(blocked),
+            sid=sid,
+            traveldate=today,
+            from_station=from_station,
+            to_station=to_station
+        )
 
     except Exception as e:
-        print(f"ERROR seats/{sid}: {e}")
         import traceback
         traceback.print_exc()
-        return f"<h3>Server Error: {str(e)}</h3>", 500
+        return str(e), 500
 
 
 @app.route('/book', methods=['POST'])
