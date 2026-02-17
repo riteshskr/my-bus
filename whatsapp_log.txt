@@ -1,0 +1,4 @@
+2026-02-13 18:55:36 | 9782180931 | Reetesh Mathur | Booking: 33 | booking_confirmation | FAILED | Error: Send failed
+2026-02-13 19:07:54 | 9782180931 | reetesh mathur | Booking: 34 | booking_confirmation | FAILED | Error: Send failed
+2026-02-13 20:10:18 | 9782180931 | 9782180931 | Booking: 35 | booking_confirmation | SENT
+2026-02-13 20:11:40 | 9875262306 | reetesh mathur | Booking: 36 | booking_confirmation | SENT

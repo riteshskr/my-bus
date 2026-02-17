@@ -1,9 +1,7 @@
 from asyncio import transports
-
-import eventlet
-eventlet.monkey_patch()
 from dotenv import load_dotenv
 import json
+import bcrypt
 import traceback
 load_dotenv()
 import setuptools
@@ -16,6 +14,8 @@ from flask_compress import Compress
 from supabase import create_client, Client
 import atexit
 import razorpay
+from whatsapp_notifier import get_whatsapp_notifier
+notifier = get_whatsapp_notifier(headless=False)
 
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -47,8 +47,7 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-12345")
 Compress(app)
 
 # ✅ SocketIO Configuration
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet",
-                    logger=True, engineio_logger=True, ping_timeout=60)
+socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=60)
 
 # ================= DB HELPER FUNCTIONS =================
 def supabase_query(table, operation="select", data=None, filters=None):
@@ -89,6 +88,7 @@ def supabase_query(table, operation="select", data=None, filters=None):
         print(f"Supabase query error: {e}")
         return None
 
+
 # ================= DECORATORS =================
 def admin_required(f):
     @wraps(f)
@@ -98,7 +98,9 @@ def admin_required(f):
         if session.get("role") != "admin":
             return "Access Denied", 403
         return f(*a, **k)
+
     return wrap
+
 
 def counter_required(f):
     @wraps(f)
@@ -108,7 +110,9 @@ def counter_required(f):
         if session.get("role") not in ["admin", "counter"]:
             return "Access Denied", 403
         return f(*a, **k)
+
     return wrap
+
 
 # ================= DB INIT =================
 def init_db():
@@ -119,9 +123,10 @@ def init_db():
 
         if not admin_check or len(admin_check) == 0:
             # डिफ़ॉल्ट एडमिन बनाएँ
+            hashed = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
             supabase_query("admins", "insert", {
                 "username": "admin",
-                "password": "admin123",
+                "password": hashed,
                 "role": "admin",
                 "counter_no": 1
             })
@@ -174,10 +179,12 @@ def init_db():
         import traceback
         traceback.print_exc()
 
+
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
     print(f"✅ Client connected: {request.sid}")
+
 
 @socketio.on("driver_gps")
 def gps(data):
@@ -191,8 +198,8 @@ def gps(data):
     try:
         # Supabase में update करें
         supabase_query("schedules", "update",
-                      {"current_lat": lat, "current_lng": lng},
-                      {"id": sid})
+                       {"current_lat": lat, "current_lng": lng},
+                       {"id": sid})
     except Exception as e:
         print(f"GPS update error: {e}")
 
@@ -204,6 +211,7 @@ def gps(data):
         "speed": speed,
         "timestamp": datetime.now().isoformat()
     })
+
 
 # ================= HTML TEMPLATES =================
 BASE_HTML = """
@@ -357,14 +365,14 @@ body{background:#f5f7fb;color:#222;}
         <option value="{{ station }}">{{ station }}</option>
         {% endfor %}
       </select>
-      
+
       <select name="to" class="form-select" required>
         <option value="" selected disabled>To (स्टेशन)</option>
         {% for station in stations %}
         <option value="{{ station }}">{{ station }}</option>
         {% endfor %}
       </select>
-      
+
       <input type="date" name="date" class="form-control" value="{{ today }}" required>
       <button type="submit">Search Buses 🔍</button>
     </form>
@@ -447,6 +455,7 @@ LOGIN_HTML = """
 </div>
 """
 
+
 # ================= ROUTES =================
 @app.route("/")
 def home():
@@ -471,6 +480,7 @@ def home():
         content=None
     )
 
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -481,33 +491,33 @@ def login():
         # Supabase से user fetch करें
         users = supabase_query("admins", filters={
             "username": username,
-            "password": password
+            "role": "admin"
+
         })
 
         if users and len(users) > 0:
             user = users[0]
-            session.clear()
-            session["user_logged_in"] = True
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["role"] = user["role"]
-            session["counter_no"] = user.get("counter_no", 0)
-
-            return redirect("/dashboard")
-        else:
-            error = "Invalid username or password"
+            db_pass = user["password"]
+            if bcrypt.checkpw(password.encode(), db_pass.encode()):
+                session.clear()
+                session["user_logged_in"] = True
+                session["user_id"] = user["id"]
+                session["username"] = user["username"]
+                session["role"] = user["role"]
+                session["counter_no"] = user.get("counter_no", 0)
+                return redirect("/dashboard")
+            else:
+                error = "Invalid username or password"
 
     return render_template_string(
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
-
-
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     error = ""
 
-    # Step 1: सभी counter users fetch करें, ताकि dropdown में दिखा सकें
+    # Step 1: सभी counter users fetch करें (dropdown के लिए)
     try:
         users_res = supabase.table("admins") \
             .select("username") \
@@ -526,33 +536,37 @@ def counter_login():
             error = "Username और Password दोनों चाहिए"
         else:
             try:
-                # Supabase से username + password + role check करें
+                # 🔐 सिर्फ username + role से user निकालो
                 res = supabase.table("admins") \
                     .select("*") \
                     .eq("username", username) \
-                    .eq("password", password) \
                     .eq("role", "counter") \
                     .execute()
 
                 if res.data and len(res.data) > 0:
                     user = res.data[0]
+                    db_pass = user["password"]   # hashed password from DB
 
-                    # ✅ Session set करें
-                    session.clear()
-                    session["user_logged_in"] = True
-                    session["user_id"] = user["id"]
-                    session["username"] = user["username"]
-                    session["role"] = user["role"]
+                    # 🔑 यहीं bcrypt check होगा
+                    if bcrypt.checkpw(password.encode(), db_pass.encode()):
+                        session.clear()
+                        session["user_logged_in"] = True
+                        session["user_id"] = user["id"]
+                        session["username"] = user["username"]
+                        session["role"] = user["role"]
+                        session["counter_no"] = user.get("counter_no", 0)
 
-                    return redirect("/")  # Home / Counter Dashboard
+                        return redirect("/")  # Counter Dashboard
+                    else:
+                        error = "Invalid password"
                 else:
-                    error = "Invalid password या username"
+                    error = "User not found"
 
             except Exception as e:
                 print("Supabase Error:", e)
                 error = "Server Error, try again"
 
-    # GET request या error पर login form show करें
+    # ---------- HTML ----------
     login_html = f"""
     <div class="row justify-content-center mt-5">
       <div class="col-md-4">
@@ -571,14 +585,15 @@ def counter_login():
 
               <div class="mb-3">
                 <label class="form-label">Password</label>
-                <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+                <input type="password" name="password"
+                       class="form-control"
+                       placeholder="Enter password" required>
               </div>
 
               <button class="btn btn-success w-100">Login</button>
             </form>
 
             {f'<div class="alert alert-danger mt-3">{error}</div>' if error else ''}
-
           </div>
         </div>
       </div>
@@ -586,6 +601,7 @@ def counter_login():
     """
 
     return render_template_string(BASE_HTML, content=login_html)
+
 
 @app.route("/dashboard")
 def dashboard():
@@ -683,6 +699,7 @@ def render_recent_bookings(bookings):
     """
     return html
 
+
 @app.route("/buses/<int:rid>")
 def buses(rid):
     route = supabase_query("routes", filters={"id": rid})[0]
@@ -714,45 +731,75 @@ def buses(rid):
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
     try:
-        print(f"🔍 SID={sid}")
-
-        # Bus check FIRST
         bus_data = supabase_query("schedules", filters={"id": sid})
-        print(f"Bus data: {bus_data}")
-
-        if not bus_data or len(bus_data) == 0:
-            return f"<h3>❌ Schedule ID {sid} नहीं मिला। Supabase → schedules table check करें।</h3>", 404
+        if not bus_data:
+            return "Schedule not found", 404
 
         bus = bus_data[0]
+        route_id = bus["route_id"]
 
-        # Safe departure_time
-        if bus.get("departure_time"):
-            try:
-                bus["departure_time"] = str(datetime.strptime(bus["departure_time"], "%H:%M:%S").time())
-            except:
-                bus["departure_time"] = bus["departure_time"] or "08:30"
+        today = session.get("date")
 
-        today = session.get("date", "2026-02-11")
+        route_rows = supabase_query("route_stations", filters={
+            "route_id": route_id
+        }) or []
+
+        route_rows = sorted(route_rows, key=lambda x: x["station_order"])
+        route = [r["station_name"] for r in route_rows]
+
         bookings = supabase_query("seat_bookings", filters={
             "schedule_id": sid,
             "travel_date": today,
             "status": "confirmed"
         }) or []
 
-        booked_seats = [{"seat_number": b["seat_number"]} for b in bookings]
+        from_station = session.get("from_station")
+        to_station = session.get("to_station")
 
-        return render_template("seat.html",
-                               schedule=bus,
-                               booked_seats=booked_seats,
-                               sid=sid,
-                               travel_date=today)
+        if not from_station or not to_station:
+            return "<h3>पहले route select करो</h3>"
+
+        def is_overlap(b):
+            nf = route.index(from_station)
+            nt = route.index(to_station)
+            ef = route.index(b["from_station"])
+            et = route.index(b["to_station"])
+            return nf < et and nt > ef
+
+        blocked = []
+        for b in bookings:
+            if is_overlap(b):
+                blocked.append({"seat_number": b["seat_number"]})
+
+        return render_template(
+            "seat.html",
+            schedule=bus,
+            booked_seats=blocked,
+            sid=sid,
+            travel_date=today,
+            bus_name=bus['bus_name'],
+            departure_time=bus['departure_time']
+        )
 
     except Exception as e:
-        print(f"💥 ERROR /seats/{sid}: {e}")
         import traceback
         traceback.print_exc()
-        return f"<h3>Server Error: {str(e)}</h3>", 500
+        return f"Server Error: {e}", 500
 
+@app.route("/api/bus/<int:sid>")
+def bus_from_table(sid):
+    data = supabase_query("schedules", filters={"id": sid})
+
+    if not data or len(data) == 0:
+        return jsonify({"error": "Bus not found"}), 404
+
+    row = data[0]
+
+    return jsonify({
+        "lat": row.get("current_lat", 0),
+        "lng": row.get("current_lng", 0),
+        "speed": row.get("speed", 0)
+    })
 
 @app.route("/book", methods=["POST"])
 def book():
@@ -789,8 +836,8 @@ def book():
             "seat_number": seat_number,
             "passenger_name": data["passenger_name"],
             "mobile": data["mobile"],
-            "from_station": session.get("from", "NA"),
-            "to_station": session.get("to", "NA"),
+            "from_station": session.get("from_station", "NA"),
+            "to_station": session.get("to_station", "NA"),
             "travel_date": travel_date,
             "fare": fare,
             "status": "confirmed",
@@ -811,7 +858,8 @@ def book():
             "seat": seat_number,
             "date": travel_date
         })
-
+        booking_id = res.data[0]["id"]
+        notifier.send_booking_confirmation_by_id(booking_id)
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
@@ -884,22 +932,22 @@ def live_bus(sid):
             <p id="speed"><strong>Speed:</strong> 0 km/h</p>
             <a href="/seats/{sid}" class="btn btn-primary">Book Seat</a>
         </div>
-        
+
         <div id="map"></div>
-        
+
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
         <script>
             const map = L.map('map').setView([{bus.get('current_lat', 27.2)}, {bus.get('current_lng', 75.2)}], 13);
-            
+
             L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
                 attribution: '© OpenStreetMap contributors'
             }}).addTo(map);
-            
+
             // Route stations
             const stations = {stations_json};
             const routePoints = [];
-            
+
             stations.forEach(station => {{
                 const lat = parseFloat(station.lat || 27.2);
                 const lng = parseFloat(station.lng || 75.2);
@@ -910,7 +958,7 @@ def live_bus(sid):
                         .bindPopup(`<b>📍 ${{station.station_name}}</b>`);
                 }}
             }});
-            
+
             // Route line
             if(routePoints.length > 1) {{
                 L.polyline(routePoints, {{
@@ -919,30 +967,30 @@ def live_bus(sid):
                     opacity: 0.7
                 }}).addTo(map);
             }}
-            
+
             // Bus marker
             const busIcon = L.divIcon({{
                 html: '<div class="bus-marker"></div>',
                 className: 'bus-icon',
                 iconSize: [26, 26]
             }});
-            
+
             let busMarker = L.marker([
                 {bus.get('current_lat', 27.2)}, 
                 {bus.get('current_lng', 75.2)}
             ], {{icon: busIcon}}).addTo(map);
-            
+
             // Socket connection
             const socket = io(window.location.origin);
-            
+
             socket.on('bus_location', data => {{
                 if(data.sid == {sid}) {{
                     const lat = parseFloat(data.lat);
                     const lng = parseFloat(data.lng);
-                    
+
                     busMarker.setLatLng([lat, lng]);
                     map.panTo([lat, lng]);
-                    
+
                     // Update info panel
                     document.getElementById('coordinates').innerHTML = 
                         `<strong>Coordinates:</strong> ${{lat.toFixed(6)}}, ${{lng.toFixed(6)}}`;
@@ -956,6 +1004,7 @@ def live_bus(sid):
     """
 
     return content
+
 
 @app.route("/driver/<int:sid>")
 def driver_page(sid):
@@ -1044,6 +1093,7 @@ function statusBox(t) {{
 </html>
 """
 
+
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
 def create_counter():
@@ -1064,9 +1114,10 @@ def create_counter():
                 if existing and len(existing) > 0:
                     error = "Username already exists"
                 else:
+                    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
                     supabase_query("admins", "insert", {
                         "username": username,
-                        "password": password,
+                        "password": hashed,
                         "role": "counter",
                         "counter_no": int(counter_no)
                     })
@@ -1098,10 +1149,10 @@ def create_counter():
                             </div>
                             <button type="submit" class="btn btn-success w-100">Create Counter</button>
                         </form>
-                        
+
                         {f'<div class="alert alert-success mt-3">{success}</div>' if success else ''}
                         {f'<div class="alert alert-danger mt-3">{error}</div>' if error else ''}
-                        
+
                         <div class="mt-3">
                             <h5>Existing Counters:</h5>
                             {render_counters_list()}
@@ -1114,6 +1165,7 @@ def create_counter():
     """
 
     return render_template_string(BASE_HTML, content=content)
+
 
 def render_counters_list():
     counters = supabase_query("admins", filters={"role": "counter"})
@@ -1138,6 +1190,7 @@ def render_counters_list():
     html += '</div>'
     return html
 
+
 @app.route("/search", methods=["POST"])
 def search():
     from_station = request.form.get("from", "").strip()
@@ -1148,8 +1201,8 @@ def search():
         return "Please select both From and To stations", 400
 
     # Store in session
-    session["from"] = from_station
-    session["to"] = to_station
+    session["from_station"] = from_station
+    session["to_station"] = to_station
     session["date"] = travel_date
 
     # Find routes containing both stations
@@ -1216,10 +1269,12 @@ def search():
     # Redirect to first valid route
     return redirect(f"/buses/{valid_routes[0]}")
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect("/")
+
 
 # ================= ADMIN ROUTES =================
 @app.route("/routes")
@@ -1231,7 +1286,7 @@ def manage_routes():
     <div class="container">
         <h3>🛣️ Manage Routes</h3>
         <a href="/dashboard" class="btn btn-secondary mb-3">← Back to Dashboard</a>
-        
+
         <div class="card">
             <div class="card-body">
                 <table class="table">
@@ -1268,6 +1323,7 @@ def manage_routes():
 
     return render_template_string(BASE_HTML, content=content)
 
+
 @app.route("/bookings")
 @admin_required
 def view_bookings():
@@ -1281,7 +1337,7 @@ def view_bookings():
     <div class="container">
         <h3>🎫 All Bookings</h3>
         <a href="/dashboard" class="btn btn-secondary mb-3">← Back to Dashboard</a>
-        
+
         <div class="card">
             <div class="card-body">
                 <table class="table">
@@ -1324,6 +1380,7 @@ def view_bookings():
 
     return render_template_string(BASE_HTML, content=content)
 
+
 # ================= COUNTER ROUTES =================
 @app.route("/counter-bookings")
 @counter_required
@@ -1336,7 +1393,7 @@ def counter_bookings():
         <h3>📋 My Counter Bookings</h3>
         <p>Counter: #{session.get('counter_no', 'N/A')}</p>
         <a href="/dashboard" class="btn btn-secondary mb-3">← Back to Dashboard</a>
-        
+
         <div class="card">
             <div class="card-body">
                 <table class="table">
@@ -1375,6 +1432,7 @@ def counter_bookings():
 
     return render_template_string(BASE_HTML, content=content)
 
+
 # ================= INITIALIZATION =================
 if __name__ == "__main__":
     print("🚀 Starting My Bus AI Application...")
@@ -1387,4 +1445,4 @@ if __name__ == "__main__":
     print(f"🌐 Server running on port {port}")
     print(f"📊 Supabase Connected: {SUPABASE_URL}")
 
-    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+    socketio.run(app, host="0.0.0.0", port=port)

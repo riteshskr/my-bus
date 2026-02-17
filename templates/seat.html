@@ -19,8 +19,8 @@
 "></div>
 
 <div class="container" style="max-width:900px;">
-    <h2>बस: राजस्थान रोडवेज | Route: जयपुर → उदयपुर</h2>
-    <h4>Departure: 08:30</h4>
+    <h2>| 🛣️ Route: {{ from_station }} → {{ to_station }}  </h2>
+    <h4>⏰ Departure: {{ departure_time }}</h4>
     <h5>
         Role:
         <span class="text-success fw-bold">
@@ -67,14 +67,29 @@ socket.on("seat_update", data => {
     lockSeat(data.seat);
 });
 
+
 // ===== Live Bus GPS =====
-socket.on("bus_location", data => {
-    if(data.sid != SID) return;
-    const lat = parseFloat(data.lat);
-    const lng = parseFloat(data.lng);
-    busMarker.setLatLng([lat,lng]);
-    map.panTo([lat,lng]);
-}); 
+// socket.on("bus_location", data => {
+ //   if(data.sid != SID) return;
+ //   const lat = parseFloat(data.lat);
+ //   const lng = parseFloat(data.lng);
+  //  busMarker.setLatLng([lat,lng]);
+   // map.panTo([lat,lng]);
+// }); 
+
+
+// ===== Live Bus GPS (From schedules table) =====
+setInterval(()=>{
+ fetch("/api/bus/" + SID)
+  .then(r=>r.json())
+  .then(d=>{
+     if(!d) return;
+     busMarker.setLatLng([d.lat,d.lng]);
+     map.panTo([d.lat,d.lng]);
+     console.log("Speed:", d.speed);
+  });
+}, 2000);
+
 // ===== Lock seat function =====
 function lockSeat(seat){
     let btn = document.getElementById("seat-" + seat);

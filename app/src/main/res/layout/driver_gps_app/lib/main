@@ -1,0 +1,107 @@
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:flutter_background/flutter_background.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  const androidConfig = FlutterBackgroundAndroidConfig(
+    notificationTitle: "Driver GPS Running",
+    notificationText: "Tracking location in background",
+    notificationImportance: AndroidNotificationImportance.Default,
+    enableWifiLock: true,
+  );
+
+  bool hasPermissions = await FlutterBackground.hasPermissions;
+  if (!hasPermissions) {
+    await FlutterBackground.initialize(androidConfig: androidConfig);
+  }
+
+  runApp(MyApp());
+}
+
+class MyApp extends StatefulWidget {
+  @override
+  _MyAppState createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  IO.Socket socket = IO.io('http://YOUR_SERVER_IP:5000', <String, dynamic>{
+    'transports': ['websocket'],
+  });
+
+  bool tracking = false;
+  Stream<Position>? positionStream;
+
+  Future<void> startTracking() async {
+    bool bgStarted = await FlutterBackground.enableBackgroundExecution();
+
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) return;
+    }
+    if (permission == LocationPermission.deniedForever) return;
+
+    positionStream = Geolocator.getPositionStream(
+      desiredAccuracy: LocationAccuracy.high,
+      distanceFilter: 5,
+    );
+
+    positionStream!.listen((Position pos) {
+      socket.emit('driver_gps', {
+        'sid': 1, // Bus ID
+        'lat': pos.latitude,
+        'lng': pos.longitude,
+        'speed': pos.speed * 3.6
+      });
+    });
+
+    setState(() => tracking = true);
+  }
+
+  void stopTracking() async {
+    await FlutterBackground.disableBackgroundExecution();
+    setState(() => tracking = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: Text("Driver GPS App")),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: tracking ? null : startTracking,
+                  child: Text("Start GPS"),
+                  style: ElevatedButton.styleFrom(
+                      minimumSize: Size(double.infinity, 60)),
+                ),
+                SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: tracking ? stopTracking : null,
+                  child: Text("Stop GPS"),
+                  style: ElevatedButton.styleFrom(
+                      minimumSize: Size(double.infinity, 60),
+                      backgroundColor: Colors.red),
+                ),
+                SizedBox(height: 30),
+                Text(tracking ? "Tracking GPS..." : "GPS stopped",
+                    style: TextStyle(fontSize: 18)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

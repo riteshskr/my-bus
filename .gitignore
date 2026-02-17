@@ -25,7 +25,8 @@ uploads/
 # OS generated files
 .DS_Store
 Thumbs.db
-
+chrome_whatsapp_data/
+driver_gps_app/
 # Test / coverage
 .pytest_cache/
 .coverage
