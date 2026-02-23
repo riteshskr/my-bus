@@ -1127,7 +1127,7 @@ def book():
             return jsonify({"ok": False, "error": "Insert failed"})
 
         # 🔥 realtime broadcast
-     socketio.emit(
+        socketio.emit(
             "seat_update",
             {
                 "sid": schedule_id,
