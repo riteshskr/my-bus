@@ -18,3 +18,4 @@ psutil==5.9.8
 redis==5.0.1
 setuptools==80.0.0  # pkg_resources warning fix के लिए
 supabase
+bcrypt
