@@ -1127,11 +1127,11 @@ def book():
             return jsonify({"ok": False, "error": "Insert failed"})
 
         # 🔥 realtime broadcast
-        socketio.emit("seat_update", {
-            "sid": schedule_id,
-            "seat": seat_number,
-            "date": travel_date
-        })
+       socketio.emit("seat_update", {
+      "sid": schedule_id,
+       "seat": seat_number,
+      "date": travel_date
+        }, broadcast=True)
         booking_id = res.data[0]["id"]
         if notifier:
              notifier.send_booking_confirmation_by_id(booking_id)
