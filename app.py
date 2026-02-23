@@ -1134,7 +1134,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-            broadcast=True,  # सभी clients को भेजे
+            
             namespace="/"
         )
 
