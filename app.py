@@ -4,7 +4,12 @@ import json
 import bcrypt
 import traceback
 load_dotenv()
+from openpyxl import Workbook
+from flask import send_file
+import io
 import setuptools
+from flask_cors import CORS
+import requests
 import os, random
 from datetime import date, datetime
 from functools import wraps
@@ -13,9 +18,17 @@ from flask_socketio import SocketIO, emit
 from flask_compress import Compress
 from supabase import create_client, Client
 import atexit
+from dateutil import parser
+import pandas as pd
+from flask import Response
 import razorpay
-from whatsapp_notifier import get_whatsapp_notifier
-notifier = get_whatsapp_notifier(headless=False)
+import os
+IS_RENDER = os.environ.get("RENDER") == "true"
+notifier = None 
+if not IS_RENDER:
+      from whatsapp_notifier import get_whatsapp_notifier
+      notifier = get_whatsapp_notifier(headless=False)
+
 
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -40,6 +53,8 @@ if RAZORPAY_ENABLED:
     ))
 else:
     razor_client = None
+
+LOCATIONIQ_KEY = os.getenv("LOCATIONIQ_KEY")
 
 # ================= APP =================
 app = Flask(__name__)
@@ -180,6 +195,8 @@ def init_db():
         traceback.print_exc()
 
 
+
+
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
@@ -211,6 +228,8 @@ def gps(data):
         "speed": speed,
         "timestamp": datetime.now().isoformat()
     })
+
+
 
 
 # ================= HTML TEMPLATES =================
@@ -355,19 +374,17 @@ body{background:#f5f7fb;color:#222;}
 {% if not content %}
 <section class="hero">
   <div style="width:100%;padding:20px;">
-    <h1 style="font-size:3rem;margin-bottom:20px;">भारत का स्मार्ट बस प्लेटफॉर्म</h1>
-    <p style="font-size:1.2rem;margin-bottom:30px;">बुक करें | ट्रैक करें | फेस बोर्डिंग | लाइव सीट्स</p>
-
-    <form class="search-box" action="/search" method="POST">
+    <h1 style="font-size:3rem;margin-bottom:20px;">My Bus AI Booking</h1>
+     <form class="search-box" action="/search" method="POST">
       <select name="from" class="form-select" required>
-        <option value="" selected disabled>From (स्टेशन)</option>
+        <option value="" selected disabled>From (Station</option>
         {% for station in stations %}
         <option value="{{ station }}">{{ station }}</option>
         {% endfor %}
       </select>
 
       <select name="to" class="form-select" required>
-        <option value="" selected disabled>To (स्टेशन)</option>
+        <option value="" selected disabled>To (Station)</option>
         {% for station in stations %}
         <option value="{{ station }}">{{ station }}</option>
         {% endfor %}
@@ -481,6 +498,28 @@ def home():
     )
 
 
+# ================= get-distance ================= 
+@app.route("/get-distance")
+def get_distance():
+    from_lat = request.args.get("from_lat")
+    from_lng = request.args.get("from_lng")
+    to_lat = request.args.get("to_lat")
+    to_lng = request.args.get("to_lng")
+
+    url = f"https://us1.locationiq.com/v1/directions/driving/{from_lng},{from_lat};{to_lng},{to_lat}?key={LOCATIONIQ_KEY}&overview=false"
+
+    response = requests.get(url)
+    data = response.json()
+
+    if "routes" in data:
+        distance_m = data["routes"][0]["distance"]
+        distance_km = round(distance_m / 1000, 2)
+        return jsonify({"distance": distance_km})
+    else:
+        return jsonify({"error": "Distance not found"})
+
+
+#=================  login ================= 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -513,6 +552,8 @@ def login():
         BASE_HTML,
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
+
+#=================  counter_login ================= 
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     error = ""
@@ -602,6 +643,7 @@ def counter_login():
 
     return render_template_string(BASE_HTML, content=login_html)
 
+#=================  deshboard ================= 
 
 @app.route("/dashboard")
 def dashboard():
@@ -621,9 +663,11 @@ def dashboard():
     admin_links = ""
     if role == "admin":
         admin_links = """
-        <a href="/routes" class="btn btn-info">Manage Routes</a>
-        <a href="/bookings" class="btn btn-success ms-2">View Bookings</a>
-        <a href="/create-counter" class="btn btn-dark ms-2">Create Counter</a>
+        <a href="/routes" class="btn btn-info shadow-sm">Manage Routes</a>
+        <a href="/bookings" class="btn btn-success shadow-sm ms-2">View Bookings</a>
+        <a href="/create-counter" class="btn btn-dark shadow-sm ms-2">Create Counter</a>
+        <a href="/buses" class="btn btn-warning shadow-sm ms-2">New Bus</a>
+        <a href="/backup" class="btn btn-secondary shadow-sm ms-2">Backup</a>
         """
 
     counter_links = ""
@@ -657,48 +701,278 @@ def dashboard():
 
     return render_template_string(BASE_HTML, content=content)
 
+#================= View Bookings  =================
+@app.route("/bookings", methods=["GET"])
+def view_bookings():
 
-def render_recent_bookings(bookings):
-    if not bookings:
-        return "<p>No recent bookings</p>"
+    if not session.get("user_logged_in"):
+        return redirect("/login")
 
-    html = """
-    <div class="table-responsive">
-        <table class="table table-striped">
+    route_id = request.args.get("route_id")
+    bus_id = request.args.get("bus_id")
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
+
+    bookings = supabase_query("seat_bookings") or []
+    routes = supabase_query("routes") or []
+    schedules = supabase_query("schedules") or []
+
+    # Fast lookup maps (important)
+    route_map = {str(r["id"]): r.get("route_name", "") for r in routes}
+    schedule_map = {str(s["id"]): s for s in schedules}
+
+    # Route wise buses
+    if route_id:
+        available_buses = [
+            s for s in schedules
+            if str(s.get("route_id")) == str(route_id)
+        ]
+    else:
+        available_buses = schedules
+
+    filtered = []
+
+    for b in bookings:
+
+        schedule = schedule_map.get(str(b.get("schedule_id")))
+        if not schedule:
+            continue
+
+        # Route filter
+        if route_id and str(schedule.get("route_id")) != str(route_id):
+            continue
+
+        # Bus filter
+        if bus_id and str(b.get("schedule_id")) != str(bus_id):
+            continue
+
+        travel_date = b.get("travel_date")
+        if not travel_date:
+            continue
+
+        try:
+            date_obj = parser.parse(travel_date)
+            b["formatted_date"] = date_obj.strftime("%d-%m-%Y")
+        except:
+            continue
+
+        # Date filter (date only compare)
+        if date_from and date_obj.date() < parser.parse(date_from).date():
+            continue
+
+        if date_to and date_obj.date() > parser.parse(date_to).date():
+            continue
+
+        filtered.append(b)
+
+    total_collection = sum(float(b.get("fare") or 0) for b in filtered)
+
+    # Excel Export
+    if request.args.get("export") == "excel":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Bookings"
+        ws.append(["ID", "Passenger", "Route", "Bus", "Seat", "Date", "Fare","payment_mode",])
+
+        for b in filtered:
+            schedule = schedule_map.get(str(b.get("schedule_id")), {})
+            ws.append([
+                b.get("id"),
+                b.get("passenger_name"),
+                route_map.get(str(schedule.get("route_id")), ""),
+                schedule.get("bus_name", ""),
+                b.get("seat_number"),
+                b.get("formatted_date"),
+                b.get("fare"),
+                b.get("payment_mode")
+            ])
+
+        file_stream = io.BytesIO()
+        wb.save(file_stream)
+        file_stream.seek(0)
+
+        return send_file(
+            file_stream,
+            as_attachment=True,
+            download_name="bookings.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # HTML
+    content = f"""
+    <div class="container mt-4">
+        <h2>View Bookings</h2>
+
+        <form method="get" class="row g-3">
+            <div class="col-md-3">
+                <label>Route</label>
+                <select name="route_id" class="form-control" onchange="this.form.submit()">
+                    <option value="">All</option>
+                    {''.join([f'<option value="{r["id"]}" {"selected" if str(route_id)==str(r["id"]) else ""}>{r["route_name"]}</option>' for r in routes])}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label>Bus</label>
+                <select name="bus_id" class="form-control">
+                    <option value="">All</option>
+                    {''.join([f'<option value="{s["id"]}" {"selected" if str(bus_id)==str(s["id"]) else ""}>{s.get("bus_name","")}</option>' for s in available_buses])}
+                </select>
+            </div>
+
+            <div class="col-md-2">
+                <label>From</label>
+                <input type="date" name="date_from" value="{date_from or ''}" class="form-control">
+            </div>
+
+            <div class="col-md-2">
+                <label>To</label>
+                <input type="date" name="date_to" value="{date_to or ''}" class="form-control">
+            </div>
+
+            <div class="col-md-2">
+                <label>&nbsp;</label>
+                <button class="btn btn-primary w-100">Filter</button>
+            </div>
+        </form>
+
+        <h4 class="mt-3">Total Collection: ₹ {format(total_collection, ',.2f')}</h4>
+
+        <table class="table table-bordered mt-3">
             <thead>
                 <tr>
+                    <th>ID</th>
                     <th>Passenger</th>
+                    <th>Route</th>
                     <th>Bus</th>
                     <th>Seat</th>
                     <th>Date</th>
                     <th>Fare</th>
+                    <th>payment mode</th>
                 </tr>
             </thead>
             <tbody>
-    """
-
-    for booking in bookings:
-        # Bus details fetch करें
-        bus_data = supabase_query("schedules", filters={"id": booking["schedule_id"]})
-        bus_name = bus_data[0]["bus_name"] if bus_data else "N/A"
-
-        html += f"""
-                <tr>
-                    <td>{booking.get('passenger_name', 'N/A')}</td>
-                    <td>{bus_name}</td>
-                    <td>{booking.get('seat_number', 'N/A')}</td>
-                    <td>{booking.get('travel_date', 'N/A')}</td>
-                    <td>₹{booking.get('fare', '0')}</td>
-                </tr>
-        """
-
-    html += """
+                {''.join([
+                    f"<tr>"
+                    f"<td>{b.get('id')}</td>"
+                    f"<td>{b.get('passenger_name')}</td>"
+                    f"<td>{route_map.get(str(schedule_map.get(str(b.get('schedule_id')),{}).get('route_id')), '')}</td>"
+                    f"<td>{schedule_map.get(str(b.get('schedule_id')),{}).get('bus_name','')}</td>"
+                    f"<td>{b.get('seat_number')}</td>"
+                    f"<td>{b.get('formatted_date')}</td>"
+                    f"<td>{b.get('fare')}</td>"
+                    f"<td>{b.get('payment_mode')}</td>"
+                    f"</tr>"
+                    for b in filtered
+                ])}
             </tbody>
         </table>
     </div>
     """
-    return html
 
+    return render_template_string(BASE_HTML, content=content)
+
+
+# ================== Manage Stations AJAX ==================
+@app.route("/route/<int:route_id>/stations", methods=["GET"])
+@admin_required
+def manage_stations_page(route_id):
+    # GET → route stations fetch करना
+    stations = supabase_query("route_stations", filters={"route_id": route_id}) or []
+    stations = sorted(stations, key=lambda x: x["station_order"])
+
+    content = """
+    <h2>Stations for Route ID: {{ route_id }}</h2>
+    <table class="table table-bordered mt-3" id="stationsTable">
+        <thead>
+            <tr>
+                <th>Route ID</th>
+                <th>Station Name</th>
+                <th>Station Order</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in stations %}
+            <tr>
+                <td>{{ s.route_id }}</td>
+                <td>{{ s.station_name }}</td>
+                <td>{{ s.station_order }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h4 class="mt-4">Add New Station</h4>
+    <form id="addStationForm" class="row g-3 mt-2">
+        <div class="col-md-6">
+            <input type="text" name="station_name" class="form-control" placeholder="Station Name" required>
+        </div>
+        <div class="col-md-3">
+            <input type="number" name="station_order" class="form-control" placeholder="Station Order" required>
+        </div>
+        <div class="col-md-3">
+            <button class="btn btn-success w-100" type="submit">Add Station</button>
+        </div>
+    </form>
+
+    <a href="/routes" class="btn btn-secondary mt-4">Back to Routes</a>
+
+    <script>
+    const form = document.getElementById('addStationForm');
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const formData = new FormData(form);
+        const data = {
+            station_name: formData.get('station_name'),
+            station_order: formData.get('station_order')
+        };
+
+        const res = await fetch('/api/route/{{ route_id }}/add_station', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+        if(result.ok){
+            // Table में नया row add करें
+            const table = document.getElementById('stationsTable').getElementsByTagName('tbody')[0];
+            const newRow = table.insertRow();
+            newRow.innerHTML = `
+                <td>{{ route_id }}</td>
+                <td>${data.station_name}</td>
+                <td>${data.station_order}</td>
+            `;
+            form.reset();
+        } else {
+            alert("Error: " + result.error);
+        }
+    });
+    </script>
+    """
+    return render_template_string(BASE_HTML, content=render_template_string(content, route_id=route_id, stations=stations))
+
+
+# ================== API Add Station ==================
+@app.route("/api/route/<int:route_id>/add_station", methods=["POST"])
+@admin_required
+def api_add_station(route_id):
+    try:
+        data = request.get_json()
+        station_name = data.get("station_name", "").strip()
+        station_order = int(data.get("station_order", 0))
+
+        if not station_name or station_order <= 0:
+            return jsonify({"ok": False, "error": "Invalid data"})
+
+        supabase_query("route_stations", "insert", {
+            "route_id": route_id,
+            "station_name": station_name,
+            "station_order": station_order
+        })
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 @app.route("/buses/<int:rid>")
 def buses(rid):
@@ -859,7 +1133,8 @@ def book():
             "date": travel_date
         })
         booking_id = res.data[0]["id"]
-        notifier.send_booking_confirmation_by_id(booking_id)
+        if notifier:
+             notifier.send_booking_confirmation_by_id(booking_id)
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
@@ -884,6 +1159,9 @@ def live_bus(sid):
 
     stations_json = json.dumps(stations_data) if stations_data else "[]"
 
+    # MapTiler API Key - अपनी key यहाँ use करें
+    MAPTILER_KEY = os.getenv("MAPTILER_KEY")
+
     content = f"""
     <!DOCTYPE html>
     <html>
@@ -891,7 +1169,10 @@ def live_bus(sid):
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Live Bus Tracking - {bus['bus_name']}</title>
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+        <!-- MapTiler SDK CSS -->
+        <link rel="stylesheet" href="https://cdn.maptiler.com/maptiler-sdk-js/v2.2.4/maptiler-sdk.css" />
+        <!-- CSP Policy for CORS -->
+        <meta http-equiv="Content-Security-Policy" content="default-src * self blob: data: gap:; style-src * self 'unsafe-inline' blob: data:; script-src * self 'unsafe-inline' 'unsafe-eval' blob: data:; object-src * self blob: data:; img-src * self 'unsafe-inline' blob: data:; connect-src self * https://api.maptiler.com wss:; frame-src * self blob: data:;">
         <style>
             body {{ margin: 0; padding: 0; font-family: Arial, sans-serif; }}
             #map {{ height: 100vh; width: 100%; }}
@@ -935,50 +1216,79 @@ def live_bus(sid):
 
         <div id="map"></div>
 
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+        <!-- MapTiler SDK JS -->
+        <script src="https://cdn.maptiler.com/maptiler-sdk-js/v2.2.4/maptiler-sdk.umd.min.js"></script>
         <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
         <script>
-            const map = L.map('map').setView([{bus.get('current_lat', 27.2)}, {bus.get('current_lng', 75.2)}], 13);
+            // MapTiler Configuration
+            maptilersdk.config.apiKey = '{MAPTILER_KEY}';
+            maptilersdk.config.crossOrigin = 'anonymous';
+            maptilersdk.config.region = 'global';
 
-            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                attribution: '© OpenStreetMap contributors'
-            }}).addTo(map);
+            // Initialize map
+            const map = new maptilersdk.Map({{
+                container: 'map',
+                style: maptilersdk.MapStyle.STREETS,
+                center: [{bus.get('current_lng', 75.2)}, {bus.get('current_lat', 27.2)}],
+                zoom: 13,
+                navigationControl: true
+            }});
 
             // Route stations
             const stations = {stations_json};
             const routePoints = [];
 
-            stations.forEach(station => {{
-                const lat = parseFloat(station.lat || 27.2);
-                const lng = parseFloat(station.lng || 75.2);
-                if(!isNaN(lat) && !isNaN(lng)) {{
-                    routePoints.push([lat, lng]);
-                    L.marker([lat, lng])
-                        .addTo(map)
-                        .bindPopup(`<b>📍 ${{station.station_name}}</b>`);
+            map.on('load', function() {{
+                console.log('✅ Map loaded');
+
+                stations.forEach(station => {{
+                    const lat = parseFloat(station.lat || 27.2);
+                    const lng = parseFloat(station.lng || 75.2);
+                    
+                    if(!isNaN(lat) && !isNaN(lng)) {{
+                        routePoints.push([lng, lat]);  // MapTiler uses [lng, lat]
+                        
+                        // Add marker for station
+                        new maptilersdk.Marker({{ color: '#28a745' }})
+                            .setLngLat([lng, lat])
+                            .setPopup(new maptilersdk.Popup().setHTML(`<b>📍 ${{station.station_name}}</b>`))
+                            .addTo(map);
+                    }}
+                }});
+
+                // Draw route line
+                if(routePoints.length > 1) {{
+                    map.addLayer({{
+                        id: 'route-line',
+                        type: 'line',
+                        source: {{
+                            type: 'geojson',
+                            data: {{
+                                type: 'Feature',
+                                geometry: {{
+                                    type: 'LineString',
+                                    coordinates: routePoints
+                                }}
+                            }}
+                        }},
+                        paint: {{
+                            'line-color': '#007bff',
+                            'line-width': 4,
+                            'line-opacity': 0.7,
+                            'line-dasharray': [3, 2]
+                        }}
+                    }});
                 }}
             }});
 
-            // Route line
-            if(routePoints.length > 1) {{
-                L.polyline(routePoints, {{
-                    color: 'blue',
-                    weight: 4,
-                    opacity: 0.7
-                }}).addTo(map);
-            }}
-
             // Bus marker
-            const busIcon = L.divIcon({{
-                html: '<div class="bus-marker"></div>',
-                className: 'bus-icon',
-                iconSize: [26, 26]
-            }});
-
-            let busMarker = L.marker([
-                {bus.get('current_lat', 27.2)}, 
-                {bus.get('current_lng', 75.2)}
-            ], {{icon: busIcon}}).addTo(map);
+            const busMarkerElement = document.createElement('div');
+            busMarkerElement.className = 'bus-marker';
+            
+            const busMarker = new maptilersdk.Marker({{ element: busMarkerElement }})
+                .setLngLat([{bus.get('current_lng', 75.2)}, {bus.get('current_lat', 27.2)}])
+                .setPopup(new maptilersdk.Popup().setHTML('<b>🚌 बस यहाँ है</b>'))
+                .addTo(map);
 
             // Socket connection
             const socket = io(window.location.origin);
@@ -987,15 +1297,15 @@ def live_bus(sid):
                 if(data.sid == {sid}) {{
                     const lat = parseFloat(data.lat);
                     const lng = parseFloat(data.lng);
+                    const speed = parseFloat(data.speed) || 0;
 
-                    busMarker.setLatLng([lat, lng]);
-                    map.panTo([lat, lng]);
+                    busMarker.setLngLat([lng, lat]);
+                    map.panTo([lng, lat]);
 
-                    // Update info panel
                     document.getElementById('coordinates').innerHTML = 
                         `<strong>Coordinates:</strong> ${{lat.toFixed(6)}}, ${{lng.toFixed(6)}}`;
                     document.getElementById('speed').innerHTML = 
-                        `<strong>Speed:</strong> ${{data.speed || 0}} km/h`;
+                        `<strong>Speed:</strong> ${{speed.toFixed(1)}} km/h`;
                 }}
             }});
         </script>
@@ -1004,6 +1314,7 @@ def live_bus(sid):
     """
 
     return content
+
 
 
 @app.route("/driver/<int:sid>")
@@ -1277,108 +1588,290 @@ def logout():
 
 
 # ================= ADMIN ROUTES =================
-@app.route("/routes")
+@app.route("/routes", methods=["GET"])
 @admin_required
 def manage_routes():
-    routes = supabase_query("routes")
+    routes = supabase_query("routes") or []
 
     content = """
-    <div class="container">
-        <h3>🛣️ Manage Routes</h3>
-        <a href="/dashboard" class="btn btn-secondary mb-3">← Back to Dashboard</a>
+    <h3>🛣️ Manage Routes</h3>
 
-        <div class="card">
-            <div class="card-body">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Route Name</th>
-                            <th>Distance (km)</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
+    <!-- Add Route Card -->
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5>Add New Route</h5>
+            <form id="addRouteForm" class="row g-3">
+                <div class="col-md-6">
+                    <input type="text" name="route_name" class="form-control" placeholder="Route Name" required>
+                </div>
+                <div class="col-md-3">
+                    <input type="number" name="distance_km" class="form-control" placeholder="Distance (km)" required>
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-success w-100">Add Route</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Routes Table -->
+    <div class="card">
+        <div class="card-body">
+            <table class="table table-bordered">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Route Name</th>
+                        <th>Distance (km)</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
     """
 
     for route in routes:
         content += f"""
-                        <tr>
-                            <td>{route['id']}</td>
-                            <td>{route['route_name']}</td>
-                            <td>{route['distance_km']}</td>
-                            <td>
-                                <a href="/route-stations/{route['id']}" class="btn btn-sm btn-info">Stations</a>
-                            </td>
-                        </tr>
+        <tr>
+            <td>{route['id']}</td>
+            <td>{route['route_name']}</td>
+            <td>{route['distance_km']}</td>
+            <td>
+                <a href="/route/{route['id']}/stations" class="btn btn-sm btn-info">Stations</a>
+
+                <button class="btn btn-sm btn-warning"
+                    onclick="openEditModal({route['id']}, '{route['route_name']}', {route['distance_km']})">
+                    Edit
+                </button>
+
+         <button class="btn btn-sm btn-danger"
+    	onclick="deleteRoute({route['id']}, '{route['route_name']}')">
+    	Delete
+            </button>
+            </td>
+        </tr>
         """
 
     content += """
-                    </tbody>
-                </table>
-            </div>
+                </tbody>
+            </table>
         </div>
     </div>
+
+    <!-- Edit Modal -->
+    <div class="modal fade" id="editRouteModal" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Edit Route</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <input type="hidden" id="edit_route_id">
+            <div class="mb-3">
+                <label>Route Name</label>
+                <input type="text" id="edit_route_name" class="form-control">
+            </div>
+            <div class="mb-3">
+                <label>Distance (km)</label>
+                <input type="number" id="edit_distance_km" class="form-control">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-primary" onclick="updateRoute()">Update</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+
+    // ADD ROUTE
+    const addRouteForm = document.getElementById('addRouteForm');
+    addRouteForm.addEventListener('submit', async function(e){
+        e.preventDefault();
+
+        const formData = new FormData(addRouteForm);
+        const data = {
+            route_name: formData.get('route_name'),
+            distance_km: formData.get('distance_km')
+        };
+
+        const res = await fetch('/api/add_route', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+        if(result.ok){
+            location.reload();
+        } else {
+            alert(result.error);
+        }
+    });
+
+    // OPEN EDIT MODAL
+    function openEditModal(id, name, distance){
+        document.getElementById("edit_route_id").value = id;
+        document.getElementById("edit_route_name").value = name;
+        document.getElementById("edit_distance_km").value = distance;
+
+        var modal = new bootstrap.Modal(document.getElementById('editRouteModal'));
+        modal.show();
+    }
+
+    // UPDATE ROUTE
+    async function updateRoute(){
+        const id = document.getElementById("edit_route_id").value;
+        const route_name = document.getElementById("edit_route_name").value;
+        const distance_km = document.getElementById("edit_distance_km").value;
+
+        const res = await fetch('/api/update_route', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({id, route_name, distance_km})
+        });
+
+        const result = await res.json();
+        if(result.ok){
+            location.reload();
+        } else {
+            alert(result.error);
+        }
+    }
+
+    // DELETE ROUTE
+    async function deleteRoute(id, name){
+
+    if(!confirm("Delete Route: " + name + " ? This will also delete all stations.")) return;
+
+    const res = await fetch('/api/delete_route', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+            id: id,
+            route_name: name
+        })
+    });
+
+    const result = await res.json();
+
+    if(result.ok){
+        alert(result.message);
+        location.reload();
+    } else {
+        alert(result.error);
+    }
+}
+
+    </script>
     """
 
     return render_template_string(BASE_HTML, content=content)
 
 
-@app.route("/bookings")
+# ==============================
+# API ADD ROUTE
+# ==============================
+
+@app.route("/api/add_route", methods=["POST"])
 @admin_required
-def view_bookings():
-    bookings = supabase_query("seat_bookings")
+def api_add_route():
+    data = request.get_json()
+    print("API CALLED")
 
-    # Get bus names
-    buses = supabase_query("schedules")
-    bus_dict = {bus["id"]: bus["bus_name"] for bus in buses}
+    route_name = data.get("route_name", "").strip()
+    distance_km = data.get("distance_km")
 
-    content = """
-    <div class="container">
-        <h3>🎫 All Bookings</h3>
-        <a href="/dashboard" class="btn btn-secondary mb-3">← Back to Dashboard</a>
+    if not route_name:
+        return jsonify({"ok": False, "error": "Route name required"})
 
-        <div class="card">
-            <div class="card-body">
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Passenger</th>
-                            <th>Bus</th>
-                            <th>Seat</th>
-                            <th>Date</th>
-                            <th>Fare</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-    """
+    try:
+        distance_km = float(distance_km)
+    except:
+        return jsonify({"ok": False, "error": "Distance must be number"})
 
-    for booking in bookings:
-        bus_name = bus_dict.get(booking["schedule_id"], "Unknown")
+    if distance_km <= 0:
+        return jsonify({"ok": False, "error": "Distance must be greater than 0"})
 
-        content += f"""
-                        <tr>
-                            <td>{booking['id']}</td>
-                            <td>{booking['passenger_name']}</td>
-                            <td>{bus_name}</td>
-                            <td>{booking['seat_number']}</td>
-                            <td>{booking['travel_date']}</td>
-                            <td>₹{booking['fare']}</td>
-                            <td><span class="badge bg-success">{booking['status']}</span></td>
-                        </tr>
-        """
+    existing = supabase_query("routes", filters={"route_name": route_name})
+    if existing:
+        return jsonify({"ok": False, "error": "Route already exists"})
 
-    content += """
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-    """
+    supabase_query("routes", "insert", {
+        "route_name": route_name,
+        "distance_km": distance_km
+    })
 
-    return render_template_string(BASE_HTML, content=content)
+    return jsonify({"ok": True})
+
+
+# ==============================
+# API UPDATE ROUTE
+# ==============================
+
+@app.route("/api/update_route", methods=["POST"])
+@admin_required
+def api_update_route():
+    data = request.get_json()
+
+    route_id = data.get("id")
+    route_name = data.get("route_name", "").strip()
+    distance_km = data.get("distance_km")
+
+    if not route_id or not route_name:
+        return jsonify({"ok": False, "error": "Invalid data"})
+
+    try:
+        distance_km = float(distance_km)
+    except:
+        return jsonify({"ok": False, "error": "Distance must be number"})
+
+    supabase_query("routes", "update",
+        {"route_name": route_name, "distance_km": distance_km},
+        filters={"id": route_id}
+    )
+
+    return jsonify({"ok": True})
+
+
+# ==============================
+# API DELETE ROUTE
+# ==============================
+
+@app.route("/api/delete_route", methods=["POST"])
+@admin_required
+def api_delete_route():
+    try:
+        data = request.get_json()
+
+        route_id = int(data.get("id"))
+        route_name = data.get("route_name")
+
+        if not route_id:
+            return jsonify({"ok": False, "error": "Invalid route id"})
+
+        # STEP 1: Delete stations first
+        supabase_query(
+            "route_stations",
+            "delete",
+            filters={"route_id": route_id}
+        )
+
+        # STEP 2: Delete route
+        supabase_query(
+            "routes",
+            "delete",
+            filters={"id": route_id}
+        )
+
+        return jsonify({
+            "ok": True,
+            "message": f"Route '{route_name}' (ID: {route_id}) and all its stations deleted successfully"
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 # ================= COUNTER ROUTES =================
@@ -1437,12 +1930,15 @@ def counter_bookings():
 if __name__ == "__main__":
     print("🚀 Starting My Bus AI Application...")
 
-    # Initialize database
     init_db()
 
-    # Start the application
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Server running on port {port}")
     print(f"📊 Supabase Connected: {SUPABASE_URL}")
 
-    socketio.run(app, host="0.0.0.0", port=port)
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=True   # ✅ ADD THIS
+    )
