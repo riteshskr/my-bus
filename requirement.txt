@@ -1,7 +1,7 @@
 Flask==2.3.3
 Flask-SocketIO==5.3.6
 Flask-Compress==1.15
-psycopg[binary,pool]==3.2.12
+psycopg2-binary>=2.9
 gunicorn==21.2.0
 razorpay==1.4.1
 setuptools
@@ -17,3 +17,6 @@ Flask-Limiter==3.5.1
 psutil==5.9.8  
 redis==5.0.1
 setuptools==80.0.0  # pkg_resources warning fix के लिए
+supabase
+bcrypt
+openpyxl
