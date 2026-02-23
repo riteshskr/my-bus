@@ -1134,7 +1134,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-            broadcast=True
+            
         )
 
         booking_id = res.data[0]["id"]
