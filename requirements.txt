@@ -19,3 +19,4 @@ psutil==5.9.8
 razorpay==1.4.1
 python-dateutil
 pandas
+setuptools
