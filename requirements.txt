@@ -2,6 +2,7 @@ Flask==2.3.3
 Flask-SocketIO==5.3.6
 Flask-Compress==1.15
 Flask-Limiter==3.5.1
+Flask-CORS==4.0.0
 
 gunicorn==21.2.0
 eventlet==0.36.1
@@ -17,3 +18,4 @@ redis==5.0.1
 psutil==5.9.8
 razorpay==1.4.1
 python-dateutil
+pandas
