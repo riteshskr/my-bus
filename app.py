@@ -1133,7 +1133,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-          
+            include_self=False
         )
 
         booking_id = res.data[0]["id"]
