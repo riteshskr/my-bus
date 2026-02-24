@@ -169,7 +169,10 @@ function bookSeat(seat){
 
     let mobile = prompt("Mobile:");
     if(!mobile){ btn.disabled=false; return; }
-
+    let btn = document.getElementById("seat-" + seatId);
+    let oldText = btn.innerText;
+    btn.innerText = "⏳ Booking...";
+    btn.disabled = true;	
     let fare = 0;
     let payment_mode = "cash";
 
@@ -205,6 +208,14 @@ function bookSeat(seat){
         alert("Network error");
         btn.disabled=false;
     });
+}
+// Demo booking success
+    setTimeout(() => {
+        btn.classList.remove("btn-success");
+        btn.classList.add("btn-danger");
+        btn.innerText = "X" + seatId;
+        alert("✅ Seat " + seatId + " booked! Fare: ₹" + (fare || 250));
+    }, 1000);
 }
 
 // ===== Initial booked seats =====
