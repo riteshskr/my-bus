@@ -62,7 +62,11 @@ app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-12345")
 Compress(app)
 
 # ✅ SocketIO Configuration
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=60)
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode="eventlet"
+)
 
 # ================= DB HELPER FUNCTIONS =================
 def supabase_query(table, operation="select", data=None, filters=None):

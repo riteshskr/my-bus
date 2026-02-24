@@ -76,8 +76,9 @@ const SID = {{ sid }};
 const TODAY = "{{ travel_date }}";
 const USER_ROLE = "{{ session.get('role','guest') }}";
 
-const socket = io({
-   transports: ["websocket", "polling"]
+const socket = io(window.location.origin, {
+   transports: ["websocket"],
+   upgrade: false
 });
 
 // ===== MapLibre Map बनाएं =====
