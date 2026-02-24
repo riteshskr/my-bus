@@ -9,3 +9,4 @@
 2026-02-23 03:41:33 | 9875262306 | 98 | Booking: 45 | booking_confirmation | SENT
 2026-02-23 04:11:28 | 9782180931 | 9872180931 | Booking: 47 | booking_confirmation | SENT
 2026-02-23 05:33:17 | 9875262306 | 98 | Booking: 52 | booking_confirmation | SENT
+2026-02-23 19:36:52 | 11 | 11 | Booking: 57 | booking_confirmation | FAILED | Error: Invalid mobile

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <title>Bus Seat Booking</title>
     <!-- CSP Policy -->
-    <meta http-equiv="Content-Security-Policy" content="default-src * self blob: data: gap:; style-src * self 'unsafe-inline' blob: data:; script-src * self 'unsafe-inline' 'unsafe-eval' blob: data:; object-src * self blob: data:; img-src * self 'unsafe-inline' blob: data:; connect-src self * https://api.maptiler.com wss:; frame-src * self blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; style-src * self 'unsafe-inline' blob: data:; script-src * self 'unsafe-inline' 'unsafe-eval' blob: data:; object-src * self blob: data:; img-src * self 'unsafe-inline' blob: data:; connect-src self * https://api.maptiler.com wss:; frame-src * self blob: data:;">
     
     <!-- MapLibre CSS (MapTiler SDK की जगह) -->
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
@@ -69,16 +69,15 @@
 
 <script>
 // ===== Map Configuration with MapLibre =====
-const MAPTILER_KEY = 'Ba2AIkvU95qhaKjm0Dd0';
+const MAPTILER_KEY = "{{ MAPTILER_KEY }}";
 const BUS_LAT = 26.9124;
 const BUS_LNG = 75.7873;
 const SID = {{ sid }};
 const TODAY = "{{ travel_date }}";
 const USER_ROLE = "{{ session.get('role','guest') }}";
 
-const socket = io("/", {
-   transports: ["websocket"],
-   reconnectionAttempts: 5
+const socket = io({
+   transports: ["websocket", "polling"]
 });
 
 // ===== MapLibre Map बनाएं =====
@@ -134,7 +133,7 @@ setInterval(()=>{
              if(!isNaN(speed)) {
                  let speedElement = document.getElementById('bus-speed');
                  if(speedElement) {
-                     speedElement.innerHTML = `Speed: ${speed.toFixed(1)} km/h`;
+                    speedElement.innerHTML = `⏱️ Speed: ${speed.toFixed(1)} km/h`;
                  }
              }
          }
@@ -169,10 +168,11 @@ function bookSeat(seat){
 
     let mobile = prompt("Mobile:");
     if(!mobile){ btn.disabled=false; return; }
-    let btn = document.getElementById("seat-" + seatId);
+
     let oldText = btn.innerText;
     btn.innerText = "⏳ Booking...";
-    btn.disabled = true;	
+    btn.disabled = true;
+	
     let fare = 0;
     let payment_mode = "cash";
 
@@ -197,26 +197,23 @@ function bookSeat(seat){
     .then(r=>r.json())
     .then(d=>{
         if(d.ok){
-            lockSeat(seat);
-            alert("Booked");
+            btn.classList.remove("btn-success");
+            btn.classList.add("btn-danger");
+            btn.innerText = "X" + seat;
+             alert("✅ Seat " + seat + " booked! Fare: ₹" + (fare || 250));
         }else{
             alert(d.error);
+            btn.innerText = oldText;
             btn.disabled=false;   // unlock on fail
         }
     })
     .catch(()=>{
         alert("Network error");
+        btn.innerText = oldText;
         btn.disabled=false;
     });
 }
-// Demo booking success
-    setTimeout(() => {
-        btn.classList.remove("btn-success");
-        btn.classList.add("btn-danger");
-        btn.innerText = "X" + seatId;
-        alert("✅ Seat " + seatId + " booked! Fare: ₹" + (fare || 250));
-    }, 1000);
-}
+
 
 // ===== Initial booked seats =====
 const BOOKED = {{ booked_seats | tojson }};

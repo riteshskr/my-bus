@@ -1052,6 +1052,7 @@ def seat_page(sid):
             sid=sid,
             travel_date=today,
             bus_name=bus['bus_name'],
+            MAPTILER_KEY=os.getenv("MAPTILER_KEY"),	
             departure_time=bus['departure_time']
         )
 
@@ -1134,8 +1135,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-            broadcast=True,  # सभी clients को भेजे
-            namespace="/"
+          
         )
 
         booking_id = res.data[0]["id"]
