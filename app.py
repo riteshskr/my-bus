@@ -1121,9 +1121,8 @@ def book():
         }
 
         res = supabase.table("seat_bookings").insert(booking_data).execute()
-
         if not res.data:
-            return jsonify({"ok": False, "error": "Insert failed"})
+             return jsonify({"ok": False, "error": "Insert failed"})
 
         # 🔥 realtime broadcast
         socketio.emit(
@@ -1133,7 +1132,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-            include_self=False
+            to=None
         )
 
         booking_id = res.data[0]["id"]
