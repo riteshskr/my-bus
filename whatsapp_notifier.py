@@ -42,15 +42,9 @@ def clean_text(text):
 # मैसेज टेम्पलेट्स
 DEFAULT_TEMPLATES = {
     "booking_confirmation": """ नमस्ते {name} जी!
-
 आपकी बस टिकट बुक हो गई है 
-
- तारीख: {date}
- बस: {bus_name}
- सीट: {seat_number}
- से: {from_station} से {to_station}
- किराया: ₹{fare}
-
+ तारीख: {date}  बस: {bus_name}  सीट: {seat_number}
+ से: {from_station} से {to_station}  किराया: ₹{fare}
 यात्रा शुभ हो!
 My Bus AI टीम """,
 

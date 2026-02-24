@@ -23,6 +23,12 @@ import pandas as pd
 from flask import Response
 import razorpay
 import os
+IS_RENDER = os.environ.get("RENDER") == "true"
+notifier = None 
+if not IS_RENDER:
+      from whatsapp_notifier import get_whatsapp_notifier
+      notifier = get_whatsapp_notifier(headless=False)
+
 
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -1137,6 +1143,8 @@ def book():
         )
 
         booking_id = res.data[0]["id"]
+        if notifier:
+             notifier.send_booking_confirmation_by_id(booking_id)
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:

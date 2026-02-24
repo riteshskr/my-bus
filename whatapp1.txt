@@ -1,6 +1,8 @@
 from asyncio import transports
 from dotenv import load_dotenv
 import json
+from supabase import create_client
+import threading
 import bcrypt
 import traceback
 load_dotenv()
@@ -23,6 +25,12 @@ import pandas as pd
 from flask import Response
 import razorpay
 import os
+IS_RENDER = os.environ.get("RENDER") == "true"
+notifier = None 
+if not IS_RENDER:
+      from whatsapp_notifier import get_whatsapp_notifier
+      notifier = get_whatsapp_notifier(headless=False)
+
 
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -33,6 +41,40 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 print("✅ Supabase क्लाइंट तैयार")
+
+# ---------------- WhatsApp Listener ----------------
+import time
+
+def start_whatsapp_listener():
+
+    print("🟢 WhatsApp Polling Listener Started...")
+
+    last_checked_id = 0
+
+    while True:
+        try:
+            response = supabase.table("seat_bookings") \
+                .select("*") \
+                .gt("id", last_checked_id) \
+                .execute()
+
+            bookings = response.data
+
+            if bookings:
+                for booking in bookings:
+                    booking_id = booking["id"]
+
+                    print("📩 New Booking:", booking_id)
+
+                    if notifier:
+                        notifier.send_booking_confirmation_by_id(booking_id)
+
+                    last_checked_id = booking_id
+
+        except Exception as e:
+            print("Listener Error:", e)
+
+        time.sleep(5)   # हर 5 सेकंड check करेगा
 
 # ===== PAYMENT CONFIG =====
 RAZORPAY_ENABLED = bool(
@@ -1137,6 +1179,8 @@ def book():
         )
 
         booking_id = res.data[0]["id"]
+        if notifier:
+             notifier.send_booking_confirmation_by_id(booking_id)
         return jsonify({"ok": True, "message": "Seat booked"})
 
     except Exception as e:
@@ -1931,13 +1975,19 @@ def counter_bookings():
 # ================= INITIALIZATION =================
 if __name__ == "__main__":
     print("🚀 Starting My Bus AI Application...")
+    if not IS_RENDER:
+        listener_thread = threading.Thread(target=start_whatsapp_listener)
+        listener_thread.daemon = True
+        listener_thread.start()
+
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
 
     init_db()
 
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Server running on port {port}")
     print(f"📊 Supabase Connected: {SUPABASE_URL}")
-
+    
     socketio.run(
         app,
         host="0.0.0.0",
