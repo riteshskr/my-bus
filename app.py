@@ -53,7 +53,7 @@ else:
 
 LOCATIONIQ_KEY = os.getenv("LOCATIONIQ_KEY")
 ORS_KEY = os.getenv("ORS_KEY")
-print("ORS_KEY =", ORS_KEY)
+
 if not ORS_KEY:
     raise ValueError("❌ ORS_KEY missing! Set it in Environment Variables.")
 
@@ -593,7 +593,7 @@ def get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng):
 
 
 
-#=================  login ================= 
+#=================  login =================
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -627,7 +627,7 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
-#=================  counter_login ================= 
+#=================  counter_login =================
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     error = ""
@@ -717,7 +717,7 @@ def counter_login():
 
     return render_template_string(BASE_HTML, content=login_html)
 
-#=================  deshboard ================= 
+#=================  deshboard =================
 
 @app.route("/dashboard")
 def dashboard():
@@ -1671,11 +1671,12 @@ def search():
     session["date"] = travel_date
 
     # Get lat/lng automatically from station names
+
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    if not from_lat or not to_lat:
-        return render_alert("Could not find coordinates for the selected stations")
+    #if not from_lat or not to_lat:
+     #   return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
     distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
