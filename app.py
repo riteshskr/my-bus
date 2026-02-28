@@ -1693,7 +1693,7 @@ def search():
         return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
-    distance_km, duration_min = get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng)
+    distance_km, duration_min = get_road_distance(from_lat, from_lng, to_lat, to_lng)
     if not distance_km:
         distance_km = 0
     session["distance_km"] = distance_km  # <-- store in session
