@@ -1105,7 +1105,9 @@ def buses(rid):
         <div class="journey-header text-white p-4 mb-4 rounded shadow">
             <div class="row align-items-center">
 
-                <div class="col-md-8 text-center text-md-start">
+                 <div class="col-md-8 text-center text-md-start p-3 rounded"
+                      style="background: linear-gradient(135deg, #11998e, #38ef7d);">;
+                             
                     <h2 class="fw-bold mb-2">
                         📍 {from_station} ➝ {to_station}
                     </h2>
