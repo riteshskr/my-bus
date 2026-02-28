@@ -61,7 +61,7 @@ Compress(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet"
+    async_mode="threading"
 )
 
 
@@ -1669,11 +1669,13 @@ def search():
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    if not from_lat or not to_lat:
+    if None in [from_lat, from_lng, to_lat, to_lng]:
         return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
     distance_km, duration_min = get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng)
+    if not distance_km:
+        distance_km = 0
     session["distance_km"] = distance_km  # <-- store in session
     # ---------------- Route finding logic ----------------
     from_routes = supabase_query("route_stations", filters={"station_name": from_station})
@@ -2098,5 +2100,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=True   # ✅ ADD THIS
+        debug=False   # ✅ ADD THIS
     )
