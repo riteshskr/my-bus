@@ -1,29 +1,22 @@
 Flask==2.3.3
 Flask-SocketIO==5.3.6
 Flask-Compress==1.15
-psycopg[binary,pool]==3.2.12
+Flask-Limiter==3.5.1
+Flask-CORS==4.0.0
+
 gunicorn==21.2.0
-razorpay==1.4.1
-setuptools
-razorpay
-eventlet
-gevent
-gevent-websocket
+eventlet==0.36.1
+
+psycopg2-binary>=2.9
+supabase
 python-dotenv
 requests
-mysql-connector-python
-Flask-Limiter>=4.0.0
-flask-wtf
-flask-cors
-psycopg2-binary
-
-
-
-
-
-मैं आपको advanced DNS fix दूँगा।
-
-nslookup supabase.co    ping -4 supabase.co
-अगर इसके बाद भी 49.44.79.236 ही आ रहा है
-तो 100% Jio DNS issue confirm हो जाएगा
-और फिर Google DNS manually set करना final solution होगा।
+numpy
+bcrypt
+openpyxl
+redis==5.0.1
+psutil==5.9.8
+razorpay==1.4.1
+python-dateutil
+pandas
+setuptools

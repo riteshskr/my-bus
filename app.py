@@ -1,5 +1,3 @@
-#import eventlet
-#eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
@@ -2130,5 +2128,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=False   # ✅ ADD THIS
+        debug=False,   # ✅ ADD THIS
+        allow_unsafe_werkzeug = True
     )
