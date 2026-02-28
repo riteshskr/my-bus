@@ -527,22 +527,28 @@ def render_alert(message):
     )
 
 # ================= Get Coordinates =================
-def get_lat_lng(place_name):
+def get_lat_lng(station_name, state="Rajasthan", country="India"):
     """
-    ORS Pelias Geocoding से latitude और longitude निकालें
-    Returns: lat, lon
+    ORS-friendly Geocoding
+    - Automatically adds state and country if missing
+    - Returns: lat, lon
     """
+    # Full place string
+    full_place = f"{station_name}, {state}, {country}"
+
     try:
-        geo = client.pelias_search(text=place_name)
+        geo = client.pelias_search(text=full_place)
+
         if not geo['features']:
-            print("❌ Location not found:", place_name)
+            print(f"❌ Could not find coordinates for: {full_place}")
             return None, None
 
         lon, lat = geo['features'][0]['geometry']['coordinates']  # [lon, lat]
-        print(f"✅ {place_name} → {lat}, {lon}")
+        print(f"✅ {full_place} → {lat}, {lon}")
         return lat, lon
+
     except Exception as e:
-        print("❌ Geocoding Error:", e)
+        print(f"❌ ORS Geocoding Error for {full_place}: {e}")
         return None, None
 
 # ================= Get Road Distance =================
