@@ -230,6 +230,7 @@ BOOKED.forEach(b => lockSeat(b.seat_number));
 
 // ===== heartbeat (light) =====
 setInterval(()=>{ fetch("/heartbeat"); }, 120000);
+setInterval(() => { location.reload();}, 5000);
 </script>
 </body>
 </html>

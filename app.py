@@ -1,5 +1,5 @@
-import eventlet
-eventlet.monkey_patch()
+#import eventlet
+#eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
@@ -1573,6 +1573,16 @@ function statusBox(t) {{
 </html>
 """
 
+@app.route("/api/booked/<int:sid>/<travel_date>")
+def get_booked(sid, travel_date):
+    bookings = supabase.table("bookings") \
+        .select("seat_number") \
+        .eq("schedule_id", sid) \
+        .eq("date", travel_date) \
+        .execute()
+
+    seats = [b["seat_number"] for b in bookings.data]
+    return {"seats": seats}
 
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
