@@ -1,3 +1,5 @@
+#import eventlet
+#eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
@@ -47,7 +49,7 @@ if RAZORPAY_ENABLED:
     ))
 else:
     razor_client = None
-MAPTILER_KEY = os.getenv("MAPTILER_KEY")
+
 LOCATIONIQ_KEY = os.getenv("LOCATIONIQ_KEY")
 
 # ================= APP =================
@@ -58,8 +60,8 @@ Compress(app)
 # ✅ SocketIO Configuration
 socketio = SocketIO(
     app,
-    async_mode="threading",
-    cors_allowed_origins="*"
+    cors_allowed_origins="*",
+    async_mode="eventlet"
 )
 
 
@@ -523,38 +525,29 @@ def render_alert(message):
     )
 
 def get_lat_lng(station_name):
+    url = "https://us1.locationiq.com/v1/search.php"
+
+    params = {
+        "key": LOCATIONIQ_KEY,
+        "q": f"{station_name}, Rajasthan, India",
+        "format": "json",
+        "limit": 1,
+        "addressdetails": 1,  # Better accuracy
+        "fuzzy": 0.9
+    }
+
     try:
-        api_key = os.getenv("MAPTILER_KEY")
-
-        if not api_key:
-            print("❌ MAPTILER_KEY missing")
-            return None, None
-
-        query = f"{station_name}, Rajasthan, India"
-        url = f"https://api.maptiler.com/geocoding/{query}.json"
-
-        params = {
-            "key": api_key,
-            "limit": 1
-        }
-
-        response = requests.get(url, params=params, timeout=10)
-        print("Geocoding Status:", response.status_code)
-
-        if response.status_code != 200:
-            print("MapTiler Error:", response.text)
-            return None, None
+        response = requests.get(url, params=params, timeout=8)
+        response.raise_for_status()
 
         data = response.json()
 
-        if "features" not in data or not data["features"]:
-            print("❌ No location found:", station_name)
+        if not data:
+            print("❌ City not found:", station_name)
             return None, None
 
-        coordinates = data["features"][0]["geometry"]["coordinates"]
-
-        lng = float(coordinates[0])
-        lat = float(coordinates[1])
+        lat = float(data[0]["lat"])
+        lng = float(data[0]["lon"])
 
         print(f"✅ {station_name} → {lat}, {lng}")
 
@@ -564,28 +557,18 @@ def get_lat_lng(station_name):
         print("❌ Geocoding Error:", e)
         return None, None
 
-def get_road_distance(from_lat, from_lng, to_lat, to_lng):
-
+def get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng):
+    # Validate coordinates
     if None in [from_lat, from_lng, to_lat, to_lng]:
         print("❌ Invalid coordinates")
         return None, None
 
+    base_url = "https://us1.locationiq.com/v1/directions/driving"
+    url = f"{base_url}/{from_lng},{from_lat};{to_lng},{to_lat}?key={LOCATIONIQ_KEY}&overview=simplified&alternatives=false&steps=false"
+
     try:
-        api_key = os.getenv("MAPTILER_KEY")
-
-        url = f"https://api.maptiler.com/directions/v2/driving/{from_lng},{from_lat};{to_lng},{to_lat}.json"
-
-        params = {
-            "key": api_key
-        }
-
-        response = requests.get(url, params=params, timeout=10)
-        print("Directions Status:", response.status_code)
-
-        if response.status_code != 200:
-            print("MapTiler Direction Error:", response.text)
-            return None, None
-
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
         data = response.json()
 
         if "routes" not in data or not data["routes"]:
@@ -593,7 +576,6 @@ def get_road_distance(from_lat, from_lng, to_lat, to_lng):
             return None, None
 
         route = data["routes"][0]
-
         distance_km = round(route["distance"] / 1000, 2)
         duration_min = round(route["duration"] / 60, 2)
 
@@ -874,8 +856,7 @@ def view_bookings():
                 b.get("seat_number"),
                 b.get("formatted_date"),
                 b.get("fare"),
-                b.get("payment_mode"),
-                b.get("booked_by_type")
+                b.get("payment_mode")
             ])
 
         file_stream = io.BytesIO()
@@ -942,7 +923,6 @@ def view_bookings():
                     <th>Date</th>
                     <th>Fare</th>
                     <th>payment mode</th>
-                    <th>Book by </th>
                 </tr>
             </thead>
             <tbody>
@@ -958,7 +938,6 @@ def view_bookings():
                     f"<td>{b.get('formatted_date')}</td>"
                     f"<td>{b.get('fare')}</td>"
                     f"<td>{b.get('payment_mode')}</td>"
-                    f"<td>{b.get('booked_by_type')}</td>"
                     f"</tr>"
                     for b in filtered
                 ])}
@@ -1571,16 +1550,6 @@ function statusBox(t) {{
 </html>
 """
 
-@app.route("/api/booked/<int:sid>/<travel_date>")
-def get_booked(sid, travel_date):
-    bookings = supabase.table("seat_bookings") \
-        .select("seat_number") \
-        .eq("schedule_id", sid) \
-        .eq("date", travel_date) \
-        .execute()
-
-    seats = [b["seat_number"] for b in bookings.data]
-    return {"seats": seats}
 
 @app.route("/create-counter", methods=["GET", "POST"])
 @admin_required
@@ -1697,13 +1666,11 @@ def search():
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    if None in [from_lat, from_lng, to_lat, to_lng]:
+    if not from_lat or not to_lat:
         return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
-    distance_km, duration_min = get_road_distance(from_lat, from_lng, to_lat, to_lng)
-    if not distance_km:
-        distance_km = 0
+    distance_km, duration_min = get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng)
     session["distance_km"] = distance_km  # <-- store in session
     # ---------------- Route finding logic ----------------
     from_routes = supabase_query("route_stations", filters={"station_name": from_station})
@@ -2128,6 +2095,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=False,   # ✅ ADD THIS
-        allow_unsafe_werkzeug = True
+        debug=True   # ✅ ADD THIS
     )
