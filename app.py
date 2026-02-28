@@ -1573,7 +1573,7 @@ function statusBox(t) {{
 
 @app.route("/api/booked/<int:sid>/<travel_date>")
 def get_booked(sid, travel_date):
-    bookings = supabase.table("bookings") \
+    bookings = supabase.table("seat_bookings") \
         .select("seat_number") \
         .eq("schedule_id", sid) \
         .eq("date", travel_date) \
