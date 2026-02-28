@@ -52,7 +52,12 @@ else:
     razor_client = None
 
 LOCATIONIQ_KEY = os.getenv("LOCATIONIQ_KEY")
+ORS_KEY = os.getenv("ORS_KEY")
+print("ORS_KEY =", ORS_KEY)
+if not ORS_KEY:
+    raise ValueError("❌ ORS_KEY missing! Set it in Environment Variables.")
 
+client = openrouteservice.Client(key=ORS_KEY)
 # ================= APP =================
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "super-secret-key-12345")
@@ -513,8 +518,7 @@ def home():
 
 
 # ================= get-distance =================
-ORS_KEY = os.getenv("ORS_KEY")  # अपनी ORS API key
-client = openrouteservice.Client(key=ORS_KEY)
+
 def render_alert(message):
     """Show a Bootstrap alert message in browser"""
     return render_template_string(
@@ -553,8 +557,7 @@ def get_lat_lng(station_name, state="Rajasthan", country="India"):
         return None, None
 
 # ================= Get Road Distance =================
-ORS_KEY = os.getenv("ORS_KEY")  # अपनी ORS API key
-client = openrouteservice.Client(key=ORS_KEY)
+
 
 def get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng):
     """
