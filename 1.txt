@@ -16,3 +16,14 @@ Flask-Limiter>=4.0.0
 flask-wtf
 flask-cors
 psycopg2-binary
+
+
+
+
+
+मैं आपको advanced DNS fix दूँगा।
+
+nslookup supabase.co    ping -4 supabase.co
+अगर इसके बाद भी 49.44.79.236 ही आ रहा है
+तो 100% Jio DNS issue confirm हो जाएगा
+और फिर Google DNS manually set करना final solution होगा।

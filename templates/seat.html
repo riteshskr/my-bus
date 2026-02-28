@@ -41,6 +41,7 @@
 <div id="bus-speed" class="badge bg-info p-2 mb-3" style="font-size: 1.2rem;">
         ⏱️ Speed: -- km/h
     </div>
+     <h3>Fare Debug: ₹{{ total_fare }}</h3>
     <h2>| 🛣️ Route: {{ from_station }} → {{ to_station }}  </h2>
     <h4>⏰ Departure: {{ departure_time }}</h4>
     <h5>
@@ -174,14 +175,21 @@ function bookSeat(seat){
     btn.innerText = "⏳ Booking...";
     btn.disabled = true;
 	
-    let fare = 0;
-    let payment_mode = "cash";
+   const TOTAL_FARE = {{ total_fare }};
+   let fare = TOTAL_FARE;
 
-    if(USER_ROLE === "counter"){
-        fare = parseInt(prompt("Fare:"));
-        payment_mode = prompt("Payment: cash/online","cash");
+   let payment_mode = "online";
+  if(USER_ROLE === "counter" || USER_ROLE === "admin"){
+    let customFare = prompt("Fare (Default ₹" + TOTAL_FARE + "):", TOTAL_FARE);
+    if(customFare !== null && customFare !== ""){
+        let parsed = parseFloat(customFare);
+        if(!isNaN(parsed)){
+            fare = parsed;
+        }
     }
 
+    payment_mode = prompt("Payment: cash/online","cash") || "cash";
+}
     fetch("/book",{
         method:"POST",
         headers:{ "Content-Type":"application/json" },
@@ -201,7 +209,7 @@ function bookSeat(seat){
             btn.classList.remove("btn-success");
             btn.classList.add("btn-danger");
             btn.innerText = "X" + seat;
-             alert("✅ Seat " + seat + " booked! Fare: ₹" + (fare || 250));
+             alert("✅ Seat " + seat + " booked! Fare: ₹" + (fare));
         }else{
             alert(d.error);
             btn.innerText = oldText;

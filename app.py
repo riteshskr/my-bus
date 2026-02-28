@@ -1,9 +1,12 @@
+#import eventlet
+#eventlet.monkey_patch()
 from asyncio import transports
+import os
 from dotenv import load_dotenv
+load_dotenv()
 import json
 import bcrypt
 import traceback
-load_dotenv()
 from openpyxl import Workbook
 from flask import send_file
 import io
@@ -22,12 +25,11 @@ from dateutil import parser
 import pandas as pd
 from flask import Response
 import razorpay
-import os
-
+from time import sleep
+import logging
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise Exception("SUPABASE_URL और SUPABASE_KEY environment variables ज़रूरी हैं!")
 
@@ -62,44 +64,57 @@ socketio = SocketIO(
     async_mode="eventlet"
 )
 
-# ================= DB HELPER FUNCTIONS =================
-def supabase_query(table, operation="select", data=None, filters=None):
-    """Supabase queries के लिए helper function"""
-    try:
-        if operation == "select":
-            query = supabase.table(table).select("*")
-            if filters:
-                for key, value in filters.items():
-                    if isinstance(value, list):
-                        query = query.in_(key, value)
-                    else:
+
+def supabase_query(table, operation="select", data=None, filters=None, max_retries=5):
+    """Network timeout के लिए optimized - WinError 10060 fixed"""
+
+    for attempt in range(max_retries):
+        try:
+            if operation == "select":
+                query = supabase.table(table).select("*")
+                if filters:
+                    for key, value in filters.items():
+                        if isinstance(value, list):
+                            query = query.in_(key, value)
+                        else:
+                            query = query.eq(key, value)
+                response = query.execute()
+                return response.data
+
+            elif operation == "insert":
+                if isinstance(data, list):
+                    response = supabase.table(table).insert(data).execute()
+                else:
+                    response = supabase.table(table).insert([data]).execute()
+                return response.data
+
+            elif operation == "update":
+                query = supabase.table(table).update(data)
+                if filters:
+                    for key, value in filters.items():
                         query = query.eq(key, value)
-            response = query.execute()
-            return response.data
+                response = query.execute()
+                return response.data
 
-        elif operation == "insert":
-            response = supabase.table(table).insert(data).execute()
-            return response.data
+            elif operation == "delete":
+                query = supabase.table(table).delete()
+                if filters:
+                    for key, value in filters.items():
+                        query = query.eq(key, value)
+                response = query.execute()
+                return response.data
 
-        elif operation == "update":
-            query = supabase.table(table).update(data)
-            if filters:
-                for key, value in filters.items():
-                    query = query.eq(key, value)
-            response = query.execute()
-            return response.data
-
-        elif operation == "delete":
-            query = supabase.table(table).delete()
-            if filters:
-                for key, value in filters.items():
-                    query = query.eq(key, value)
-            response = query.execute()
-            return response.data
-
-    except Exception as e:
-        print(f"Supabase query error: {e}")
-        return None
+        except Exception as e:
+            print(f"⚠️ Attempt {attempt + 1} failed: {str(e)[:80]}")
+            if attempt < max_retries - 1:
+                wait_time = min(10, 3 * (2 ** attempt))  # Max 10s wait
+                print(f"⏳ {wait_time}s wait before retry...")
+                sleep(wait_time)
+                continue
+            else:
+                print(f"❌ Supabase query failed after {max_retries} retries")
+                print(f"   📋 Table: {table}, Op: {operation}")
+                return None
 
 
 # ================= DECORATORS =================
@@ -496,25 +511,82 @@ def home():
     )
 
 
-# ================= get-distance ================= 
-@app.route("/get-distance")
-def get_distance():
-    from_lat = request.args.get("from_lat")
-    from_lng = request.args.get("from_lng")
-    to_lat = request.args.get("to_lat")
-    to_lng = request.args.get("to_lng")
+# ================= get-distance =================
+def render_alert(message):
+    """Show a Bootstrap alert message in browser"""
+    return render_template_string(
+        BASE_HTML,
+        content=f"""
+        <div class="alert alert-warning text-center">
+            <h3>{message}</h3>
+            <a href="/" class="btn btn-primary mt-3">Back to Home</a>
+        </div>
+        """
+    )
 
-    url = f"https://us1.locationiq.com/v1/directions/driving/{from_lng},{from_lat};{to_lng},{to_lat}?key={LOCATIONIQ_KEY}&overview=false"
+def get_lat_lng(station_name):
+    url = "https://us1.locationiq.com/v1/search.php"
 
-    response = requests.get(url)
-    data = response.json()
+    params = {
+        "key": LOCATIONIQ_KEY,
+        "q": f"{station_name}, Rajasthan, India",
+        "format": "json",
+        "limit": 1,
+        "addressdetails": 1,  # Better accuracy
+        "fuzzy": 0.9
+    }
 
-    if "routes" in data:
-        distance_m = data["routes"][0]["distance"]
-        distance_km = round(distance_m / 1000, 2)
-        return jsonify({"distance": distance_km})
-    else:
-        return jsonify({"error": "Distance not found"})
+    try:
+        response = requests.get(url, params=params, timeout=8)
+        response.raise_for_status()
+
+        data = response.json()
+
+        if not data:
+            print("❌ City not found:", station_name)
+            return None, None
+
+        lat = float(data[0]["lat"])
+        lng = float(data[0]["lon"])
+
+        print(f"✅ {station_name} → {lat}, {lng}")
+
+        return lat, lng
+
+    except Exception as e:
+        print("❌ Geocoding Error:", e)
+        return None, None
+
+def get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng):
+    # Validate coordinates
+    if None in [from_lat, from_lng, to_lat, to_lng]:
+        print("❌ Invalid coordinates")
+        return None, None
+
+    base_url = "https://us1.locationiq.com/v1/directions/driving"
+    url = f"{base_url}/{from_lng},{from_lat};{to_lng},{to_lat}?key={LOCATIONIQ_KEY}&overview=simplified&alternatives=false&steps=false"
+
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if "routes" not in data or not data["routes"]:
+            print("❌ No route found")
+            return None, None
+
+        route = data["routes"][0]
+        distance_km = round(route["distance"] / 1000, 2)
+        duration_min = round(route["duration"] / 60, 2)
+
+        print(f"✅ Distance: {distance_km} km")
+        print(f"✅ Duration: {duration_min} min")
+
+        return distance_km, duration_min
+
+    except Exception as e:
+        print("❌ Direction API Error:", e)
+        return None, None
 
 
 #=================  login ================= 
@@ -770,19 +842,22 @@ def view_bookings():
         wb = Workbook()
         ws = wb.active
         ws.title = "Bookings"
-        ws.append(["ID", "Passenger", "Route", "Bus", "Seat", "Date", "Fare","payment_mode",])
+        ws.append(["ID", "Passenger", "from_station", "to_station","Bus", "Seat", "Date", "Fare","payment_mode",])
 
         for b in filtered:
             schedule = schedule_map.get(str(b.get("schedule_id")), {})
             ws.append([
                 b.get("id"),
                 b.get("passenger_name"),
-                route_map.get(str(schedule.get("route_id")), ""),
+                b.get("from_station"),
+                b.get("to_station"),
+                #route_map.get(str(schedule.get("route_id")), ""),
                 schedule.get("bus_name", ""),
                 b.get("seat_number"),
                 b.get("formatted_date"),
                 b.get("fare"),
-                b.get("payment_mode")
+                b.get("payment_mode"),
+                b.get("booked_by_type")
             ])
 
         file_stream = io.BytesIO()
@@ -841,12 +916,15 @@ def view_bookings():
                 <tr>
                     <th>ID</th>
                     <th>Passenger</th>
-                    <th>Route</th>
+                    <th>Mobile No</th>
+                    <th>From station</th>
+                    <th>To </th>
                     <th>Bus</th>
                     <th>Seat</th>
                     <th>Date</th>
                     <th>Fare</th>
                     <th>payment mode</th>
+                    <th>Book by </th>
                 </tr>
             </thead>
             <tbody>
@@ -854,12 +932,15 @@ def view_bookings():
                     f"<tr>"
                     f"<td>{b.get('id')}</td>"
                     f"<td>{b.get('passenger_name')}</td>"
-                    f"<td>{route_map.get(str(schedule_map.get(str(b.get('schedule_id')),{}).get('route_id')), '')}</td>"
+                    f"<td>{b.get('mobile')}</td>"
+                    f"<td>{b.get('from_station')}</td>"
+                    f"<td>{b.get('to_station')}</td>"
                     f"<td>{schedule_map.get(str(b.get('schedule_id')),{}).get('bus_name','')}</td>"
                     f"<td>{b.get('seat_number')}</td>"
                     f"<td>{b.get('formatted_date')}</td>"
                     f"<td>{b.get('fare')}</td>"
                     f"<td>{b.get('payment_mode')}</td>"
+                    f"<td>{b.get('booked_by_type')}</td>"
                     f"</tr>"
                     for b in filtered
                 ])}
@@ -971,34 +1052,93 @@ def api_add_station(route_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
-
 @app.route("/buses/<int:rid>")
 def buses(rid):
-    route = supabase_query("routes", filters={"id": rid})[0]
+    route_data = supabase_query("routes", filters={"id": rid})
+    if not route_data:
+        return "Route not found", 404
+
+    route = route_data[0]
     buses = supabase_query("schedules", filters={"route_id": rid}) or []
 
+    # Session se data lo
+    from_station = session.get("from_station", "Unknown")
+    to_station = session.get("to_station", "Unknown")
+    distance_km = session.get("distance_km", 0)
+
     bus_html = ""
+
+    # ✅ Proper indentation
     for bus in buses:
+        fare_per_km = bus.get("fare", 0)
+        total_fare = round(float(distance_km) * float(fare_per_km))
+
         bus_html += f"""
-        <div class="card mb-3">
-            <div class="card-body">
-                <h5>{bus['bus_name']}</h5>
-                <p>Departure: {bus['departure_time']}</p>
-                <a href="/seats/{bus['id']}" class="btn btn-success">Book</a>
+        <div class="col-md-6 col-lg-4">
+            <div class="card bus-card shadow-sm h-100">
+                <div class="card-body d-flex flex-column">
+
+                    <h5 class="card-title text-primary fw-bold">
+                        🚌 {bus['bus_name']}
+                    </h5>
+
+                    <p class="mb-1">
+                        ⏰ <strong>Departure:</strong> {bus['departure_time']}
+                    </p>
+
+                    <div class="mt-auto">
+                        <div class="fare-box text-center mb-3">
+                            Total Fare  
+                            <h4 class="text-success fw-bold">₹{total_fare}</h4>
+                        </div>
+
+                        <a href="/seats/{bus['id']}" 
+                           class="btn btn-success w-100 fw-bold">
+                           Book Now
+                        </a>
+                    </div>
+
+                </div>
             </div>
         </div>
         """
 
     content = f"""
-    <div class="container">
-        <h2>{route['route_name']}</h2>
-        {bus_html}
-        <a href="/" class="btn btn-secondary">Home</a>
+    <div class="container mt-4">
+        <div class="journey-header text-white p-4 mb-4 rounded shadow">
+            <div class="row align-items-center">
+
+                <div class="col-md-8 text-center text-md-start">
+                    <h2 class="fw-bold mb-2">
+                        📍 {from_station} ➝ {to_station}
+                    </h2>
+                    <p class="mb-0">
+                        🛣 {distance_km} km Journey
+                    </p>
+                </div>
+
+                <div class="col-md-4 text-center text-md-end mt-3 mt-md-0">
+                    <span class="badge bg-light text-dark fs-6 p-2">
+                        🚍 Available Buses: {len(buses)}
+                    </span>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="row g-4">
+            {bus_html}
+        </div>
+
+        <div class="text-center mt-4">
+            <a href="/" class="btn btn-outline-secondary">
+                ⬅ Back to Home
+            </a>
+        </div>
     </div>
     """
 
     return render_template_string(BASE_HTML, content=content)
-
 
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
@@ -1011,6 +1151,10 @@ def seat_page(sid):
         route_id = bus["route_id"]
 
         today = session.get("date")
+        distance_km = session.get("distance_km", 0)   # ✅ fixed indent
+
+        fare_per_km = bus.get("fare", 0)
+        total_fare = round(float(distance_km) * float(fare_per_km))
 
         route_rows = supabase_query("route_stations", filters={
             "route_id": route_id
@@ -1042,15 +1186,17 @@ def seat_page(sid):
         for b in bookings:
             if is_overlap(b):
                 blocked.append({"seat_number": b["seat_number"]})
-
+     
+	
         return render_template(
             "seat.html",
+            total_fare=total_fare,   # ✅ सही fare जा रहा है
             schedule=bus,
             booked_seats=blocked,
             sid=sid,
             travel_date=today,
             bus_name=bus['bus_name'],
-            MAPTILER_KEY=os.getenv("MAPTILER_KEY"),	
+            MAPTILER_KEY=os.getenv("MAPTILER_KEY"),
             departure_time=bus['departure_time']
         )
 
@@ -1058,6 +1204,8 @@ def seat_page(sid):
         import traceback
         traceback.print_exc()
         return f"Server Error: {e}", 500
+
+
 
 @app.route("/api/bus/<int:sid>")
 def bus_from_table(sid):
@@ -1102,7 +1250,7 @@ def book():
             role = "guest"
 
         fare = int(data.get("fare", 0))
-        payment_mode = data.get("payment_mode", "cash")
+        payment_mode = data.get("payment_mode", "online")
 
         booking_data = {
             "schedule_id": schedule_id,
@@ -1517,7 +1665,17 @@ def search():
     session["to_station"] = to_station
     session["date"] = travel_date
 
-    # Find routes containing both stations
+    # Get lat/lng automatically from station names
+    from_lat, from_lng = get_lat_lng(from_station)
+    to_lat, to_lng = get_lat_lng(to_station)
+
+    if not from_lat or not to_lat:
+        return render_alert("Could not find coordinates for the selected stations")
+
+    # Road distance (optional, no check)
+    distance_km, duration_min = get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng)
+    session["distance_km"] = distance_km  # <-- store in session
+    # ---------------- Route finding logic ----------------
     from_routes = supabase_query("route_stations", filters={"station_name": from_station})
     to_routes = supabase_query("route_stations", filters={"station_name": to_station})
 
@@ -1534,7 +1692,6 @@ def search():
 
     from_route_ids = set([r["route_id"] for r in from_routes])
     to_route_ids = set([r["route_id"] for r in to_routes])
-
     common_routes = from_route_ids.intersection(to_route_ids)
 
     if not common_routes:
