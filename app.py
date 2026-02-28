@@ -513,7 +513,8 @@ def home():
 
 
 # ================= get-distance =================
-# ================= Alert Function =================
+ORS_KEY = os.getenv("ORS_KEY")  # अपनी ORS API key
+client = openrouteservice.Client(key=ORS_KEY)
 def render_alert(message):
     """Show a Bootstrap alert message in browser"""
     return render_template_string(
