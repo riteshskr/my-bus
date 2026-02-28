@@ -10,6 +10,7 @@ import traceback
 from openpyxl import Workbook
 from flask import send_file
 import io
+import openrouteservice
 import setuptools
 from flask_cors import CORS
 import requests
@@ -512,6 +513,7 @@ def home():
 
 
 # ================= get-distance =================
+# ================= Alert Function =================
 def render_alert(message):
     """Show a Bootstrap alert message in browser"""
     return render_template_string(
@@ -524,69 +526,61 @@ def render_alert(message):
         """
     )
 
-def get_lat_lng(station_name):
-    url = "https://us1.locationiq.com/v1/search.php"
-
-    params = {
-        "key": LOCATIONIQ_KEY,
-        "q": f"{station_name}, Rajasthan, India",
-        "format": "json",
-        "limit": 1,
-        "addressdetails": 1,  # Better accuracy
-        "fuzzy": 0.9
-    }
-
+# ================= Get Coordinates =================
+def get_lat_lng(place_name):
+    """
+    ORS Pelias Geocoding से latitude और longitude निकालें
+    Returns: lat, lon
+    """
     try:
-        response = requests.get(url, params=params, timeout=8)
-        response.raise_for_status()
-
-        data = response.json()
-
-        if not data:
-            print("❌ City not found:", station_name)
+        geo = client.pelias_search(text=place_name)
+        if not geo['features']:
+            print("❌ Location not found:", place_name)
             return None, None
 
-        lat = float(data[0]["lat"])
-        lng = float(data[0]["lon"])
-
-        print(f"✅ {station_name} → {lat}, {lng}")
-
-        return lat, lng
-
+        lon, lat = geo['features'][0]['geometry']['coordinates']  # [lon, lat]
+        print(f"✅ {place_name} → {lat}, {lon}")
+        return lat, lon
     except Exception as e:
         print("❌ Geocoding Error:", e)
         return None, None
 
-def get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng):
-    # Validate coordinates
+# ================= Get Road Distance =================
+ORS_KEY = os.getenv("ORS_KEY")  # अपनी ORS API key
+client = openrouteservice.Client(key=ORS_KEY)
+
+def get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng):
+    """
+    ORS Directions API से distance और duration निकालें
+    Returns: distance_km, duration_min
+    """
     if None in [from_lat, from_lng, to_lat, to_lng]:
         print("❌ Invalid coordinates")
         return None, None
 
-    base_url = "https://us1.locationiq.com/v1/directions/driving"
-    url = f"{base_url}/{from_lng},{from_lat};{to_lng},{to_lat}?key={LOCATIONIQ_KEY}&overview=simplified&alternatives=false&steps=false"
-
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
+        # ORS Directions expects [lon, lat]
+        from_coords = [from_lng, from_lat]
+        to_coords = [to_lng, to_lat]
 
-        if "routes" not in data or not data["routes"]:
-            print("❌ No route found")
-            return None, None
+        route = client.directions(
+            coordinates=[from_coords, to_coords],
+            profile='driving-car',
+            format='geojson'
+        )
 
-        route = data["routes"][0]
-        distance_km = round(route["distance"] / 1000, 2)
-        duration_min = round(route["duration"] / 60, 2)
+        segment = route['features'][0]['properties']['segments'][0]
+        distance_km = round(segment['distance'] / 1000, 2)
+        duration_min = round(segment['duration'] / 60, 2)
 
         print(f"✅ Distance: {distance_km} km")
         print(f"✅ Duration: {duration_min} min")
-
         return distance_km, duration_min
 
     except Exception as e:
-        print("❌ Direction API Error:", e)
+        print("❌ ORS Directions Error:", e)
         return None, None
+
 
 
 #=================  login ================= 
@@ -1062,6 +1056,8 @@ def buses(rid):
     from_station = session.get("from_station", "Unknown")
     to_station = session.get("to_station", "Unknown")
     distance_km = session.get("distance_km", 0)
+    if distance_km is None:
+        distance_km = 0  # fallback
 
     bus_html = ""
 
@@ -1672,7 +1668,7 @@ def search():
         return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
-    distance_km, duration_min = get_road_distance_locationiq(from_lat, from_lng, to_lat, to_lng)
+    distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
     session["distance_km"] = distance_km  # <-- store in session
     # ---------------- Route finding logic ----------------
     from_routes = supabase_query("route_stations", filters={"station_name": from_station})
