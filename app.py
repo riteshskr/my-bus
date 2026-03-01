@@ -29,7 +29,7 @@ from flask import Response
 import razorpay
 from time import sleep
 import logging
-
+import requests
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -544,15 +544,17 @@ def get_lat_lng(station_name, state="Rajasthan", country="India"):
 
     params = {
         "text": full_place,
-        "boundary.country": "IN",   # ✅ India force
-        "size": 1                   # ✅ only best match
+        "boundary.country": "IN",
+        "size": 1
     }
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
-        data = response.json()
 
-        print("📦 Raw Response:", data)
+        print("Status Code:", response.status_code)
+        print("Raw:", response.text)
+
+        data = response.json()
 
         if "features" in data and len(data["features"]) > 0:
             lon, lat = data["features"][0]["geometry"]["coordinates"]
