@@ -1680,7 +1680,11 @@ def search():
 
     # if not from_lat or not to_lat:
     #   return render_alert("Could not find coordinates for the selected stations")
+    if not from_lat or not from_lng:
+        return render_alert(f"❌ Could not find coordinates for {from_station}")
 
+    if not to_lat or not to_lng:
+        return render_alert(f"❌ Could not find coordinates for {to_station}")
     # Road distance (optional, no check)
     distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
     session["distance_km"] = distance_km  # <-- store in session
