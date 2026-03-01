@@ -1,8 +1,9 @@
-#import eventlet
-#eventlet.monkey_patch()
+# import eventlet
+# eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
 import json
 import bcrypt
@@ -28,6 +29,7 @@ from flask import Response
 import razorpay
 from time import sleep
 import logging
+
 # ===== SUPABASE CONFIG =====
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -214,8 +216,6 @@ def init_db():
         traceback.print_exc()
 
 
-
-
 # ================= SOCKET EVENTS =================
 @socketio.on("connect")
 def handle_connect():
@@ -247,8 +247,6 @@ def gps(data):
         "speed": speed,
         "timestamp": datetime.now().isoformat()
     })
-
-
 
 
 # ================= HTML TEMPLATES =================
@@ -531,6 +529,7 @@ def render_alert(message):
         """
     )
 
+
 # ================= Get Coordinates =================
 def get_lat_lng(station_name, state="Rajasthan", country="India"):
     """
@@ -555,6 +554,7 @@ def get_lat_lng(station_name, state="Rajasthan", country="India"):
     except Exception as e:
         print(f"❌ ORS Geocoding Error for {full_place}: {e}")
         return None, None
+
 
 # ================= Get Road Distance =================
 
@@ -592,8 +592,7 @@ def get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng):
         return None, None
 
 
-
-#=================  login =================
+# =================  login =================
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = ""
@@ -627,7 +626,8 @@ def login():
         content=render_template_string(LOGIN_HTML, error=error, is_counter=False)
     )
 
-#=================  counter_login =================
+
+# =================  counter_login =================
 @app.route("/counter_login", methods=["GET", "POST"])
 def counter_login():
     error = ""
@@ -660,7 +660,7 @@ def counter_login():
 
                 if res.data and len(res.data) > 0:
                     user = res.data[0]
-                    db_pass = user["password"]   # hashed password from DB
+                    db_pass = user["password"]  # hashed password from DB
 
                     # 🔑 यहीं bcrypt check होगा
                     if bcrypt.checkpw(password.encode(), db_pass.encode()):
@@ -717,7 +717,8 @@ def counter_login():
 
     return render_template_string(BASE_HTML, content=login_html)
 
-#=================  deshboard =================
+
+# =================  deshboard =================
 
 @app.route("/dashboard")
 def dashboard():
@@ -775,10 +776,10 @@ def dashboard():
 
     return render_template_string(BASE_HTML, content=content)
 
-#================= View Bookings  =================
+
+# ================= View Bookings  =================
 @app.route("/bookings", methods=["GET"])
 def view_bookings():
-
     if not session.get("user_logged_in"):
         return redirect("/login")
 
@@ -846,7 +847,7 @@ def view_bookings():
         wb = Workbook()
         ws = wb.active
         ws.title = "Bookings"
-        ws.append(["ID", "Passenger", "from_station", "to_station","Bus", "Seat", "Date", "Fare","payment_mode",])
+        ws.append(["ID", "Passenger", "from_station", "to_station", "Bus", "Seat", "Date", "Fare", "payment_mode", ])
 
         for b in filtered:
             schedule = schedule_map.get(str(b.get("schedule_id")), {})
@@ -855,7 +856,7 @@ def view_bookings():
                 b.get("passenger_name"),
                 b.get("from_station"),
                 b.get("to_station"),
-                #route_map.get(str(schedule.get("route_id")), ""),
+                # route_map.get(str(schedule.get("route_id")), ""),
                 schedule.get("bus_name", ""),
                 b.get("seat_number"),
                 b.get("formatted_date"),
@@ -884,7 +885,7 @@ def view_bookings():
                 <label>Route</label>
                 <select name="route_id" class="form-control" onchange="this.form.submit()">
                     <option value="">All</option>
-                    {''.join([f'<option value="{r["id"]}" {"selected" if str(route_id)==str(r["id"]) else ""}>{r["route_name"]}</option>' for r in routes])}
+                    {''.join([f'<option value="{r["id"]}" {"selected" if str(route_id) == str(r["id"]) else ""}>{r["route_name"]}</option>' for r in routes])}
                 </select>
             </div>
 
@@ -892,7 +893,7 @@ def view_bookings():
                 <label>Bus</label>
                 <select name="bus_id" class="form-control">
                     <option value="">All</option>
-                    {''.join([f'<option value="{s["id"]}" {"selected" if str(bus_id)==str(s["id"]) else ""}>{s.get("bus_name","")}</option>' for s in available_buses])}
+                    {''.join([f'<option value="{s["id"]}" {"selected" if str(bus_id) == str(s["id"]) else ""}>{s.get("bus_name", "")}</option>' for s in available_buses])}
                 </select>
             </div>
 
@@ -931,20 +932,20 @@ def view_bookings():
             </thead>
             <tbody>
                 {''.join([
-                    f"<tr>"
-                    f"<td>{b.get('id')}</td>"
-                    f"<td>{b.get('passenger_name')}</td>"
-                    f"<td>{b.get('mobile')}</td>"
-                    f"<td>{b.get('from_station')}</td>"
-                    f"<td>{b.get('to_station')}</td>"
-                    f"<td>{schedule_map.get(str(b.get('schedule_id')),{}).get('bus_name','')}</td>"
-                    f"<td>{b.get('seat_number')}</td>"
-                    f"<td>{b.get('formatted_date')}</td>"
-                    f"<td>{b.get('fare')}</td>"
-                    f"<td>{b.get('payment_mode')}</td>"
-                    f"</tr>"
-                    for b in filtered
-                ])}
+        f"<tr>"
+        f"<td>{b.get('id')}</td>"
+        f"<td>{b.get('passenger_name')}</td>"
+        f"<td>{b.get('mobile')}</td>"
+        f"<td>{b.get('from_station')}</td>"
+        f"<td>{b.get('to_station')}</td>"
+        f"<td>{schedule_map.get(str(b.get('schedule_id')), {}).get('bus_name', '')}</td>"
+        f"<td>{b.get('seat_number')}</td>"
+        f"<td>{b.get('formatted_date')}</td>"
+        f"<td>{b.get('fare')}</td>"
+        f"<td>{b.get('payment_mode')}</td>"
+        f"</tr>"
+        for b in filtered
+    ])}
             </tbody>
         </table>
     </div>
@@ -1030,7 +1031,8 @@ def manage_stations_page(route_id):
     });
     </script>
     """
-    return render_template_string(BASE_HTML, content=render_template_string(content, route_id=route_id, stations=stations))
+    return render_template_string(BASE_HTML,
+                                  content=render_template_string(content, route_id=route_id, stations=stations))
 
 
 # ================== API Add Station ==================
@@ -1053,6 +1055,8 @@ def api_add_station(route_id):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
+
 @app.route("/buses/<int:rid>")
 def buses(rid):
     route_data = supabase_query("routes", filters={"id": rid})
@@ -1113,7 +1117,7 @@ def buses(rid):
 
                  <div class="col-md-8 text-center text-md-start p-3 rounded"
                       style="background: linear-gradient(135deg, #11998e, #38ef7d);">;
-                             
+
                     <h2 class="fw-bold mb-2">
                         📍 {from_station} ➝ {to_station}
                     </h2>
@@ -1145,6 +1149,7 @@ def buses(rid):
 
     return render_template_string(BASE_HTML, content=content)
 
+
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
     try:
@@ -1156,7 +1161,7 @@ def seat_page(sid):
         route_id = bus["route_id"]
 
         today = session.get("date")
-        distance_km = session.get("distance_km", 0)   # ✅ fixed indent
+        distance_km = session.get("distance_km", 0)  # ✅ fixed indent
 
         fare_per_km = bus.get("fare", 0)
         total_fare = round(float(distance_km) * float(fare_per_km))
@@ -1191,11 +1196,10 @@ def seat_page(sid):
         for b in bookings:
             if is_overlap(b):
                 blocked.append({"seat_number": b["seat_number"]})
-     
-	
+
         return render_template(
             "seat.html",
-            total_fare=total_fare,   # ✅ सही fare जा रहा है
+            total_fare=total_fare,  # ✅ सही fare जा रहा है
             schedule=bus,
             booked_seats=blocked,
             sid=sid,
@@ -1209,7 +1213,6 @@ def seat_page(sid):
         import traceback
         traceback.print_exc()
         return f"Server Error: {e}", 500
-
 
 
 @app.route("/api/bus/<int:sid>")
@@ -1226,6 +1229,7 @@ def bus_from_table(sid):
         "lng": row.get("current_lng", 0),
         "speed": row.get("speed", 0)
     })
+
 
 @app.route("/book", methods=["POST"])
 def book():
@@ -1275,7 +1279,7 @@ def book():
 
         res = supabase.table("seat_bookings").insert(booking_data).execute()
         if not res.data:
-             return jsonify({"ok": False, "error": "Insert failed"})
+            return jsonify({"ok": False, "error": "Insert failed"})
 
         # 🔥 realtime broadcast
         socketio.emit(
@@ -1398,10 +1402,10 @@ def live_bus(sid):
                 stations.forEach(station => {{
                     const lat = parseFloat(station.lat || 27.2);
                     const lng = parseFloat(station.lng || 75.2);
-                    
+
                     if(!isNaN(lat) && !isNaN(lng)) {{
                         routePoints.push([lng, lat]);  // MapTiler uses [lng, lat]
-                        
+
                         // Add marker for station
                         new maptilersdk.Marker({{ color: '#28a745' }})
                             .setLngLat([lng, lat])
@@ -1438,7 +1442,7 @@ def live_bus(sid):
             // Bus marker
             const busMarkerElement = document.createElement('div');
             busMarkerElement.className = 'bus-marker';
-            
+
             const busMarker = new maptilersdk.Marker({{ element: busMarkerElement }})
                 .setLngLat([{bus.get('current_lng', 75.2)}, {bus.get('current_lat', 27.2)}])
                 .setPopup(new maptilersdk.Popup().setHTML('<b>🚌 बस यहाँ है</b>'))
@@ -1468,7 +1472,6 @@ def live_bus(sid):
     """
 
     return content
-
 
 
 @app.route("/driver/<int:sid>")
@@ -1675,8 +1678,8 @@ def search():
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    #if not from_lat or not to_lat:
-     #   return render_alert("Could not find coordinates for the selected stations")
+    # if not from_lat or not to_lat:
+    #   return render_alert("Could not find coordinates for the selected stations")
 
     # Road distance (optional, no check)
     distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
@@ -1992,9 +1995,9 @@ def api_update_route():
         return jsonify({"ok": False, "error": "Distance must be number"})
 
     supabase_query("routes", "update",
-        {"route_name": route_name, "distance_km": distance_km},
-        filters={"id": route_id}
-    )
+                   {"route_name": route_name, "distance_km": distance_km},
+                   filters={"id": route_id}
+                   )
 
     return jsonify({"ok": True})
 
@@ -2104,5 +2107,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=True   # ✅ ADD THIS
+        debug=True  # ✅ ADD THIS
     )
