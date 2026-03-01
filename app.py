@@ -532,27 +532,38 @@ def render_alert(message):
 
 # ================= Get Coordinates =================
 def get_lat_lng(station_name, state="Rajasthan", country="India"):
-    """
-    ORS-friendly Geocoding
-    - Automatically adds state and country if missing
-    - Returns: lat, lon
-    """
-    # Full place string
+
     full_place = f"{station_name}, {state}, {country}"
+    print("🔎 Searching:", full_place)
+
+    url = "https://api.openrouteservice.org/geocode/search"
+
+    headers = {
+        "Authorization": ORS_KEY
+    }
+
+    params = {
+        "text": full_place,
+        "boundary.country": "IN",   # ✅ India force
+        "size": 1                   # ✅ only best match
+    }
 
     try:
-        geo = client.pelias_search(text=full_place)
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        data = response.json()
 
-        if not geo['features']:
-            print(f"❌ Could not find coordinates for: {full_place}")
-            return None, None
+        print("📦 Raw Response:", data)
 
-        lon, lat = geo['features'][0]['geometry']['coordinates']  # [lon, lat]
-        print(f"✅ {full_place} → {lat}, {lon}")
-        return lat, lon
+        if "features" in data and len(data["features"]) > 0:
+            lon, lat = data["features"][0]["geometry"]["coordinates"]
+            print(f"✅ Found → {lat}, {lon}")
+            return lat, lon
+
+        print("❌ No coordinates found")
+        return None, None
 
     except Exception as e:
-        print(f"❌ ORS Geocoding Error for {full_place}: {e}")
+        print("❌ Geocoding Error:", e)
         return None, None
 
 
