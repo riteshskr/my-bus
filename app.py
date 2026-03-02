@@ -1,5 +1,5 @@
-# import eventlet
-# eventlet.monkey_patch()
+import eventlet
+eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
