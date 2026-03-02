@@ -595,7 +595,8 @@ def get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng):
         segment = route['features'][0]['properties']['segments'][0]
         distance_km = round(segment['distance'] / 1000, 2)
         duration_min = round(segment['duration'] / 60, 2)
-
+        if not isinstance(distance_km, (int, float)):
+            return 0, 0
         print(f"✅ Distance: {distance_km} km")
         print(f"✅ Duration: {duration_min} min")
         return distance_km, duration_min
@@ -1174,10 +1175,22 @@ def seat_page(sid):
         route_id = bus["route_id"]
 
         today = session.get("date")
+
         distance_km = session.get("distance_km", 0)  # ✅ fixed indent
 
+        try:
+            distance_km = float(distance_km)
+        except:
+            distance_km = 0
+
         fare_per_km = bus.get("fare", 0)
-        total_fare = round(float(distance_km) * float(fare_per_km))
+        try:
+            fare_per_km = float(fare_per_km)
+        except:
+            fare_per_km = 0
+
+        total_fare = round(distance_km * fare_per_km)
+       # total_fare = round(float(distance_km) * float(fare_per_km))
 
         route_rows = supabase_query("route_stations", filters={
             "route_id": route_id
@@ -1700,7 +1713,7 @@ def search():
         return render_alert(f"❌ Could not find coordinates for {to_station}")
     # Road distance (optional, no check)
     distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
-    session["distance_km"] = distance_km  # <-- store in session
+    session["distance_km"] = distance_km if distance_km else 0 # <-- store in session
     # ---------------- Route finding logic ----------------
     from_routes = supabase_query("route_stations", filters={"station_name": from_station})
     to_routes = supabase_query("route_stations", filters={"station_name": to_station})
