@@ -54,8 +54,8 @@ else:
     razor_client = None
 
 LOCATIONIQ_KEY = os.getenv("LOCATIONIQ_KEY")
-ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjI4ZTNlN2MwMDZiZTQ4OWFiY2QwMzVjMGM1NDliOWEzIiwiaCI6Im11cm11cjY0In0="
-
+#ORS_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjI4ZTNlN2MwMDZiZTQ4OWFiY2QwMzVjMGM1NDliOWEzIiwiaCI6Im11cm11cjY0In0="
+ORS_KEY  = os.getenv("ORS_KEY")
 if not ORS_KEY:
     raise ValueError("❌ ORS_KEY missing! Set it in Environment Variables.")
 
