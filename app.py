@@ -532,40 +532,43 @@ def render_alert(message):
 # ================= Get Coordinates =================
 def get_lat_lng(station_name, state="Rajasthan", country="India"):
 
-    full_place = f"{station_name}, {state}, {country}"
-    print("🔎 Searching:", full_place)
-
     url = "https://api.openrouteservice.org/geocode/search"
 
     headers = {
         "Authorization": ORS_KEY
     }
 
-    params = {
-        "text": full_place,
-        "boundary.country": "IN",
-        "size": 1
-    }
+    # possible search formats
+    searches = [
+        f"{station_name}, {state}, {country}",
+        f"{station_name}, {country}",
+        station_name
+    ]
 
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+    for place in searches:
 
-        print("Status Code:", response.status_code)
-        print("Raw:", response.text)
+        print("🔎 Searching:", place)
 
-        data = response.json()
+        params = {
+            "text": place,
+            "boundary.country": "IN",
+            "size": 1
+        }
 
-        if "features" in data and len(data["features"]) > 0:
-            lon, lat = data["features"][0]["geometry"]["coordinates"]
-            print(f"✅ Found → {lat}, {lon}")
-            return lat, lon
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            data = response.json()
 
-        print("❌ No coordinates found")
-        return None, None
+            if "features" in data and len(data["features"]) > 0:
+                lon, lat = data["features"][0]["geometry"]["coordinates"]
+                print(f"✅ Found → {lat}, {lon}")
+                return lat, lon
 
-    except Exception as e:
-        print("❌ Geocoding Error:", e)
-        return None, None
+        except Exception as e:
+            print("❌ Geocoding Error:", e)
+
+    print("❌ No coordinates found")
+    return None, None
 
 
 # ================= Get Road Distance =================
