@@ -1,9 +1,8 @@
-import eventlet
-eventlet.monkey_patch()
+#import eventlet
+#eventlet.monkey_patch()
 from asyncio import transports
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
 import json
 import bcrypt
@@ -69,7 +68,7 @@ Compress(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet"
+    async_mode="threading"
 )
 
 
@@ -1231,6 +1230,7 @@ def seat_page(sid):
             sid=sid,
             travel_date=today,
             bus_name=bus['bus_name'],
+            bus_number=bus.get("bus_number"),
             MAPTILER_KEY=os.getenv("MAPTILER_KEY"),
             departure_time=bus['departure_time']
         )
@@ -1259,6 +1259,8 @@ def bus_from_table(sid):
 
 @app.route("/book", methods=["POST"])
 def book():
+    from_lat = session.get("from_lat")
+    from_lng = session.get("from_lng")
     try:
         data = request.get_json()
 
@@ -1268,7 +1270,16 @@ def book():
 
         if not travel_date:
             return jsonify({"ok": False, "error": "travel_date missing"}), 400
+        schedule_res = supabase.table("schedules") \
+            .select("bus_number") \
+            .eq("id", schedule_id) \
+            .single() \
+            .execute()
 
+        if not schedule_res.data:
+            return jsonify({"ok": False, "error": "Schedule not found"})
+
+        bus_number = schedule_res.data.get("bus_number")
         # Already booked check
         existing = supabase.table("seat_bookings") \
             .select("id") \
@@ -1300,7 +1311,10 @@ def book():
             "payment_mode": payment_mode,
             "booked_by_type": role,
             "booked_by_id": session.get("user_id", 0),
-            "counter_id": session.get("user_id", 0)
+            "counter_id": session.get("user_id", 0),
+            "bus_number": bus_number,
+            "lat": from_lat,
+            "lan": from_lng
         }
 
         res = supabase.table("seat_bookings").insert(booking_data).execute()
@@ -1687,6 +1701,7 @@ def render_counters_list():
 
 @app.route("/search", methods=["POST"])
 def search():
+
     from_station = request.form.get("from", "").strip()
     to_station = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
@@ -1694,87 +1709,82 @@ def search():
     if not from_station or not to_station:
         return "Please select both From and To stations", 400
 
-    # Store in session
+    if from_station == to_station:
+        return render_alert("From and To station cannot be same")
+
     session["from_station"] = from_station
     session["to_station"] = to_station
     session["date"] = travel_date
 
-    # Get lat/lng automatically from station names
-
+    # -------- coordinates --------
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    # if not from_lat or not to_lat:
-    #   return render_alert("Could not find coordinates for the selected stations")
-    if not from_lat or not from_lng:
-        return render_alert(f"❌ Could not find coordinates for {from_station}")
+    if from_lat is None or from_lng is None:
+        return render_alert(f"Coordinates not found for {from_station}")
 
-    if not to_lat or not to_lng:
-        return render_alert(f"❌ Could not find coordinates for {to_station}")
-    # Road distance (optional, no check)
-    distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
-    session["distance_km"] = distance_km if distance_km else 0 # <-- store in session
-    # ---------------- Route finding logic ----------------
-    from_routes = supabase_query("route_stations", filters={"station_name": from_station})
-    to_routes = supabase_query("route_stations", filters={"station_name": to_station})
+    if to_lat is None or to_lng is None:
+        return render_alert(f"Coordinates not found for {to_station}")
 
-    if not from_routes or not to_routes:
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
-            <div class="alert alert-warning text-center">
-                <h3>No routes found for {from_station} → {to_station}</h3>
-                <a href="/" class="btn btn-primary">Back to Home</a>
-            </div>
-            """
+    session["from_lat"] = from_lat
+    session["from_lng"] = from_lng
+    session["to_lat"] = to_lat
+    session["to_lng"] = to_lng
+
+    # -------- distance --------
+    try:
+        distance_km, duration_min = get_road_distance_maptiler(
+            float(from_lat),
+            float(from_lng),
+            float(to_lat),
+            float(to_lng)
         )
+    except:
+        distance_km = 0
 
-    from_route_ids = set([r["route_id"] for r in from_routes])
-    to_route_ids = set([r["route_id"] for r in to_routes])
-    common_routes = from_route_ids.intersection(to_route_ids)
+    session["distance_km"] = distance_km
 
-    if not common_routes:
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
-            <div class="alert alert-warning text-center">
-                <h3>No direct routes for {from_station} → {to_station}</h3>
-                <a href="/" class="btn btn-primary">Back to Home</a>
-            </div>
-            """
-        )
+    # -------- get station rows --------
+    from_rows = supabase_query(
+        "route_stations",
+        filters={"station_name": from_station}
+    )
 
-    # Check station order
+    to_rows = supabase_query(
+        "route_stations",
+        filters={"station_name": to_station}
+    )
+
+    if not from_rows or not to_rows:
+        return render_alert("No routes found")
+
     valid_routes = []
-    for route_id in common_routes:
-        from_station_data = supabase_query("route_stations", filters={
-            "route_id": route_id,
-            "station_name": from_station
-        })
-        to_station_data = supabase_query("route_stations", filters={
-            "route_id": route_id,
-            "station_name": to_station
-        })
 
-        if from_station_data and to_station_data:
-            from_order = from_station_data[0]["station_order"]
-            to_order = to_station_data[0]["station_order"]
+    for fr in from_rows:
+        for tr in to_rows:
 
-            if from_order < to_order:
-                valid_routes.append(route_id)
+            try:
+                from_order = int(fr.get("station_order", 0))
+                to_order = int(tr.get("station_order", 0))
+            except:
+                continue
+
+            # -------- Forward Route --------
+            if fr.get("route_id") and fr.get("route_id") == tr.get("route_id"):
+                if from_order < to_order:
+                    valid_routes.append(fr["route_id"])
+
+            # -------- Reverse Route --------
+            if fr.get("route_id1") and fr.get("route_id1") == tr.get("route_id1"):
+                if from_order > to_order:
+                    valid_routes.append(fr["route_id1"])
+
+    # -------- remove duplicates --------
+    valid_routes = list(dict.fromkeys(valid_routes))
 
     if not valid_routes:
-        return render_template_string(
-            BASE_HTML,
-            content=f"""
-            <div class="alert alert-warning text-center">
-                <h3>No valid route found (check station order)</h3>
-                <a href="/" class="btn btn-primary">Back to Home</a>
-            </div>
-            """
-        )
+        return render_alert("No valid route found")
 
-    # Redirect to first valid route
     return redirect(f"/buses/{valid_routes[0]}")
 
 
