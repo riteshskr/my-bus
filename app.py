@@ -68,7 +68,7 @@ Compress(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="threading"
+    async_mode="eventlet"
 )
 
 
@@ -2289,5 +2289,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=True  # ✅ ADD THIS
+        debug=False  # ✅ ADD THIS
     )
