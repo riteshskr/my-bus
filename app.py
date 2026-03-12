@@ -530,7 +530,22 @@ def render_alert(message):
 
 
 # ================= Get Coordinates =================
-def get_lat_lng(station_name, state="Rajasthan", country="India"):
+def get_lat_lng(station_name):
+
+    # ---- station info database से लें ----
+    station_rows = supabase_query(
+        "route_stations",
+        filters={"station_name": station_name}
+    )
+
+    # default values
+    district = ""
+    state = "Rajasthan"
+    country = "India"
+
+    if station_rows:
+        district = station_rows[0].get("district", "")
+        state = station_rows[0].get("state", "Rajasthan")
 
     url = "https://api.openrouteservice.org/geocode/search"
 
@@ -538,8 +553,9 @@ def get_lat_lng(station_name, state="Rajasthan", country="India"):
         "Authorization": ORS_KEY
     }
 
-    # possible search formats
+    # search formats
     searches = [
+        f"{station_name}, {district}, {state}, {country}",
         f"{station_name}, {state}, {country}",
         f"{station_name}, {country}",
         station_name
@@ -1169,6 +1185,7 @@ def buses(rid):
 @app.route("/seats/<int:sid>")
 def seat_page(sid):
     try:
+        # -------- Bus Data --------
         bus_data = supabase_query("schedules", filters={"id": sid})
         if not bus_data:
             return "Schedule not found", 404
@@ -1177,8 +1194,7 @@ def seat_page(sid):
         route_id = bus["route_id"]
 
         today = session.get("date")
-
-        distance_km = session.get("distance_km", 0)  # ✅ fixed indent
+        distance_km = session.get("distance_km", 0)
 
         try:
             distance_km = float(distance_km)
@@ -1192,50 +1208,144 @@ def seat_page(sid):
             fare_per_km = 0
 
         total_fare = round(distance_km * fare_per_km)
-       # total_fare = round(float(distance_km) * float(fare_per_km))
 
-        route_rows = supabase_query("route_stations", filters={
-            "route_id": route_id
-        }) or []
+        # -------- Route Stations Fetch --------
+        route_rows = supabase_query("route_stations", filters={"route_id": route_id}) or []
 
-        route_rows = sorted(route_rows, key=lambda x: x["station_order"])
-        route = [r["station_name"] for r in route_rows]
+        # OPTION 2: अगर reverse route का data नहीं है
+        if not route_rows:
+            print("⚠ No stations for route:", route_id)
 
-        bookings = supabase_query("seat_bookings", filters={
-            "schedule_id": sid,
-            "travel_date": today,
-            "status": "confirmed"
-        }) or []
+            # Forward route fetch
+            route_rows = supabase_query("route_stations", filters={"route_id": 1}) or []
 
-        from_station = session.get("from_station")
-        to_station = session.get("to_station")
+            route_rows = sorted(route_rows, key=lambda x: x["station_order"])
+
+            # Reverse route बनाओ
+            route_rows.reverse()
+
+            print("✅ Using reversed forward route")
+
+        else:
+            route_rows = sorted(route_rows, key=lambda x: x["station_order"])
+
+        # -------- Route normalize --------
+        route = [
+            r["station_name"].strip().lower().split(",")[0].strip()
+            for r in route_rows
+        ]
+
+        # -------- Session stations --------
+        from_station = session.get("from_station", "").strip().lower().split(",")[0].strip()
+        to_station = session.get("to_station", "").strip().lower().split(",")[0].strip()
+
+        print("----- DEBUG START -----")
+        print("Route stations list:", route)
+        print("Session from_station:", from_station)
+        print("Session to_station:", to_station)
 
         if not from_station or not to_station:
             return "<h3>पहले route select करो</h3>"
 
-        def is_overlap(b):
-            nf = route.index(from_station)
-            nt = route.index(to_station)
-            ef = route.index(b["from_station"])
-            et = route.index(b["to_station"])
-            return nf < et and nt > ef
+        # -------- Station Match Function --------
+        def find_station_index(station_name, route_list):
+            station_name = station_name.strip().lower()
 
+            for i, r in enumerate(route_list):
+                r_clean = r.strip().lower()
+
+                if station_name == r_clean:
+                    return i
+
+                if station_name in r_clean:
+                    return i
+
+            return -1
+
+        nf = find_station_index(from_station, route)
+        nt = find_station_index(to_station, route)
+
+        print("From index:", nf)
+        print("To index:", nt)
+
+        if nf == -1 or nt == -1:
+            print("❌ Station mismatch detected")
+            return "<h3>Station data mismatch, कृपया फिर से search करें</h3>"
+
+        # -------- Reverse Detect --------
+        if nf > nt:
+            print("🔁 Reverse route detected")
+
+            route.reverse()
+
+            nf = find_station_index(from_station, route)
+            nt = find_station_index(to_station, route)
+
+            print("New From index:", nf)
+            print("New To index:", nt)
+
+            if nf == -1 or nt == -1:
+                return "<h3>Station data mismatch, कृपया फिर से search करें</h3>"
+
+        # -------- Booked Seats --------
+        bookings = supabase_query(
+            "seat_bookings",
+            filters={
+                "schedule_id": sid,
+                "travel_date": today,
+                "status": "confirmed"
+            }
+        ) or []
+
+        # -------- Seat Overlap Logic --------
         blocked = []
-        for b in bookings:
-            if is_overlap(b):
-                blocked.append({"seat_number": b["seat_number"]})
 
+        for b in bookings:
+
+            ef = find_station_index(
+                b["from_station"].strip().lower(),
+                route
+            )
+
+            et = find_station_index(
+                b["to_station"].strip().lower(),
+                route
+            )
+
+            print(
+                "Booking:",
+                b["seat_number"],
+                "from",
+                b["from_station"],
+                "to",
+                b["to_station"]
+            )
+
+            print("Booking indices:", ef, et)
+
+            if ef == -1 or et == -1:
+                continue
+
+            if nf < et and nt > ef:
+                blocked.append({
+                    "seat_number": b["seat_number"]
+                })
+
+        print("Blocked seats:", blocked)
+        print("----- DEBUG END -----")
+
+        # -------- Render Page --------
         return render_template(
             "seat.html",
-            total_fare=total_fare,  # ✅ सही fare जा रहा है
+            total_fare=total_fare,
             schedule=bus,
             booked_seats=blocked,
             sid=sid,
             travel_date=today,
-            bus_name=bus['bus_name'],
+            bus_name=bus["bus_name"],
             bus_number=bus.get("bus_number"),
             MAPTILER_KEY=os.getenv("MAPTILER_KEY"),
-            departure_time=bus['departure_time']
+            departure_time=bus["departure_time"]
         )
 
     except Exception as e:
@@ -1704,7 +1814,6 @@ def render_counters_list():
 
 @app.route("/search", methods=["POST"])
 def search():
-
     from_station = request.form.get("from", "").strip()
     to_station = request.form.get("to", "").strip()
     travel_date = request.form.get("date", date.today().isoformat())
@@ -1712,83 +1821,113 @@ def search():
     if not from_station or not to_station:
         return "Please select both From and To stations", 400
 
-    if from_station == to_station:
-        return render_alert("From and To station cannot be same")
+    session.update({
+        "from_station": from_station,
+        "to_station": to_station,
+        "date": travel_date
+    })
 
-    session["from_station"] = from_station
-    session["to_station"] = to_station
-    session["date"] = travel_date
-
-    # -------- coordinates --------
+    # --- Get coordinates ---
     from_lat, from_lng = get_lat_lng(from_station)
     to_lat, to_lng = get_lat_lng(to_station)
 
-    if from_lat is None or from_lng is None:
+    if not from_lat or not from_lng:
         return render_alert(f"Coordinates not found for {from_station}")
-
-    if to_lat is None or to_lng is None:
+    if not to_lat or not to_lng:
         return render_alert(f"Coordinates not found for {to_station}")
 
-    session["from_lat"] = from_lat
-    session["from_lng"] = from_lng
-    session["to_lat"] = to_lat
-    session["to_lng"] = to_lng
+    session.update({
+        "from_lat": from_lat,
+        "from_lng": from_lng,
+        "to_lat": to_lat,
+        "to_lng": to_lng
+    })
 
-    # -------- distance --------
-    try:
-        distance_km, duration_min = get_road_distance_maptiler(
-            float(from_lat),
-            float(from_lng),
-            float(to_lat),
-            float(to_lng)
-        )
-    except:
-        distance_km = 0
+    distance_km, duration_min = get_road_distance_maptiler(from_lat, from_lng, to_lat, to_lng)
+    session["distance_km"] = distance_km if distance_km else 0
 
-    session["distance_km"] = distance_km
+    # --- Fetch station rows ---
+    from_rows = supabase_query("route_stations", filters={"station_name": from_station})
+    to_rows = supabase_query("route_stations", filters={"station_name": to_station})
 
-    # -------- get station rows --------
-    from_rows = supabase_query(
-        "route_stations",
-        filters={"station_name": from_station}
-    )
-
-    to_rows = supabase_query(
-        "route_stations",
-        filters={"station_name": to_station}
-    )
+    print("🟢 From Rows:", from_rows)  # Debug
+    print("🟢 To Rows:", to_rows)      # Debug
 
     if not from_rows or not to_rows:
-        return render_alert("No routes found")
+        return render_alert(f"No routes found for {from_station} → {to_station}")
 
     valid_routes = []
 
+    # --- Compare each station combination ---
     for fr in from_rows:
         for tr in to_rows:
+            fr_route_ids = [fr.get("route_id"), fr.get("route_id1")]
+            tr_route_ids = [tr.get("route_id"), tr.get("route_id1")]
 
-            try:
-                from_order = int(fr.get("station_order", 0))
-                to_order = int(tr.get("station_order", 0))
-            except:
+            # Find common route_id between two stations
+            common_ids = set(filter(None, fr_route_ids)).intersection(set(filter(None, tr_route_ids)))
+
+            print(f"🔹 Comparing From({fr['station_name']}, order={fr.get('station_order')}) "
+                  f"to To({tr['station_name']}, order={tr.get('station_order')}), "
+                  f"Common IDs: {common_ids}")  # Debug
+
+            if not common_ids:
                 continue
 
-            # -------- Forward Route --------
-            if fr.get("route_id") and fr.get("route_id") == tr.get("route_id"):
-                if from_order < to_order:
-                    valid_routes.append(fr["route_id"])
+            from_order = int(fr.get("station_order", 0))
+            to_order = int(tr.get("station_order", 0))
 
-            # -------- Reverse Route --------
-            if fr.get("route_id1") and fr.get("route_id1") == tr.get("route_id1"):
-                if from_order > to_order:
-                    valid_routes.append(fr["route_id1"])
+            for route_id in common_ids:
+                # Determine direction
+                if route_id == fr.get("route_id") and route_id == tr.get("route_id"):
+                    if from_order < to_order:
+                        valid_routes.append({"route_id": route_id, "type": "forward"})
+                        print(f"✅ Forward route added: {route_id}")
+                    else:
+                        rev_id = fr.get("route_id1")
+                        if rev_id:
+                            valid_routes.append({"route_id": rev_id, "type": "reverse"})
+                            print(f"✅ Reverse route added: {rev_id}")
 
-    # -------- remove duplicates --------
-    valid_routes = list(dict.fromkeys(valid_routes))
+                elif route_id == fr.get("route_id1") and route_id == tr.get("route_id1"):
+                    if from_order > to_order:
+                        valid_routes.append({"route_id": route_id, "type": "reverse"})
+                        print(f"✅ Reverse route added: {route_id}")
+                    else:
+                        fwd_id = fr.get("route_id")
+                        if fwd_id:
+                            valid_routes.append({"route_id": fwd_id, "type": "forward"})
+                            print(f"✅ Forward route added: {fwd_id}")
 
-    if not valid_routes:
-        return render_alert("No valid route found")
+    # Remove duplicates
+    seen = set()
+    unique_routes = []
+    for r in valid_routes:
+        if r["route_id"] not in seen:
+            unique_routes.append(r)
+            seen.add(r["route_id"])
 
-    return redirect(f"/buses/{valid_routes[0]}")
+    print("🟢 Unique Routes Found:", unique_routes)  # Debug
+
+    if not unique_routes:
+        return render_alert("No valid route found (check forward/reverse order)")
+
+    if len(unique_routes) > 1:
+        route_links = "".join(
+            f'<li><a href="/buses/{r["route_id"]}">{r["route_id"]} ({r["type"]})</a></li>'
+            for r in unique_routes
+        )
+        return render_template_string(
+            BASE_HTML,
+            content=f"""
+            <div class="alert alert-info text-center">
+                <h3>Multiple routes found for {from_station} → {to_station}</h3>
+                <ul style="list-style:none; padding:0;">{route_links}</ul>
+            </div>
+            """
+        )
+
+    return redirect(f"/buses/{unique_routes[0]['route_id']}")
 
 
 @app.route("/logout")
