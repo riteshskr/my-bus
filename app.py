@@ -68,9 +68,7 @@ Compress(app)
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode="eventlet",
-    ping_timeout=20,
-    ping_interval=10
+    async_mode="eventlet"
 )
 
 
@@ -1444,7 +1442,7 @@ def book():
                 "seat": seat_number,
                 "date": travel_date
             },
-
+            to=None
         )
 
         booking_id = res.data[0]["id"]
