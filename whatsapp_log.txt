@@ -86,3 +86,10 @@
 2026-02-24 08:17:06 | 9782180931 | Kshama Mathur | Booking: 88 | booking_confirmation | SENT
 2026-02-24 08:25:16 | 9782180931 | reetesh | Booking: 89 | booking_confirmation | SENT
 2026-02-24 08:29:07 | 9875262306 | 55 | Booking: 90 | booking_confirmation | SENT
+2026-03-02 01:25:45 | 9875262306 | reetesh mathur | Booking: 109 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 01:26:06 | 9875262306 | rakesh mathur | Booking: 110 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 01:29:51 | 9875262306 | reetesh mathur | Booking: 109 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 01:30:14 | 9875262306 | rakesh mathur | Booking: 110 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 01:34:41 | 9875262306 | reetesh mathur | Booking: 109 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 01:36:25 | 9875262306 | rakesh mathur | Booking: 110 | booking_confirmation | FAILED | Error: Send failed
+2026-03-02 17:20:12 | 9875262306 | reetesh mathur | Booking: 109 | booking_confirmation | FAILED | Error: Send failed

@@ -807,7 +807,30 @@ def dashboard():
     """
 
     return render_template_string(BASE_HTML, content=content)
+@app.route("/api/booked/<int:sid>/<travel_date>")
+def api_booked(sid, travel_date):
+    try:
+        bookings = supabase_query(
+            "seat_bookings",
+            filters={
+                "schedule_id": sid,
+                "travel_date": travel_date,
+                "status": "confirmed"
+            }
+        ) or []
 
+        seats = [b["seat_number"] for b in bookings]
+
+        return jsonify({
+            "ok": True,
+            "seats": seats
+        })
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
 
 # ================= View Bookings  =================
 @app.route("/bookings", methods=["GET"])
@@ -2222,6 +2245,9 @@ def api_delete_route():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
+@app.route("/heartbeat")
+def heartbeat():
+    return "OK", 200
 
 # ================= COUNTER ROUTES =================
 @app.route("/counter-bookings")
@@ -2289,5 +2315,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=port,
-        debug=False  # ✅ ADD THIS
+        debug=True  # ✅ ADD THIS
     )

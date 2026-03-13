@@ -43,6 +43,7 @@
     </div>
      <h3>Fare Debug: ₹{{ total_fare }}</h3>
     <h2>| 🛣️ Route: {{ from_station }} → {{ to_station }}  </h2>
+   <h6>Bus: {{ bus_name }} ({{ bus_number }})</h6>
     <h4>⏰ Departure: {{ departure_time }}</h4>
     <h5>
         Role:
@@ -77,9 +78,18 @@ const SID = {{ sid }};
 const TODAY = "{{ travel_date }}";
 const USER_ROLE = "{{ session.get('role','guest') }}";
 
-const socket = io(window.location.origin, {
-   transports: ["websocket"],
-   upgrade: false
+const socket = io();
+
+socket.on("connect", () => {
+    console.log("✅ Socket connected:", socket.id);
+});
+
+socket.on("seat_update", data => {
+    console.log("📡 Seat update received:", data);
+
+    if(data.sid != SID || data.date != TODAY) return;
+
+    lockSeat(data.seat);
 });
 
 // ===== MapLibre Map बनाएं =====
@@ -109,11 +119,6 @@ const busMarker = new maplibregl.Marker({ element: busMarkerElement })
 
 
 // ===== Realtime Seat Updates =====
-socket.on("seat_update", data => {
-    if(data.sid != SID || data.date != TODAY) return;
-    lockSeat(data.seat);
-});
-
 
 // ===== Live Bus GPS =====
 setInterval(()=>{

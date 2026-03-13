@@ -1,0 +1,226 @@
+2026/03/07-18:08:52.200 2c04 Reusing MANIFEST H:\reetesh\MYBUS\chrome_profile\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/03/07-18:08:52.202 2c04 Recovering log #1883
+2026/03/07-18:08:52.221 2c04 Reusing old log H:\reetesh\MYBUS\chrome_profile\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/001883.log 
+2026/03/07-18:15:32.438 ef4 Level-0 table #1916: started
+2026/03/07-18:15:32.632 ef4 Level-0 table #1916: 1351336 bytes OK
+2026/03/07-18:15:32.663 ef4 Delete type=0 #1883
+2026/03/07-18:15:33.053 ef4 Compacting 1@0 + 0@1 files
+2026/03/07-18:15:33.329 ef4 Generated table #1917@0: 26783 keys, 604598 bytes
+2026/03/07-18:15:33.417 ef4 Generated table #1918@0: 506 keys, 72099 bytes
+2026/03/07-18:15:33.460 ef4 Generated table #1919@0: 469 keys, 44566 bytes
+2026/03/07-18:15:33.460 ef4 Compacted 1@0 + 0@1 files => 721263 bytes
+2026/03/07-18:15:33.500 ef4 compacted to: files[ 0 3 27 0 0 0 0 ]
+2026/03/07-18:15:34.949 ef4 Compacting 1@1 + 10@2 files
+2026/03/07-18:15:35.242 ef4 Generated table #1920@1: 85418 keys, 2235405 bytes
+2026/03/07-18:15:35.517 ef4 Generated table #1921@1: 80133 keys, 2316872 bytes
+2026/03/07-18:15:35.841 ef4 Generated table #1922@1: 45776 keys, 2208592 bytes
+2026/03/07-18:15:36.081 ef4 Generated table #1923@1: 26961 keys, 2181730 bytes
+2026/03/07-18:15:36.249 ef4 Generated table #1924@1: 1822 keys, 2139833 bytes
+2026/03/07-18:15:36.386 ef4 Generated table #1925@1: 885 keys, 2134439 bytes
+2026/03/07-18:15:36.517 ef4 Generated table #1926@1: 669 keys, 2129580 bytes
+2026/03/07-18:15:36.638 ef4 Generated table #1927@1: 624 keys, 2127623 bytes
+2026/03/07-18:15:36.770 ef4 Generated table #1928@1: 587 keys, 2128253 bytes
+2026/03/07-18:15:36.947 ef4 Generated table #1929@1: 519 keys, 2147641 bytes
+2026/03/07-18:15:37.025 ef4 Generated table #1930@1: 15 keys, 80031 bytes
+2026/03/07-18:15:37.025 ef4 Compacted 1@1 + 10@2 files => 21829999 bytes
+2026/03/07-18:15:37.058 ef4 compacted to: files[ 0 2 28 0 0 0 0 ]
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1899
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1900
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1901
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1902
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1903
+2026/03/07-18:15:37.059 ef4 Delete type=2 #1904
+2026/03/07-18:15:37.060 ef4 Delete type=2 #1905
+2026/03/07-18:15:37.060 ef4 Delete type=2 #1906
+2026/03/07-18:15:37.061 ef4 Delete type=2 #1907
+2026/03/07-18:15:37.062 ef4 Delete type=2 #1908
+2026/03/07-18:15:37.062 ef4 Delete type=2 #1916
+2026/03/07-18:15:37.062 ef4 Delete type=2 #1917
+2026/03/07-18:15:39.304 ef4 Compacting 1@1 + 12@2 files
+2026/03/07-18:15:40.173 ef4 Generated table #1931@1: 17711 keys, 2215432 bytes
+2026/03/07-18:15:41.191 ef4 Generated table #1932@1: 24387 keys, 2272306 bytes
+2026/03/07-18:15:42.038 ef4 Generated table #1933@1: 20298 keys, 2169588 bytes
+2026/03/07-18:15:42.968 ef4 Generated table #1934@1: 519 keys, 2111634 bytes
+2026/03/07-18:15:43.536 ef4 Generated table #1935@1: 4408 keys, 2118546 bytes
+2026/03/07-18:15:44.202 ef4 Generated table #1936@1: 3714 keys, 2128018 bytes
+2026/03/07-18:15:44.719 ef4 Generated table #1937@1: 2385 keys, 2123503 bytes
+2026/03/07-18:15:45.117 ef4 Generated table #1938@1: 67636 keys, 2206929 bytes
+2026/03/07-18:15:45.529 ef4 Generated table #1939@1: 102144 keys, 2253090 bytes
+2026/03/07-18:15:46.010 ef4 Generated table #1940@1: 103762 keys, 2254289 bytes
+2026/03/07-18:15:46.123 ef4 Generated table #1941@1: 9513 keys, 203834 bytes
+2026/03/07-18:15:46.123 ef4 Compacted 1@1 + 12@2 files => 22057169 bytes
+2026/03/07-18:15:46.149 ef4 compacted to: files[ 0 1 27 0 0 0 0 ]
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1867
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1888
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1889
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1890
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1891
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1892
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1893
+2026/03/07-18:15:46.150 ef4 Delete type=2 #1894
+2026/03/07-18:15:46.151 ef4 Delete type=2 #1895
+2026/03/07-18:15:46.151 ef4 Delete type=2 #1896
+2026/03/07-18:15:46.151 ef4 Delete type=2 #1897
+2026/03/07-18:15:46.151 ef4 Delete type=2 #1909
+2026/03/07-18:15:46.151 ef4 Delete type=2 #1918
+2026/03/07-18:15:47.077 1850 Compacting 1@1 + 4@2 files
+2026/03/07-18:15:47.475 1850 Generated table #1942@1: 104103 keys, 2255503 bytes
+2026/03/07-18:15:48.150 1850 Generated table #1943@1: 103888 keys, 2253636 bytes
+2026/03/07-18:15:48.670 1850 Generated table #1944@1: 102449 keys, 2253889 bytes
+2026/03/07-18:15:48.822 1850 Generated table #1945@1: 16196 keys, 1052228 bytes
+2026/03/07-18:15:48.822 1850 Compacted 1@1 + 4@2 files => 7815256 bytes
+2026/03/07-18:15:48.836 1850 compacted to: files[ 0 0 27 0 0 0 0 ]
+2026/03/07-18:15:48.836 1850 Delete type=2 #1910
+2026/03/07-18:15:48.836 1850 Delete type=2 #1911
+2026/03/07-18:15:48.836 1850 Delete type=2 #1912
+2026/03/07-18:15:48.836 1850 Delete type=2 #1913
+2026/03/07-18:15:48.836 1850 Delete type=2 #1919
+2026/03/07-18:34:21.829 1850 Level-0 table #1947: started
+2026/03/07-18:34:22.074 1850 Level-0 table #1947: 1328448 bytes OK
+2026/03/07-18:34:22.113 1850 Delete type=0 #1915
+2026/03/07-18:42:20.471 ef4 Compacting 1@0 + 0@1 files
+2026/03/07-18:42:20.582 ef4 Generated table #1948@0: 17661 keys, 403960 bytes
+2026/03/07-18:42:20.629 ef4 Generated table #1949@0: 1193 keys, 185056 bytes
+2026/03/07-18:42:20.693 ef4 Generated table #1950@0: 357 keys, 39824 bytes
+2026/03/07-18:42:20.693 ef4 Compacted 1@0 + 0@1 files => 628840 bytes
+2026/03/07-18:42:20.710 ef4 compacted to: files[ 0 3 27 0 0 0 0 ]
+2026/03/07-18:42:20.710 ef4 Delete type=2 #1947
+2026/03/07-18:44:15.010 ef4 Compacting 1@1 + 11@2 files
+2026/03/07-18:44:15.349 ef4 Generated table #1951@1: 16799 keys, 2208763 bytes
+2026/03/07-18:44:15.684 ef4 Generated table #1952@1: 24758 keys, 2275252 bytes
+2026/03/07-18:44:15.936 ef4 Generated table #1953@1: 21043 keys, 2185358 bytes
+2026/03/07-18:44:16.157 ef4 Generated table #1954@1: 525 keys, 2110816 bytes
+2026/03/07-18:44:16.334 ef4 Generated table #1955@1: 446 keys, 2112525 bytes
+2026/03/07-18:44:16.563 ef4 Generated table #1956@1: 7521 keys, 2136849 bytes
+2026/03/07-18:44:16.815 ef4 Generated table #1957@1: 2350 keys, 2122986 bytes
+2026/03/07-18:44:17.070 ef4 Generated table #1958@1: 58388 keys, 2194395 bytes
+2026/03/07-18:44:17.336 ef4 Generated table #1959@1: 102358 keys, 2253848 bytes
+2026/03/07-18:44:17.616 ef4 Generated table #1960@1: 103550 keys, 2254032 bytes
+2026/03/07-18:44:17.684 ef4 Generated table #1961@1: 9641 keys, 211960 bytes
+2026/03/07-18:44:17.685 ef4 Compacted 1@1 + 11@2 files => 22066784 bytes
+2026/03/07-18:44:17.712 ef4 compacted to: files[ 0 2 27 0 0 0 0 ]
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1930
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1931
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1932
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1933
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1934
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1935
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1936
+2026/03/07-18:44:17.713 ef4 Delete type=2 #1937
+2026/03/07-18:44:17.714 ef4 Delete type=2 #1938
+2026/03/07-18:44:17.714 ef4 Delete type=2 #1939
+2026/03/07-18:44:17.714 ef4 Delete type=2 #1940
+2026/03/07-18:44:17.714 ef4 Delete type=2 #1949
+2026/03/07-18:46:04.821 ef4 Compacting 1@1 + 10@2 files
+2026/03/07-18:46:05.107 ef4 Generated table #1962@1: 86276 keys, 2236223 bytes
+2026/03/07-18:46:05.406 ef4 Generated table #1963@1: 80220 keys, 2318953 bytes
+2026/03/07-18:46:05.810 ef4 Generated table #1964@1: 45498 keys, 2208356 bytes
+2026/03/07-18:46:06.088 ef4 Generated table #1965@1: 27283 keys, 2185337 bytes
+2026/03/07-18:46:06.267 ef4 Generated table #1966@1: 1830 keys, 2136276 bytes
+2026/03/07-18:46:06.420 ef4 Generated table #1967@1: 888 keys, 2135121 bytes
+2026/03/07-18:46:06.590 ef4 Generated table #1968@1: 666 keys, 2129680 bytes
+2026/03/07-18:46:06.815 ef4 Generated table #1969@1: 623 keys, 2130040 bytes
+2026/03/07-18:46:06.968 ef4 Generated table #1970@1: 591 keys, 2129253 bytes
+2026/03/07-18:46:07.155 ef4 Generated table #1971@1: 522 keys, 2127007 bytes
+2026/03/07-18:46:07.212 ef4 Generated table #1972@1: 13 keys, 123516 bytes
+2026/03/07-18:46:07.212 ef4 Compacted 1@1 + 10@2 files => 21859762 bytes
+2026/03/07-18:46:07.239 ef4 compacted to: files[ 0 1 28 0 0 0 0 ]
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1920
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1921
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1922
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1923
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1924
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1925
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1926
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1927
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1928
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1929
+2026/03/07-18:46:07.240 ef4 Delete type=2 #1948
+2026/03/07-19:16:41.396 ef4 Compacting 1@1 + 4@2 files
+2026/03/07-19:16:41.721 ef4 Generated table #1973@1: 104119 keys, 2255526 bytes
+2026/03/07-19:16:41.980 ef4 Generated table #1974@1: 104016 keys, 2255716 bytes
+2026/03/07-19:16:42.225 ef4 Generated table #1975@1: 102414 keys, 2254149 bytes
+2026/03/07-19:16:42.381 ef4 Generated table #1976@1: 16278 keys, 1063003 bytes
+2026/03/07-19:16:42.381 ef4 Compacted 1@1 + 4@2 files => 7828394 bytes
+2026/03/07-19:16:42.411 ef4 compacted to: files[ 0 0 28 0 0 0 0 ]
+2026/03/07-19:16:42.411 ef4 Delete type=2 #1942
+2026/03/07-19:16:42.412 ef4 Delete type=2 #1943
+2026/03/07-19:16:42.412 ef4 Delete type=2 #1944
+2026/03/07-19:16:42.412 ef4 Delete type=2 #1945
+2026/03/07-19:16:42.412 ef4 Delete type=2 #1950
+2026/03/07-19:30:54.395 ef4 Level-0 table #1978: started
+2026/03/07-19:30:54.764 ef4 Level-0 table #1978: 1540643 bytes OK
+2026/03/07-19:30:54.807 ef4 Delete type=0 #1946
+2026/03/07-19:30:54.913 ef4 Compacting 1@0 + 0@1 files
+2026/03/07-19:30:55.116 ef4 Generated table #1979@0: 17262 keys, 465630 bytes
+2026/03/07-19:30:55.239 ef4 Generated table #1980@0: 1257 keys, 262469 bytes
+2026/03/07-19:30:55.295 ef4 Generated table #1981@0: 368 keys, 40419 bytes
+2026/03/07-19:30:55.295 ef4 Compacted 1@0 + 0@1 files => 768518 bytes
+2026/03/07-19:30:55.316 ef4 compacted to: files[ 0 3 28 0 0 0 0 ]
+2026/03/07-19:30:55.864 1850 Compacting 1@1 + 10@2 files
+2026/03/07-19:30:56.580 1850 Generated table #1982@1: 85570 keys, 2235667 bytes
+2026/03/07-19:30:56.995 1850 Generated table #1983@1: 83316 keys, 2328132 bytes
+2026/03/07-19:30:57.419 1850 Generated table #1984@1: 43312 keys, 2204762 bytes
+2026/03/07-19:30:57.726 1850 Generated table #1985@1: 29785 keys, 2185545 bytes
+2026/03/07-19:30:57.907 1850 Generated table #1986@1: 1922 keys, 2140375 bytes
+2026/03/07-19:30:58.123 1850 Generated table #1987@1: 867 keys, 2131770 bytes
+2026/03/07-19:30:58.351 1850 Generated table #1988@1: 681 keys, 2129164 bytes
+2026/03/07-19:30:58.572 1850 Generated table #1989@1: 620 keys, 2125993 bytes
+2026/03/07-19:30:58.735 1850 Generated table #1990@1: 590 keys, 2127553 bytes
+2026/03/07-19:30:58.885 1850 Generated table #1991@1: 523 keys, 2125524 bytes
+2026/03/07-19:30:58.971 1850 Generated table #1992@1: 16 keys, 105558 bytes
+2026/03/07-19:30:58.971 1850 Compacted 1@1 + 10@2 files => 21840043 bytes
+2026/03/07-19:30:59.042 1850 compacted to: files[ 0 2 29 0 0 0 0 ]
+2026/03/07-19:30:59.044 1850 Delete type=2 #1978
+2026/03/07-19:30:59.076 ef4 Compacting 1@1 + 11@2 files
+2026/03/07-19:30:59.403 ef4 Generated table #1993@1: 15262 keys, 2196717 bytes
+2026/03/07-19:30:59.823 ef4 Generated table #1994@1: 24043 keys, 2277773 bytes
+2026/03/07-19:31:00.233 ef4 Generated table #1995@1: 23342 keys, 2186314 bytes
+2026/03/07-19:31:00.578 ef4 Generated table #1996@1: 530 keys, 2111038 bytes
+2026/03/07-19:31:01.016 ef4 Generated table #1997@1: 456 keys, 2111306 bytes
+2026/03/07-19:31:01.484 ef4 Generated table #1998@1: 7523 keys, 2137320 bytes
+2026/03/07-19:31:02.040 ef4 Generated table #1999@1: 2082 keys, 2119714 bytes
+2026/03/07-19:31:02.389 ef4 Generated table #2000@1: 44070 keys, 2176200 bytes
+2026/03/07-19:31:02.770 ef4 Generated table #2001@1: 102729 keys, 2253682 bytes
+2026/03/07-19:31:03.235 ef4 Generated table #2002@1: 103081 keys, 2254655 bytes
+2026/03/07-19:31:03.332 ef4 Generated table #2003@1: 14847 keys, 321845 bytes
+2026/03/07-19:31:03.332 ef4 Compacted 1@1 + 11@2 files => 22146564 bytes
+2026/03/07-19:31:03.360 ef4 compacted to: files[ 0 1 29 0 0 0 0 ]
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1951
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1952
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1953
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1954
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1955
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1956
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1957
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1958
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1959
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1960
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1962
+2026/03/07-19:31:03.361 ef4 Delete type=2 #1963
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1964
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1965
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1966
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1967
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1968
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1969
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1970
+2026/03/07-19:31:03.362 ef4 Delete type=2 #1971
+2026/03/07-19:31:03.363 ef4 Delete type=2 #1972
+2026/03/07-19:31:03.363 ef4 Delete type=2 #1979
+2026/03/07-19:31:03.363 ef4 Delete type=2 #1980
+2026/03/07-19:31:07.161 1850 Compacting 1@1 + 7@2 files
+2026/03/07-19:31:08.014 1850 Generated table #2004@1: 103692 keys, 2254315 bytes
+2026/03/07-19:31:08.666 1850 Generated table #2005@1: 104433 keys, 2256170 bytes
+2026/03/07-19:31:10.074 1850 Generated table #2006@1: 102601 keys, 2252815 bytes
+2026/03/07-19:31:10.472 1850 Generated table #2007@1: 35806 keys, 1502827 bytes
+2026/03/07-19:31:10.472 1850 Compacted 1@1 + 7@2 files => 8266127 bytes
+2026/03/07-19:31:10.560 1850 compacted to: files[ 0 0 26 0 0 0 0 ]
+2026/03/07-19:31:10.561 1850 Delete type=2 #1898
+2026/03/07-19:31:10.561 1850 Delete type=2 #1941
+2026/03/07-19:31:10.561 1850 Delete type=2 #1961
+2026/03/07-19:31:10.561 1850 Delete type=2 #1973
+2026/03/07-19:31:10.561 1850 Delete type=2 #1974
+2026/03/07-19:31:10.561 1850 Delete type=2 #1975
+2026/03/07-19:31:10.561 1850 Delete type=2 #1976
+2026/03/07-19:31:10.561 1850 Delete type=2 #1981
